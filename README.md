@@ -1,5 +1,7 @@
 # Sunrise
 
+# This Fork is all WIP for future feature implementation. I do not promise any kind of stability if you build from any branches on this fork. If you want a stable release please visit the upstream Sunrise repository.
+
 Destiny 2 Offline Exploration Mod
 
 > This mod installs onto an old build of the game and allows you to play it offline, loading into
