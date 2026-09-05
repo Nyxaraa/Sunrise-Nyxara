@@ -50,13 +50,15 @@ prepare_seed_identity(std::uint64_t sessionId,
  * Builds the membership snapshot a first join commits, without reading State.
  * The join burst stages this body before the join commit; the commit then lands the same
  * seed identity, so the body and the record agree at the initial revision.
+ * @param createdRevision Activity record generation used as the replacement-world epoch.
  * @param memberKey Client member key from the join request.
  * @param characterSoid Character the join request named, or zero.
  * @param mutation Cleared, then receives the snapshot alone; nothing here is committable.
  * @return True when the key is usable.
  */
 [[nodiscard]] bool
-prepare_join_seed_snapshot(std::uint64_t memberKey,
+prepare_join_seed_snapshot(std::uint64_t createdRevision,
+                           std::uint64_t memberKey,
                            std::uint64_t characterSoid,
                            state::activity::membership::PendingMutation& mutation) noexcept;
 
@@ -154,16 +156,18 @@ select_activity_client_region(ActivityClientRole role,
     return region;
 }
 
-/** The client's message-18 refresh, read from its mutation while the commit is still pending. */
+/** Client placement fields read from a mutation while its State commit is still pending. */
 struct RefreshReport final {
     std::int32_t bubble{};
     std::uint32_t revision{};
+    std::int32_t currentRegion{state::activity::membership::kAbsentRegionIndex};
+    bool hasCurrentRegion{};
 };
 
 /**
  * Reads where the client says it is.
  * @param session Connection whose activity session the client reports on.
- * @param refresh Refresh being answered, which stands in for its uncommitted bubble, or null.
+ * @param refresh Report being answered, which stands in for its uncommitted placement, or null.
  */
 [[nodiscard]] state::activity::membership::ClientPlacement
 client_placement(const Session& session, const RefreshReport* refresh) noexcept;
@@ -175,6 +179,16 @@ client_placement(const Session& session, const RefreshReport* refresh) noexcept;
  * @param refresh Refresh being answered, or null.
  */
 [[nodiscard]] bool client_in_world(const Session& session, const RefreshReport* refresh) noexcept;
+
+/**
+ * Tests whether the client's destination region is instantiated far enough for the native spawn.
+ * Unlike `client_in_world`, this deliberately does not require the post-spawn world-state 8
+ * write-back: requiring that signal to release the spawn creates a circular wait.
+ * @param session Connection whose activity session the client reports on.
+ * @param refresh Refresh being answered, or null.
+ */
+[[nodiscard]] bool client_region_ready(const Session& session,
+                                       const RefreshReport* refresh) noexcept;
 
 /**
  * Resolves the exact region one selected BAP ActivityClient would put in msg 5.

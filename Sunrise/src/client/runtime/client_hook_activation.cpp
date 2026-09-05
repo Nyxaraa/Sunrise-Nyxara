@@ -7,11 +7,14 @@
 #include <string_view>
 
 #include "../../core/logging/log.h"
+#include "../../core/settings/settings.h"
 #include "../../core/ui/busy/busy.h"
 #include "../../core/ui/notice/ui_notice_overlay.h"
 #include "../content/activity/scriptable_catalog_worker.h"
 #include "../content/bootstrap/bootstrap_token_publish.h"
 #include "../content/investment/worker.h"
+#include "../diagnostics/entity_create_probe.h"
+#include "../diagnostics/image_dump.h"
 #include "../executable/image.h"
 #include "../hooks/assert_handler/assert_handler_lifecycle.h"
 #include "../hooks/async_io/async_io_lifetime_guard.h"
@@ -36,6 +39,7 @@
 #include "../hooks/sense_chain_guard/sense_chain_guard.h"
 #include "../hooks/stall_probe/stall_probe.h"
 #include "../hooks/teleport/runtime.h"
+#include "../hooks/vendor_banner/vendor_banner_retire.h"
 #include "../hooks/world_objects/world_object_registry.h"
 #include "../patterns/registry.h"
 #include "../targets/game.h"
@@ -49,6 +53,7 @@ StageState g_mainStage{StageState::pending};
 StageState g_graphicsStage{StageState::pending};
 StageState g_platformStage{StageState::pending};
 HMODULE g_platformModule{};
+void* g_sunriseModule{};
 
 namespace {
 
@@ -134,6 +139,11 @@ void clear_game_targets() noexcept {
         clear_game_targets();
         return false;
     }
+    // The inspection above proves the packer has finished: these spans are the decrypted code the
+    // signatures match. That makes this the first point at which a dump is worth taking.
+    if (core::settings::get().client.dumpGameImage) {
+        (void)diagnostics::dump_game_image(g_sunriseModule);
+    }
     const std::span<patterns::ImageRange> imageRanges = ranges(gameImage);
     if (!targets::game::resolution::resolve(imageRanges)) {
         report_resolve_failure();
@@ -172,7 +182,14 @@ void clear_game_targets() noexcept {
                      packageKeys ? "ev=activate stage=package_keys result=ok"
                                  : "ev=activate stage=package_keys result=fail");
     // Diagnostic capture reports its own outcome and never demotes this stage.
+    // The probe hooks only the index allocator, whose two-argument shape was read out of its own
+    // body. The initialiser beside it is left alone: its fifth argument is passed on the stack,
+    // and a four-argument replacement black-screened the load on 2026-08-25.
+    (void)diagnostics::install_entity_create_probe(
+        core::settings::get().client.stockEntityPool,
+        core::settings::get().client.restockDrainedEntityPool);
     (void)hooks::retail_log::install();
+    (void)hooks::vendor_banner::install();
     (void)hooks::assert_handler::install();
     // Read-only. At a hitch it dumps every in-flight job record from the watchdog snapshot,
     // which names the job and thread the in-world freeze blocks on.

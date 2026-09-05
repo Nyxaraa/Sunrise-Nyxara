@@ -73,6 +73,20 @@ void clear() noexcept;
 sale_rows(const Definition& definition, std::span<SaleRow> output, std::size_t& count) noexcept;
 
 /**
+ * Reads one sale row of one definition.
+ *
+ * A purchase names a single row, and copying the definition's whole range to read it costs a
+ * bank-sized buffer per caller. This reads the one row under the catalog lock.
+ *
+ * @param definition Definition whose range is read.
+ * @param row Row ordinal inside that definition.
+ * @param output Receives the row, or a cleared row when the definition does not own it.
+ * @return True when the definition owns that row.
+ */
+[[nodiscard]] bool
+sale_row(const Definition& definition, std::size_t row, SaleRow& output) noexcept;
+
+/**
  * Copies the installed rows one definition owns, in row order.
  * @param definition Definition whose range is copied.
  * @param output Caller-owned fixed row storage.
@@ -82,6 +96,16 @@ sale_rows(const Definition& definition, std::span<SaleRow> output, std::size_t& 
 [[nodiscard]] bool installed_rows(const Definition& definition,
                                   std::span<InstalledRow> output,
                                   std::size_t& count) noexcept;
+
+/**
+ * Reads one installed row of one definition, under the catalog lock.
+ * @param definition Definition whose range is read.
+ * @param row Row ordinal inside that definition.
+ * @param output Receives the row, or a cleared row when the definition does not own it.
+ * @return True when the definition owns that row.
+ */
+[[nodiscard]] bool
+installed_row(const Definition& definition, std::size_t row, InstalledRow& output) noexcept;
 
 /**
  * Copies every index row in ascending index order.

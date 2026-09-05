@@ -1,47 +1,73 @@
 #include <Windows.h>
 
 #include <array>
+#include <span>
 
 #include "../../../../core/filesystem/path.h"
 #include "../../../../core/logging/log.h"
+#include "../../../../core/settings/rule_text.h"
 #include "../../../../middleware/content/packages/reader/reader.h"
 #include "../../../../middleware/content/packages/tables/definition_index_table.h"
-#include "../../../../middleware/content/packages/tables/items.h"
-#include "../../../../state/account/account_state.h"
-#include "../../../../state/build_data/abilities/definition.h"
-#include "../../../../state/build_data/inventory/buckets/definition.h"
-#include "../../../../state/build_data/items/details/definition.h"
-#include "../../../../state/build_data/progressions/definition.h"
 #include "../../../../state/build_data/runtime.h"
-#include "../../../../state/build_data/socket_entry_lists/definition.h"
-#include "../../../../state/content/content_catalog.h"
-#include "../../../../state/runtime/runtime.h"
-#include "../../../memory/current_process_memory.h"
-#include "../../../targets/game.h"
+#include "../../../../state/build_data/sobjects/sobject_catalog.h"
+#include "../../../../state/build_data/vendors/vendor_catalog.h"
 #include "../../hash_names/hash_name_build.h"
 #include "../../scenarios/scenario_build.h"
 #include "../../spawn_sets/spawn_set_build.h"
+#include "../../vendors/vendor_build.h"
 #include "build.h"
 #include "internal.h"
+#include "package_socket_plug_build.h"
 
 namespace sunrise::client::content::items::packages {
 namespace {
 
-/** @return True when every domain owned by the package pass is published. */
-[[nodiscard]] bool package_domains_ready() noexcept {
-    return state::build_data::item_definitions_ready()
-           && state::build_data::collectible_definitions_ready()
-           && state::build_data::material_requirement_sets_ready()
-           && state::build_data::configured_item_details_ready()
-           && state::build_data::socket_plug_rules_ready()
-           && state::build_data::inventory_bucket_descriptors_ready()
-           && state::build_data::socket_entry_lists_ready()
-           && state::build_data::ability_buckets_ready()
-           && state::build_data::socket_entry_buckets_ready()
-           && state::build_data::progression_definitions_ready()
-           && state::build_data::scenario_layouts_ready() && state::build_data::spawn_sets_ready()
-           && state::build_data::hash_names_ready()
-           && state::build_data::investment_constants_ready();
+/**
+ * Reads the vendors to publish definitions for, by definition hash, from `vendor_catalog.txt`.
+ *
+ * A row position is not a stable name for a vendor and the useful ones are not all at the head of
+ * the index, so the list is authored by hash. An absent or empty file leaves the caller with the
+ * leading window it used before.
+ *
+ * @param hashes Receives the requested definition hashes.
+ * @return How many were read.
+ */
+[[nodiscard]] std::size_t read_vendor_hashes(std::span<std::uint32_t> hashes) noexcept {
+    static std::array<char, core::rule_text::kRuleTextCapacity> text{};
+    if (!core::path::read_artifact_text(L"vendor_catalog.txt", text)) {
+        return 0;
+    }
+    std::size_t count = 0;
+    core::rule_text::Cursor rules{text.data()};
+    while (count < hashes.size() && rules.seek_field()) {
+        const std::uint32_t parsed = rules.read_hex();
+        if (parsed != 0) {
+            hashes[count++] = parsed;
+        }
+    }
+    return count;
+}
+
+/**
+ * Publishes the vendor catalog, index and definitions both.
+ *
+ * `vendors::build` reads the whole index and a definition for each vendor named by hash, filling
+ * any room left from the head of the index. The names come from `vendor_catalog.txt`: a row
+ * position is not a stable name for a vendor and the useful ones are not all at the head - the
+ * Drifter is row 195, so every request against him once failed to resolve a definition that had
+ * never been read.
+ *
+ * @param source Package directory and borrowed block keys.
+ * @param scratch Block storage shared with the other content passes.
+ */
+void build_vendor_catalog(const reader::Source& source, reader::Scratch& scratch) noexcept {
+    namespace vendor_domain = state::build_data::vendors;
+    if (state::build_data::vendor_catalog_ready()) {
+        return;
+    }
+    static std::array<std::uint32_t, vendor_domain::kDefinitionCapacity> named{};
+    const std::size_t namedCount = read_vendor_hashes(named);
+    (void)content::vendors::build(source, scratch, std::span(named).first(namedCount));
 }
 
 /** @return True when every item and investment-root domain is published. */
@@ -56,16 +82,23 @@ namespace {
            && state::build_data::ability_buckets_ready()
            && state::build_data::socket_entry_buckets_ready()
            && state::build_data::progression_definitions_ready()
-           && state::build_data::investment_constants_ready();
+           && state::build_data::record_definitions_ready()
+           && state::build_data::node_definitions_ready()
+           && state::build_data::sobjects::count() != 0
+           && state::build_data::investment_constants_ready()
+           && state::build_data::exotic_catalysts_ready();
 }
 
 } // namespace
 
+/** @return True when every domain owned by the package pass is published. */
+bool ready() noexcept {
+    return root_domains_ready() && state::build_data::scenario_layouts_ready()
+           && state::build_data::spawn_sets_ready() && state::build_data::hash_names_ready();
+}
+
 /** Publishes the dense item table from the installed packages, once. */
 bool build() noexcept {
-    if (package_domains_ready()) {
-        return true;
-    }
     static Storage storage{};
     reader::BlockKeys keys{};
     core::path::Buffer directory{};
@@ -87,16 +120,20 @@ bool build() noexcept {
         (void)content::scenarios::build(packageSource, storage.scratch);
         (void)content::spawn_sets::build(packageSource, storage.scratch);
         (void)content::hash_names::build(packageSource, storage.scratch);
+        build_vendor_catalog(packageSource, storage.scratch);
+        if (ready()) {
+            SecureZeroMemory(&keys, sizeof keys);
+            return true;
+        }
     }
     if (root_domains_ready()) {
         SecureZeroMemory(&keys, sizeof keys);
-        return true;
+        return ready();
     }
     reason = "tag";
     std::array<std::uint32_t, kContainerCandidates> candidates{};
     std::size_t candidateCount = 0;
-    const bool named = investment_globals_tags(candidates, candidateCount);
-    if (named) {
+    if (investment_globals_tags(candidates, candidateCount)) {
         const reader::Source source{directory.chars.data(), &keys};
         tables::Array table{};
         bool located = false;
@@ -137,6 +174,22 @@ bool build() noexcept {
                     continue;
                 }
             }
+            if (!state::build_data::exotic_catalysts_ready()) {
+                reason = "catalyst_gates";
+                if (!read_catalyst_acquisition_gates(source,
+                                                     storage.scratch,
+                                                     std::span<const std::byte>{storage.root},
+                                                     storage.child,
+                                                     storage.catalystAcquisitionGates)
+                    || !read_catalyst_objective_values(
+                        source,
+                        storage.scratch,
+                        std::span<const std::byte>{storage.root},
+                        storage.child,
+                        storage.catalystObjectiveValues)) {
+                    continue;
+                }
+            }
             reason = "buckets";
             if (!build_buckets(source, storage, std::span<const std::byte>{storage.root})) {
                 continue;
@@ -153,6 +206,30 @@ bool build() noexcept {
                                        progressionCount)) {
                     (void)state::build_data::publish_progression_definitions(
                         std::span(storage.progressionRows).first(progressionCount));
+                }
+            }
+            if (!state::build_data::node_definitions_ready()) {
+                std::size_t nodeCount = 0;
+                if (build_nodes(source,
+                                storage.scratch,
+                                std::span<const std::byte>{storage.root},
+                                storage.child,
+                                storage.nodeRows,
+                                nodeCount)) {
+                    (void)state::build_data::publish_node_definitions(
+                        std::span(storage.nodeRows).first(nodeCount));
+                }
+            }
+            if (!state::build_data::record_definitions_ready()) {
+                std::size_t recordCount = 0;
+                if (build_records(source,
+                                  storage.scratch,
+                                  std::span<const std::byte>{storage.root},
+                                  storage.child,
+                                  storage.recordRows,
+                                  recordCount)) {
+                    (void)state::build_data::publish_record_definitions(
+                        std::span(storage.recordRows).first(recordCount));
                 }
             }
             if (!state::build_data::investment_constants_ready()) {
@@ -191,7 +268,7 @@ bool build() noexcept {
         }
     }
     SecureZeroMemory(&keys, sizeof keys);
-    const bool complete = package_domains_ready();
+    const bool complete = ready();
     const bool itemDomainsReady = root_domains_ready();
     if (complete) {
         // Nothing reads a package again until the next boot, so this reader's files go back now.

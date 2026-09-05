@@ -135,8 +135,8 @@ __declspec(noinline) bool __fastcall reader(std::uint32_t sliceSet) noexcept {
     return !forced;
 }
 
-/** @param reason Key naming the step that failed. @return False, for a direct return. */
-[[nodiscard]] bool fail(const char* reason) noexcept {
+/** @param reason Key naming the step that failed. */
+void report_failure(const char* reason) noexcept {
     std::array<char, kLineCapacity> line{};
     const int written = std::snprintf(
         line.data(), line.size(), "ev=bootflow stage=region result=fail reason=%s", reason);
@@ -145,39 +145,47 @@ __declspec(noinline) bool __fastcall reader(std::uint32_t sliceSet) noexcept {
                          core::log::Level::warn,
                          {line.data(), static_cast<std::size_t>(written)});
     }
-    return false;
 }
 
 } // namespace
 
-/** Attaches the private-region force. */
-bool install_region_private() noexcept {
+/** Stages the private-region force. */
+StageResult stage_region_private(hooking::detour::Spec& spec) noexcept {
     if (g_handle.attached) {
-        return true;
+        return StageResult::attached;
     }
     std::byte* const target = scan_main_image_unique(kReaderSignature, "slice_set_is_public");
     if (target == nullptr) {
-        return fail("reader");
+        report_failure("reader");
+        return StageResult::unavailable;
     }
     const std::byte* const starter =
         scan_main_image_unique(kStarterSignature, "region_start_transition");
     if (starter == nullptr) {
-        return fail("starter");
+        report_failure("starter");
+        return StageResult::unavailable;
     }
     const std::byte* const returnSite = find_return_site(starter, target);
     if (returnSite == nullptr) {
-        return fail("call_site");
+        report_failure("call_site");
+        return StageResult::unavailable;
     }
     // Published before the detour attaches, so the first call already has its filter.
     g_returnSite.store(returnSite, std::memory_order_release);
-    const hooking::detour::Spec spec{target, reinterpret_cast<void*>(&reader)};
-    if (!hooking::detour::install(spec, g_handle)) {
-        return fail("attach");
+    spec = hooking::detour::Spec{target, reinterpret_cast<void*>(&reader)};
+    return StageResult::staged;
+}
+
+/** Takes the private-region force's attached handle, or a detached one. */
+void publish_region_private(const hooking::detour::Handle& handle) noexcept {
+    if (!handle.attached) {
+        report_failure("attach");
+        return;
     }
+    g_handle = handle;
     g_original.store(reinterpret_cast<Reader>(g_handle.original), std::memory_order_release);
     core::log::write(
         core::log::Channel::client, core::log::Level::info, "ev=bootflow stage=region result=ok");
-    return true;
 }
 
 /** Detaches the private-region force. */

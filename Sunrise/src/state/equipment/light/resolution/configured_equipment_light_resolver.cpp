@@ -8,6 +8,7 @@
 #include <span>
 
 #include "../../../build_data/runtime.h"
+#include "../../../progression/seasonal_experience.h"
 #include "../calculation/equipment_light_calculation.h"
 
 namespace sunrise::state::equipment::light::resolution {
@@ -35,15 +36,6 @@ using NativeSlotMap = std::array<std::optional<std::size_t>, build_details::kEqu
 }
 
 /**
- * Converts one item level into its power score.
- * @param level Authored item level, where zero marks an unpowered item.
- * @return 10 power per level, raised to the floor, or zero for an unpowered item.
- */
-[[nodiscard]] constexpr std::int32_t item_power(std::int32_t level) noexcept {
-    return level > 0 ? (std::max)(kMinimumItemPower, kPowerPerLevel * level) : 0;
-}
-
-/**
  * Finds one authored item's native slot and computes its score.
  * @param item Already-checked authored equipment item.
  * @param nativeSlot Receives the installed native equipment slot.
@@ -54,15 +46,22 @@ using NativeSlotMap = std::array<std::optional<std::size_t>, build_details::kEqu
 resolve_item(const authored::Item& item, std::size_t& nativeSlot, ItemScore& itemScore) noexcept {
     build_items::Definition definition{};
     build_details::Definition detail{};
+    std::uint8_t resolvedSlot = 0;
     if (!build_data::find_item_definition_hash(item.definitionHash, definition)
         || !build_data::find_configured_item_detail(definition.definitionIndex, detail)
-        || detail.definitionIndex != definition.definitionIndex || !detail.equipmentSlot.has_value()
-        || *detail.equipmentSlot < 0
-        || static_cast<std::size_t>(*detail.equipmentSlot) >= build_details::kEquipmentSlotCount) {
+        || detail.definitionIndex != definition.definitionIndex
+        || !authored::resolve_native_equipment_slot(
+            item.definitionHash, detail.equipmentSlot, resolvedSlot)
+        || static_cast<std::size_t>(resolvedSlot) >= build_details::kEquipmentSlotCount) {
         return false;
     }
-    nativeSlot = static_cast<std::size_t>(*detail.equipmentSlot);
-    itemScore = ItemScore{definition.definitionIndex, item_power(item.level)};
+    nativeSlot = static_cast<std::size_t>(resolvedSlot);
+    // The "Emotes" collection item's real content contributes no light either way.
+    std::int32_t power = 0;
+    if (detail.equipmentSlot.has_value() && !item_power(item.level, power)) {
+        return false;
+    }
+    itemScore = ItemScore{definition.definitionIndex, power};
     return true;
 }
 
@@ -174,7 +173,7 @@ bool character_light(const AccountState& account,
     if (!calculation::evaluate(scores, SlotScores{}, std::span<const SlotScores>{}, evaluation)) {
         return false;
     }
-    light = evaluation.average;
+    light = evaluation.average + progression::seasonal_experience::artifact_power_bonus();
     return true;
 }
 

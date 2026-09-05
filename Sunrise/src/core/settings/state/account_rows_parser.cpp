@@ -14,10 +14,6 @@ constexpr std::uint64_t kMaximumDestinationHash = (std::numeric_limits<std::uint
 constexpr std::uint64_t kMaximumTravellingActivityIndex =
     (std::numeric_limits<std::uint16_t>::max)();
 
-} // namespace
-
-namespace {
-
 /** Sets the tier bit one rarity name stands for. */
 [[nodiscard]] bool dismantle_tier_bit(std::string_view name, std::uint8_t& mask) noexcept {
     using Tier = state::build_data::items::Tier;
@@ -140,6 +136,82 @@ bool Parser::dismantle_rewards(state::AccountState& output) noexcept {
             return false;
         }
         output.dismantleRewards[output.dismantleRewardCount++] = reward;
+        if (consume(']')) {
+            return true;
+        }
+        if (!consume(',')) {
+            return false;
+        }
+    }
+}
+
+/** Parses one optional item grant per record index. */
+bool Parser::record_rewards(state::AccountState& output) noexcept {
+    output.recordRewards = {};
+    output.recordRewardCount = 0;
+    if (!consume('[')) {
+        return false;
+    }
+    if (consume(']')) {
+        return true;
+    }
+    for (;;) {
+        if (output.recordRewardCount >= output.recordRewards.size() || !consume('{')) {
+            return false;
+        }
+        state::RecordRewardPolicy reward{};
+        bool hasRecordIndex = false;
+        bool hasItemIndex = false;
+        bool hasQuantity = false;
+        for (;;) {
+            std::string_view key;
+            if (!string(key) || !consume(':')) {
+                return false;
+            }
+            std::uint64_t value = 0;
+            if (key == "record_index") {
+                if (hasRecordIndex || !unsigned_integer(value)
+                    || value > (std::numeric_limits<std::uint16_t>::max)()) {
+                    return false;
+                }
+                reward.recordIndex = static_cast<std::uint16_t>(value);
+                hasRecordIndex = true;
+            } else if (key == "item_index") {
+                if (hasItemIndex || !unsigned_integer(value)
+                    || value > (std::numeric_limits<std::uint16_t>::max)()) {
+                    return false;
+                }
+                reward.itemIndex = static_cast<std::uint16_t>(value);
+                hasItemIndex = true;
+            } else if (key == "quantity") {
+                if (hasQuantity || !unsigned_integer(value) || value == 0
+                    || value > (std::numeric_limits<std::int32_t>::max)()) {
+                    return false;
+                }
+                reward.quantity = static_cast<std::int32_t>(value);
+                hasQuantity = true;
+            } else if (!skip_value(0)) {
+                return false;
+            }
+            if (consume('}')) {
+                break;
+            }
+            if (!consume(',')) {
+                return false;
+            }
+        }
+        if (!hasRecordIndex || !hasItemIndex) {
+            return false;
+        }
+        if (!hasQuantity) {
+            reward.quantity = 1;
+        }
+        for (std::size_t index = 0; index < output.recordRewardCount; ++index) {
+            if (state::same_record_reward_key(output.recordRewards[index], reward)) {
+                return false;
+            }
+        }
+        output.recordRewards[output.recordRewardCount++] = reward;
         if (consume(']')) {
             return true;
         }

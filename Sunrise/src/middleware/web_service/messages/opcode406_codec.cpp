@@ -1,5 +1,6 @@
 #include <cstddef>
 
+#include "../../../state/account/inventory/item_state.h"
 #include "../../encoding/bit_reader.h"
 #include "opcode406.h"
 
@@ -16,8 +17,6 @@ constexpr std::uint8_t kValueWidth = 32;
 constexpr std::uint8_t kPaddingWidth = 7;
 /** Nonnegative signed 32-bit values have this bit set after native descriptor biasing. */
 constexpr std::uint64_t kValueBias = 0x80000000ULL;
-/** Only the two lowest state bits are supported by this build. */
-constexpr std::uint64_t kSupportedStateBits = 0x3U;
 
 } // namespace
 
@@ -49,7 +48,8 @@ bool parse_request(const Message& message, Request& request) noexcept {
 
     return read && instancePresent != 0 && instanceSoid != 0 && definitionPresent != 0
            && encodedFlags >= kValueBias && padding == 0
-           && encodedFlags - kValueBias <= kSupportedStateBits;
+           && state::account::inventory::valid_item_state(
+               static_cast<std::uint32_t>(encodedFlags - kValueBias));
 }
 
 } // namespace sunrise::middleware::web_service::messages::opcode406

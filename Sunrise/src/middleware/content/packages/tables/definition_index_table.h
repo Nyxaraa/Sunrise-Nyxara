@@ -31,6 +31,95 @@ inline constexpr std::uint16_t kAbsentPackageId = 0xFFFFU;
 /** Element class of the item index table inside the investment container. */
 inline constexpr std::uint32_t kItemIndexTableClass = 0x80807BE8U;
 /** The investment root holds the installed collectible definition table at this slot. */
+/** Investment root slot of the unlock flag mapping tables. */
+/** The investment root holds the progression definition table at this slot. */
+/** Investment root slot of the records and lore table. */
+inline constexpr std::size_t kRecordTableSlot = 72;
+/** One record row, wider than any field this pass reads. */
+inline constexpr std::size_t kRecordRowStride = 216;
+/** Unlock slot of the record's completion flag, or a non-positive value when it has none. */
+inline constexpr std::size_t kRecordCompletionFlagOffset = 100;
+/**
+ * Authored DestinyRecordDefinition hash inside one record row.
+ * Measured, not divided out: offset +0 holds degenerate values, and +0x28 was confirmed by joining
+ * 48 rows to Bungie's manifest by name.
+ */
+inline constexpr std::size_t kRecordHashOffset = 0x28;
+/**
+ * Lore row a record names, or 0xFFFF when it names none.
+ *
+ * A collectible row carries the same field at the same offset, which is what joins the two: a
+ * collectible and the record it unlocks name one lore row. A record with no lore is a book's parent
+ * triumph rather than one of its chapters.
+ */
+inline constexpr std::size_t kLoreRowOffset = 0x2C;
+/** Investment root slot of the lore table: 1425 rows of sixteen bytes. */
+inline constexpr std::size_t kLoreTableSlot = 52;
+/** One lore row, and the definition hash inside it. */
+inline constexpr std::size_t kLoreRowStride = 16;
+inline constexpr std::size_t kLoreHashOffset = 8;
+/** Points the record is worth. Zero for lore and for the interval records that score per step. */
+inline constexpr std::size_t kRecordScoreOffset = 92;
+/** A record names its category's value slot here. The record's own bar reads the next slot up. */
+inline constexpr std::size_t kRecordCategoryExpressionField = 120;
+/** Nonzero when the record's completion grants a character-equippable title. */
+inline constexpr std::size_t kRecordHasTitleOffset = 0xB8;
+/** Investment root slot of the four unlock value mapping tables. */
+inline constexpr std::size_t kUnlockValueMapTableSlot = 113;
+/** Array descriptor of the account object's value mapping table. */
+inline constexpr std::size_t kAccountValueMapDescriptor = 8;
+/** One unlock expression instruction: an opcode then its operand. */
+inline constexpr std::size_t kUnlockInstructionStride = 8;
+/** Opcodes run to fifteen; anything wider means the field is not an expression. */
+inline constexpr std::uint32_t kUnlockOpcodeCeiling = 20;
+/** The opcode that reads a value slot. */
+inline constexpr std::uint32_t kUnlockReadValueOpcode = 10;
+/** The opcode that tests a flag. */
+inline constexpr std::uint32_t kUnlockReadFlagOpcode = 1;
+/** Array payloads begin after a sixteen byte header. */
+inline constexpr std::size_t kHeaderSkip = 16;
+/**
+ * Upper bound on how many instructions a node expression may hold.
+ *
+ * This was thirty-two, which was a guess rather than a measurement, and it silently hid a real gate:
+ * one lore book carries fifty-nine instructions, so its expression was rejected before it was read
+ * and the category looked as though nothing gated it at all. The bound exists only to stop a wild
+ * count being walked as if it were an expression, so it is set well above anything observed.
+ */
+inline constexpr std::int64_t kNodeExpressionCapacity = 128;
+/** Investment root slot of the presentation node table. */
+inline constexpr std::size_t kPresentationNodeTableSlot = 63;
+/** One node row. Measured from the spacing of four known node hashes, not divided out of the blob. */
+inline constexpr std::size_t kNodeRowStride = 168;
+/** A node's expression sits at one of these two fields, never both. */
+inline constexpr std::size_t kNodeExpressionFieldPrimary = 64;
+inline constexpr std::size_t kNodeExpressionFieldAlternate = 48;
+/** Records a node owns, four bytes each as a row then a gate. */
+inline constexpr std::size_t kNodeChildRecordField = 136;
+inline constexpr std::size_t kNodeChildRecordStride = 4;
+/**
+ * How a lore book's parent-record bar slot relates to the category's own.
+ *
+ * The naive rule — parent = category slot + 1 — holds only when the slot above a category is free.
+ * Categories were allocated in contiguous runs, so for those books slot+1 is the next book's
+ * category. The shipped allocation instead defers every run's parent slots to immediately after
+ * the run, assigning them in reverse category order: the first book of a run gets the last parent
+ * slot and vice versa. Verified against four independent in-game marker readings (Pigeon 7060->7061,
+ * Exegete 7284->7285 isolated; Aunor -> 5230 and Ecdysis -> 5229 inside the 5222-5227 run).
+ */
+inline constexpr std::int32_t kNodeParentSlotStep = 1;
+/** Array descriptor of the character object's flag mapping table, sized to that bank. */
+inline constexpr std::size_t kCharacterFlagMapDescriptor = 40;
+/** Array descriptor of the character object's value mapping table, sized to that bank. */
+inline constexpr std::size_t kCharacterValueMapDescriptor = 24;
+inline constexpr std::size_t kUnlockFlagMapTableSlot = 111;
+/** Array descriptor of the account object's flag mapping table. */
+inline constexpr std::size_t kAccountFlagMapDescriptor = 8;
+/** One mapping row: a source and the slot it feeds. */
+inline constexpr std::size_t kUnlockMapRowStride = 8;
+/** The destination slot within one mapping row. */
+inline constexpr std::size_t kUnlockMapDestinationSlotOffset = 4;
+
 inline constexpr std::size_t kCollectibleTableSlot = 19;
 /** Definition class recorded for the installed investment root tag. */
 inline constexpr std::uint32_t kInvestmentRootClass = 0x80807D84U;
@@ -87,7 +176,7 @@ inline constexpr std::uint32_t kSandboxPerkClass = 0x808077BCU;
 inline constexpr std::size_t kStatBlockOffset = 112;
 /** The investment root holds the constants blob at this slot. */
 inline constexpr std::size_t kInvestmentConstantsSlot = 11;
-/** The investment root holds the progression definition table at this slot. */
+
 inline constexpr std::size_t kProgressionTableSlot = 68;
 /** Element class of the progression definition table. */
 inline constexpr std::uint32_t kProgressionTableClass = 0x80807CDDU;
@@ -183,6 +272,25 @@ slot_tag(std::span<const std::byte> blob, std::size_t index, std::uint32_t& tag)
 inline constexpr std::size_t kItemTableSlot = 48;
 /** The investment root holds the shared reusable/randomized plug-set table at this slot. */
 inline constexpr std::size_t kPlugSetTableSlot = 51;
+/** The investment root holds the dense ordinary socket-type table at this slot. */
+inline constexpr std::size_t kSocketTypeTableSlot = 94;
+/** Element class and row size of the installed ordinary socket-type table. */
+inline constexpr std::uint32_t kSocketTypeTableClass = 0x80807ABBU;
+inline constexpr std::size_t kSocketTypeRowStride = 96;
+/** One socket type points to its acquired-state rule array from this row offset. */
+inline constexpr std::size_t kSocketTypeAcquisitionDescriptor = 16;
+/** Acquired-state and item-completion arrays carry this postfix expression-row class. */
+inline constexpr std::uint32_t kInvestmentExpressionRowClass = 0x80807D31U;
+/** Catalyst progress items reference objective rows through this one-row array. */
+inline constexpr std::uint32_t kObjectiveReferenceArrayClass = 0x808087B1U;
+inline constexpr std::uint32_t kObjectiveReferenceRowClass = 0x808077E3U;
+/** The investment root holds the dense objective definition table at this slot. */
+inline constexpr std::size_t kObjectiveTableSlot = 58;
+/** Installed objective table and row layout. */
+inline constexpr std::uint32_t kObjectiveTableClass = 0x8080775BU;
+inline constexpr std::uint32_t kObjectiveRowClass = 0x8080775FU;
+inline constexpr std::size_t kObjectiveRowStride = 0xA0;
+inline constexpr std::size_t kObjectiveCompletionValueOffset = 0x30;
 /** The investment root holds the socket entry list table at this slot. */
 inline constexpr std::size_t kSocketEntryListTableSlot = 97;
 /** The globals container names the investment root as its first child. */

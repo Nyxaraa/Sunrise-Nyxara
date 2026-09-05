@@ -4,6 +4,7 @@
 #include <cwchar>
 #include <limits>
 
+#include "core/threading/data_mutex.h"
 #include "handle_cache.h"
 
 namespace sunrise::middleware::content::packages::reader::handle_cache {
@@ -16,9 +17,12 @@ constexpr std::uint64_t kHashBasis = 14695981039346656037ULL;
 /** Standard 64-bit FNV-1a prime mixes each path character. */
 constexpr std::uint64_t kHashPrime = 1099511628211ULL;
 
-SRWLOCK g_lock{SRWLOCK_INIT};
-std::array<FileSlot, kSharedSlots> g_slots{};
-std::uint64_t g_useCounter{};
+struct CacheState {
+    std::array<FileSlot, kSharedSlots> slots{};
+    std::uint64_t useCounter{};
+};
+
+core::threading::DataMutex<CacheState> g_cache{};
 
 /** @param path Full package path. @return Its key. */
 [[nodiscard]] std::uint64_t path_hash(const Path& path) noexcept {
@@ -123,11 +127,11 @@ bool read(const Path& path, std::uint64_t offset, std::span<std::byte> output) n
     }
     // One lock covers the lookup and the read. The read is positioned on a file the next
     // caller may replace.
-    AcquireSRWLockExclusive(&g_lock);
-    const HANDLE file = acquire(g_slots, g_useCounter, path);
-    const bool complete = file != nullptr && read_positioned(file, offset, output);
-    ReleaseSRWLockExclusive(&g_lock);
-    return complete;
+    return g_cache.lock([&path, offset, output](CacheState& cache) {
+        const HANDLE file = acquire(cache.slots, cache.useCounter, path);
+        const bool complete = file != nullptr && read_positioned(file, offset, output);
+        return complete;
+    });
 }
 
 /** Reads an exact byte range through the files one reader keeps open. */
@@ -145,10 +149,10 @@ bool read(Scratch& scratch,
 
 /** Closes the shared files, which the build passes do when they finish. */
 void release() noexcept {
-    AcquireSRWLockExclusive(&g_lock);
-    close_slots(g_slots);
-    g_useCounter = 0;
-    ReleaseSRWLockExclusive(&g_lock);
+    g_cache.lock([](CacheState& cache) {
+        close_slots(cache.slots);
+        cache.useCounter = 0;
+    });
 }
 
 /** @param scratch Reader whose own files are closed. */

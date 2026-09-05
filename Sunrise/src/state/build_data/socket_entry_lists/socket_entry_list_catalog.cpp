@@ -1,14 +1,17 @@
 #include "socket_entry_list_catalog.h"
 
 #include <array>
+#include <mutex>
+#include <shared_mutex>
 
 #include "../table.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::state::build_data::socket_entry_lists {
 namespace {
 
 // One lock covers both tables: an entry table is only meaningful against its own list rows.
-Lock g_lock;
+core::threading::SrwLock g_lock;
 Table<Definition, kDefinitionCapacity> g_definitions;
 Table<EntryTable, kEntryTableCapacity> g_entryTables;
 
@@ -28,7 +31,7 @@ Table<EntryTable, kEntryTableCapacity> g_entryTables;
 
 /** Clears every generated socket-entry-list mapping under the catalog lock. */
 void clear() noexcept {
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_definitions.clear();
     g_entryTables.clear();
 }
@@ -56,7 +59,7 @@ bool replace(std::span<const Definition> definitions) noexcept {
         return false;
     }
 
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     // valid() proved every index in the input range appears once, so each row lands once.
     const std::span<Definition> storage = g_definitions.reset(definitions.size());
     if (storage.size() != definitions.size()) {
@@ -71,7 +74,7 @@ bool replace(std::span<const Definition> definitions) noexcept {
 /** Finds one socket-entry-list mapping by native definition index. */
 bool find(std::uint16_t definitionIndex, Definition& definition) noexcept {
     definition = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const Definition> rows = g_definitions.rows();
     const bool found = definitionIndex < rows.size();
     if (found) {
@@ -82,13 +85,13 @@ bool find(std::uint16_t definitionIndex, Definition& definition) noexcept {
 
 /** Copies dense native-index rows without handing out mutable catalog storage. */
 bool snapshot(std::span<Definition> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.snapshot(output, count);
 }
 
 /** @return The number of complete socket-entry-list mappings, read under the lock. */
 std::size_t count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.count();
 }
 
@@ -115,14 +118,14 @@ bool replace_entry_tables(std::span<const EntryTable> tables) noexcept {
     if (!valid_entry_tables(tables)) {
         return false;
     }
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     return g_entryTables.replace(tables);
 }
 
 /** Finds one list's per-entry selection inputs. */
 bool find_entry_table(std::uint16_t definitionIndex, EntryTable& table) noexcept {
     table = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     for (const EntryTable& row : g_entryTables.rows()) {
         if (row.definitionIndex == definitionIndex) {
             table = row;
@@ -134,7 +137,7 @@ bool find_entry_table(std::uint16_t definitionIndex, EntryTable& table) noexcept
 
 /** Copies every kept entry table. */
 bool snapshot_entry_tables(std::span<EntryTable> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_entryTables.snapshot(output, count);
 }
 

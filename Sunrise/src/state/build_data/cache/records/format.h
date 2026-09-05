@@ -11,12 +11,16 @@
 #include "../../constants/definition.h"
 #include "../../definition.h"
 #include "../../hash_names/definition.h"
+#include "../../items/catalysts/definition.h"
 #include "../../items/details/definition.h"
 #include "../../items/item_catalog.h"
 #include "../../items/socket_plugs/definition.h"
 #include "../../material_requirements/material_requirement_catalog.h"
+#include "../../nodes/definition.h"
 #include "../../progressions/definition.h"
+#include "../../records/definition.h"
 #include "../../scenarios/definition.h"
+#include "../../sobjects/sobject_catalog.h"
 #include "../../spawn_sets/definition.h"
 #include "../../vendors/definition.h"
 
@@ -28,8 +32,11 @@ inline constexpr std::array<char, 8> kCacheMagic{'S', 'U', 'N', 'R', 'I', 'S', '
  * Current build-data cache format. An older cache is rebuilt rather than read.
  * Bump it when a stored shape changes, and when the extraction filling it changes what it writes.
  * A cached row survives a code change, so a corrected walk keeps publishing the old rows.
+ *
+ * 48: nodes and SObjects joined the unified cache, replacing their incomplete sidecar lifecycle.
  */
-inline constexpr std::uint32_t kCacheFormatVersion = 45;
+// Upstream's format 45 and the PR's independent format 48 changes are both present.
+inline constexpr std::uint32_t kCacheFormatVersion = 59;
 /** Signed -1 on disk means there is no equipment slot. */
 inline constexpr std::int8_t kAbsentEquipmentSlot = -1;
 /** The standard 64-bit FNV-1a offset basis starts the payload checksum. */
@@ -47,12 +54,13 @@ struct Prefix {
 /**
  * Stat rows named by the installed investment constants blob.
  * The client searches the character's stat table by these rows, so they decide which rows the
- * generated table may carry. They are 7 bytes of scalars, so they ride in the header.
+ * generated tables may carry. They ride in the fixed cache header.
  */
 struct InvestmentConstants {
     /** Stat row the banner's power number is searched by. Row 0 is a real row, so there is no
      * unset value; an unextracted blob leaves `extracted` clear instead. */
     std::uint8_t lightStatRow{};
+    std::uint8_t weaponPowerStatRow{};
     std::array<std::uint8_t, constants::kCharacterStatRowCount> characterStatRows{};
     /** One when the constants blob was read, zero when the domain has never been extracted. */
     std::uint8_t extracted{};
@@ -73,11 +81,15 @@ struct Header {
     std::uint32_t socketPlugRuleCount{};
     std::uint32_t socketPlugPoolCount{};
     std::uint32_t socketPlugMemberCount{};
+    std::uint32_t exoticCatalystCount{};
     std::uint32_t inventoryBucketCount{};
     std::uint32_t socketEntryListCount{};
     std::uint32_t socketEntryTableCount{};
     std::uint32_t abilityBucketCount{};
     std::uint32_t progressionCount{};
+    std::uint32_t recordCount{};
+    std::uint32_t nodeCount{};
+    std::uint32_t sobjectCount{};
     std::uint32_t scenarioCount{};
     std::uint32_t rosterGroupCount{};
     std::uint32_t spawnStemCount{};
@@ -202,6 +214,27 @@ struct SocketPlugMemberRecord {
     std::uint16_t itemDefinitionIndex{};
 };
 
+/** Disk form of one build-derived exotic weapon catalyst relation. */
+struct ExoticCatalystRecord {
+    std::uint32_t itemDefinitionHash{};
+    std::uint16_t itemDefinitionIndex{};
+    std::uint16_t completedPlugDefinitionIndex{};
+    std::uint16_t progressPlugDefinitionIndex{};
+    std::uint16_t effectDefinitionIndex{};
+    std::uint16_t acquisitionDefinitionIndex{};
+    std::array<std::uint16_t, items::catalysts::kCompletionFlagCapacity>
+        completionFlagDefinitionIndices{};
+    std::array<std::uint16_t, items::catalysts::kCompletionValueCapacity>
+        completionValueIndices{};
+    std::uint16_t objectiveDefinitionIndex{items::catalysts::kUnavailableObjectiveIndex};
+    std::uint8_t socketLane{};
+    std::uint8_t availability{};
+    std::uint8_t completionFlagCount{};
+    std::uint8_t completionValueCount{};
+    std::array<std::int32_t, items::catalysts::kCompletionValueCapacity> completionValues{};
+    std::int32_t objectiveValue{};
+};
+
 /** Disk form of one inventory-bucket array-routing descriptor. */
 struct InventoryBucketRecord {
     std::uint8_t bucketId{};
@@ -234,6 +267,47 @@ struct ProgressionRecord {
     std::uint8_t scope{};
     /** Must be zero, so the packed progression row always matches. */
     std::uint8_t reserved{};
+};
+
+/** Disk form of one record and the account flag bank row its claim sets.
+ *
+ * Carries every runtime field. It did not always: loreRow, categoryValueIndex and definitionHash
+ * were added to records::Definition after this row was laid out, and the positional decode then
+ * filled completionFlagIndex from the disk scoreValue - claims resolved to the score (50/100) as
+ * their flag, which looked like claiming doing nothing at all. The row is now the full shape and
+ * the codec assigns by name; kCacheFormatVersion bump rejects rows written before that.
+ */
+struct RecordDefinitionRecord {
+    std::uint16_t definitionIndex{};
+    std::uint32_t definitionHash{};
+    std::uint16_t completionFlagIndex{};
+    std::uint16_t loreRow{};
+    std::uint16_t scoreValue{};
+    std::uint16_t categoryValueIndex{};
+    std::uint8_t hasTitle{};
+    std::uint8_t reserved{};
+};
+
+/** Disk form of one presentation node and its owned record rows. */
+struct NodeDefinitionRecord {
+    std::uint16_t definitionIndex{};
+    std::uint16_t valueIndex{nodes::kUnavailableValueIndex};
+    std::int16_t valueSlot{-1};
+    std::int16_t characterValueSlot{-1};
+    std::uint16_t parentValueIndex{nodes::kUnavailableValueIndex};
+    std::uint16_t parentCharacterValueIndex{nodes::kUnavailableValueIndex};
+    std::uint16_t visibilityFlagIndex{nodes::kUnavailableFlagIndex};
+    std::uint16_t visibilityCharacterFlagIndex{nodes::kUnavailableFlagIndex};
+    std::uint16_t characterValueIndex{nodes::kUnavailableValueIndex};
+    std::uint8_t childCount{};
+    std::array<std::uint16_t, nodes::kChildCapacity> children{};
+};
+
+/** Disk form of one incident-target definition. */
+struct SObjectDefinitionRecord {
+    std::uint32_t nameHash{};
+    std::uint32_t lane4{};
+    std::int32_t typeCode{sobjects::kAbsentTypeCode};
 };
 
 /** Disk form of one dense socket-entry-list definition. */
@@ -384,7 +458,7 @@ struct VendorSaleRowRecord {
     std::uint16_t rowIndex{};
     std::uint16_t itemIndex{};
     std::uint16_t secondaryItemIndex{};
-    std::int32_t installedIndex{};
+    std::int32_t categoryIndex{};
     std::uint32_t raw104{};
     std::uint32_t raw108{};
     std::int32_t raw172{};
@@ -420,9 +494,9 @@ struct RosterGroupRecord {
 
 static_assert(sizeof(Prefix) == kCacheMagic.size() + sizeof(std::uint32_t));
 static_assert(sizeof(InvestmentConstants)
-              == constants::kCharacterStatRowCount + 2 * sizeof(std::uint8_t));
+              == constants::kCharacterStatRowCount + 3 * sizeof(std::uint8_t));
 static_assert(sizeof(Header)
-              == kCacheMagic.size() + 26 * sizeof(std::uint32_t) + 2 * sizeof(std::uint64_t)
+              == kCacheMagic.size() + 30 * sizeof(std::uint32_t) + 2 * sizeof(std::uint64_t)
                      + sizeof(InvestmentConstants));
 static_assert(sizeof(SpawnPointRecord)
               == spawn_sets::kPositionComponents * sizeof(float) + sizeof(std::uint32_t)
@@ -459,6 +533,13 @@ static_assert(sizeof(RosterGroupRecord)
                      + 2 * scenarios::kRosterSlotCapacity * sizeof(std::uint8_t)
                      + scenarios::kRosterSlotCapacity * sizeof(std::uint16_t));
 static_assert(sizeof(ProgressionRecord) == sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t));
+static_assert(sizeof(RecordDefinitionRecord)
+              == sizeof(std::uint16_t) + sizeof(std::uint32_t) + 4 * sizeof(std::uint16_t)
+                     + 2 * sizeof(std::uint8_t));
+static_assert(sizeof(NodeDefinitionRecord)
+              == 9 * sizeof(std::uint16_t) + sizeof(std::uint8_t)
+                     + nodes::kChildCapacity * sizeof(std::uint16_t));
+static_assert(sizeof(SObjectDefinitionRecord) == 2 * sizeof(std::uint32_t) + sizeof(std::int32_t));
 static_assert(sizeof(AbilityBucketRecord)
               == sizeof(std::uint16_t) + 6 * sizeof(std::uint8_t)
                      + 2 * abilities::kBucketCapacity * sizeof(std::uint8_t)
@@ -492,6 +573,9 @@ static_assert(sizeof(SocketPlugRuleRecord)
               == sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t) + sizeof(std::uint32_t));
 static_assert(sizeof(SocketPlugPoolRecord) == 2 * sizeof(std::uint32_t));
 static_assert(sizeof(SocketPlugMemberRecord) == sizeof(std::uint16_t));
+static_assert(sizeof(ExoticCatalystRecord)
+              == 6 * sizeof(std::uint32_t) + 14 * sizeof(std::uint16_t)
+                     + 4 * sizeof(std::uint8_t));
 static_assert(sizeof(InventoryBucketRecord)
               == 4 * sizeof(std::uint8_t) + 2 * sizeof(std::uint16_t));
 static_assert(sizeof(SocketEntryListRecord)

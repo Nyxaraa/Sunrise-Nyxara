@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 
 #include "../../middleware/datagen/family4/loadout/loadout_resolver.h"
 #include "../../middleware/web_service/messages/opcode1901.h"
@@ -265,8 +264,8 @@ bool preview_socket_plug(const PendingSocketPlug& mutation, AccountState& after)
 
 /** Commits one prepared socket-and-material after-image behind exact staleness guards. */
 bool commit_socket_plug(PendingSocketPlug& mutation) noexcept {
-    const PendingSocketPlug prepared = mutation;
-    mutation = {};
+    const PendingSocketPlug& prepared = mutation;
+    const PendingConsumption consume{mutation};
     const auto fail = [&prepared](std::string_view reason) noexcept {
         report_socket_plug("commit",
                            "fail",
@@ -436,8 +435,8 @@ bool prepare_item_state(std::uint64_t targetInstanceSoid,
 
 /** Commits one prepared item-state after-image behind an exact character staleness guard. */
 bool commit_item_state(PendingItemState& mutation) noexcept {
-    const PendingItemState prepared = mutation;
-    mutation = {};
+    const PendingItemState& prepared = mutation;
+    const PendingConsumption consume{mutation};
     const auto fail = [&prepared](std::string_view reason) noexcept {
         report_item_state("commit",
                           "fail",
@@ -570,8 +569,8 @@ bool preview_subclass_selection(const PendingSubclassSelection& mutation,
 
 /** Commits one prepared subclass selection behind exact account and character guards. */
 bool commit_subclass_selection(PendingSubclassSelection& mutation) noexcept {
-    const PendingSubclassSelection prepared = mutation;
-    mutation = {};
+    const PendingSubclassSelection& prepared = mutation;
+    const PendingConsumption consume{mutation};
     if (!prepared.prepared || prepared.accountSoid == 0 || prepared.characterSoid == 0
         || prepared.subclassInstanceSoid == 0 || prepared.characterIndex >= kCharacterCapacity
         || prepared.beforeCharacter.soid != prepared.characterSoid

@@ -25,8 +25,8 @@ inline constexpr std::size_t kSaleExpression8Offset = 8;
 inline constexpr std::size_t kSaleNestedRecordOffset = 32;
 /** Sale row main item-definition index. */
 inline constexpr std::size_t kSaleItemIndexOffset = 70;
-/** Sale row installed/runtime table index. */
-inline constexpr std::size_t kSaleInstalledIndexOffset = 100;
+/** Sale row vendor category index. */
+inline constexpr std::size_t kSaleCategoryIndexOffset = 100;
 /** Sale row scalar with no closed consumer. */
 inline constexpr std::size_t kSaleRaw104Offset = 104;
 /** Sale row scalar with no closed consumer. */

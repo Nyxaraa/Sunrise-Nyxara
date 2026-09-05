@@ -6,12 +6,16 @@
 #include "../constants/investment_constant_catalog.h"
 #include "../hash_names/hash_name_catalog.h"
 #include "../inventory/buckets/inventory_bucket_catalog.h"
+#include "../items/catalysts/exotic_catalyst_catalog.h"
 #include "../items/details/item_detail_catalog.h"
 #include "../items/socket_plugs/socket_plug_catalog.h"
 #include "../material_requirements/material_requirement_catalog.h"
+#include "../nodes/node_catalog.h"
 #include "../progressions/progression_catalog.h"
+#include "../records/record_catalog.h"
 #include "../runtime.h"
 #include "../scenarios/scenario_catalog.h"
+#include "../sobjects/sobject_catalog.h"
 #include "../socket_entry_buckets/socket_entry_bucket_catalog.h"
 #include "../socket_entry_lists/socket_entry_list_catalog.h"
 #include "../spawn_sets/spawn_set_catalog.h"
@@ -340,19 +344,6 @@ bool publish_vendor_catalog(std::span<const vendors::IndexEntry> index,
                                  vendors::clear);
 }
 
-/** Finds one vendor's index row. */
-bool find_vendor_index(std::uint32_t definitionHash, vendors::IndexEntry& entry) noexcept {
-    entry = {};
-    return vendor_catalog_ready() && vendors::find_hash(definitionHash, entry);
-}
-
-/** Finds one extracted vendor definition. */
-bool find_vendor_definition(std::uint32_t definitionHash,
-                            vendors::Definition& definition) noexcept {
-    definition = {};
-    return vendor_catalog_ready() && vendors::find(definitionHash, definition);
-}
-
 namespace runtime {
 
 /** Clears every generated catalog and the configured-domain publication state. */
@@ -365,10 +356,14 @@ void clear_catalogs() noexcept {
     items::details::clear();
     details::clear();
     items::socket_plugs::clear();
+    items::catalysts::clear();
     inventory::buckets::clear();
     socket_entry_lists::clear();
     rollback_ability_publication();
     progressions::clear();
+    records::clear();
+    nodes::clear();
+    sobjects::clear();
     scenarios::clear();
     rollback_spawn_catalog_publication();
     rollback_name_catalog_publication();

@@ -1,26 +1,17 @@
-﻿/**
- * Profile-inventory helpers: the account-wide stacks, their checks, and the material
- * costs an action charges against them.
- */
-
-#include <Windows.h>
+/** Profile inventory validation and material charges. */
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <limits>
+#include <span>
 #include <string_view>
 #include <utility>
 
-#include "../../core/logging/log.h"
-#include "../../middleware/datagen/family4/loadout/loadout_resolver.h"
 #include "../build_data/runtime.h"
 #include "runtime.h"
-#include "state.h"
 #include "state_account_transaction_helpers.h"
-#include "storage/internal.h"
 
 namespace sunrise::state {
 namespace runtime::detail {
@@ -28,54 +19,10 @@ namespace runtime::detail {
 namespace authored_inventory = account::inventory;
 namespace item_details = build_data::items::details;
 namespace inventory_buckets = build_data::inventory::buckets;
-namespace family4_loadout = middleware::datagen::family4::loadout;
-
-/** Writes one bounded profile-stack acquisition checkpoint. */
-void report_profile_acquisition(std::string_view stage,
-                                std::string_view result,
-                                std::string_view reason,
-                                std::uint32_t definitionHash,
-                                std::uint64_t accountSoid,
-                                std::uint64_t instanceSoid,
-                                std::uint8_t bucketId,
-                                std::size_t profileIndex,
-                                std::size_t itemCount,
-                                std::int32_t previousQuantity,
-                                std::int32_t acquiredQuantity,
-                                bool appended) noexcept {
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=profile_acquire stage=%.*s result=%.*s reason=%.*s definition_hash=0x%08X "
-        "account=0x%llX instance=0x%llX bucket=%u profile_index=%zu item_count=%zu "
-        "quantity_before=%d "
-        "quantity_after=%d appended=%u",
-        static_cast<int>(stage.size()),
-        stage.data(),
-        static_cast<int>(result.size()),
-        result.data(),
-        static_cast<int>(reason.size()),
-        reason.data(),
-        definitionHash,
-        static_cast<unsigned long long>(accountSoid),
-        static_cast<unsigned long long>(instanceSoid),
-        static_cast<unsigned>(bucketId),
-        profileIndex,
-        itemCount,
-        previousQuantity,
-        acquiredQuantity,
-        static_cast<unsigned>(appended));
-    if (count > 0) {
-        core::log::write(core::log::Channel::state,
-                         result == "ok" ? core::log::Level::debug : core::log::Level::warn,
-                         {line.data(), static_cast<std::size_t>(count)});
-    }
-}
 
 /** @return True when two profile stack rows carry identical authored values. */
-[[nodiscard]] bool same_profile_item(const authored_inventory::ProfileItem& left,
-                                     const authored_inventory::ProfileItem& right) noexcept {
+[[nodiscard]] static bool same_profile_item(const authored_inventory::ProfileItem& left,
+                                            const authored_inventory::ProfileItem& right) noexcept {
     return left.instanceSoid == right.instanceSoid && left.definitionHash == right.definitionHash
            && left.quantity == right.quantity && left.mutationSerial == right.mutationSerial;
 }
@@ -116,10 +63,7 @@ same_profile_inventory(const AccountState& account,
     return true;
 }
 
-/**
- * Checks every dense profile stack and mirrors the account encoder's bucket-row placement.
- * This keeps State rejection independent of whether a later push happens to have scratch space.
- */
+/** Validates dense profile stacks and their encoded bucket rows. */
 [[nodiscard]] bool valid_profile_inventory(const AccountState& account) noexcept {
     if (account.profileItemCount > account.profileItems.size()) {
         return false;
@@ -129,15 +73,8 @@ same_profile_inventory(const AccountState& account,
     std::array<std::uint16_t, kBucketIdentityCapacity> taken{};
     std::array<bool, inventory_buckets::kProfileSlotCapacity> occupied{};
     std::size_t actionSourceCount = 0;
-    for (std::size_t index = 0; index < account.profileItems.size(); ++index) {
+    for (std::size_t index = 0; index < account.profileItemCount; ++index) {
         const authored_inventory::ProfileItem& item = account.profileItems[index];
-        if (index >= account.profileItemCount) {
-            if (item.instanceSoid != 0 || item.definitionHash != 0 || item.quantity != 0
-                || item.mutationSerial != 0) {
-                return false;
-            }
-            continue;
-        }
         build_data::items::Definition definition{};
         item_details::Definition detail{};
         inventory_buckets::Descriptor bucket{};
@@ -171,33 +108,31 @@ same_profile_inventory(const AccountState& account,
         occupied[row] = true;
         taken[definition.bucketId] = static_cast<std::uint16_t>(used + 1U);
     }
-    return true;
+    const auto tail =
+        account.profileItems.cbegin() + static_cast<std::ptrdiff_t>(account.profileItemCount);
+    return std::all_of(tail, account.profileItems.cend(), [](const auto& item) noexcept {
+        return item.instanceSoid == 0 && item.definitionHash == 0 && item.quantity == 0
+               && item.mutationSerial == 0;
+    });
 }
 
-/** Resolved, aggregated material charge for one installed native requirement set. */
-struct MaterialCharge {
-    std::uint32_t definitionHash{};
-    std::uint64_t quantity{};
-    bool deleteOnAction{};
-};
-
-/**
- * Validates one native material requirement set and applies its deletions to a copied account.
- * Requirements which are not deleted still gate the action by balance. Material rows must be
- * ordinary non-resident profile stacks; removing an instance-backed action source would also owe
- * a resident release and is deliberately rejected here.
- */
+/** Validates a material set and applies deletions to a copied account. */
 template <typename Requirement>
-[[nodiscard]] bool apply_material_requirements(const AccountState& before,
-                                               std::span<const Requirement> requirements,
-                                               AccountState& after,
-                                               bool& changed) noexcept {
+[[nodiscard]] static bool apply_material_requirements(const AccountState& before,
+                                                      std::span<const Requirement> requirements,
+                                                      AccountState& after,
+                                                      bool& changed) noexcept {
     after = before;
     changed = false;
     if (requirements.size() > build_data::material_requirements::kRequirementCapacity) {
         return false;
     }
 
+    struct MaterialCharge {
+        std::uint32_t definitionHash{};
+        std::uint64_t quantity{};
+        bool deleteOnAction{};
+    };
     std::array<MaterialCharge, build_data::material_requirements::kRequirementCapacity> charges{};
     std::size_t chargeCount = 0;
     for (const Requirement& requirement : requirements) {
@@ -358,12 +293,7 @@ apply_collection_materials(const AccountState& before,
         changed);
 }
 
-/**
- * Answers whether the account holds one applicable stack of a socket action source.
- * @param account Account whose profile stacks are searched.
- * @param definitionHash Plug definition the Client asked to apply.
- * @return True when a profile stack of that definition holds at least one unit.
- */
+/** @return True when the account holds the requested socket-action source. */
 [[nodiscard]] bool holds_plug_source(const AccountState& account,
                                      std::uint32_t definitionHash) noexcept {
     for (std::size_t index = 0; index < account.profileItemCount; ++index) {
@@ -375,18 +305,7 @@ apply_collection_materials(const AccountState& before,
     return false;
 }
 
-/**
- * Takes one unit of an owned socket action source, releasing the row when its last unit goes.
- *
- * An action source is an instanced profile row, so the authored-cost path cannot spend it. The
- * row keeps its identity and position while units remain, because the Client addresses it by that
- * identity. An emptied row is removed and the rows after it move up, which is the same shape the
- * authored-cost path leaves behind when a stack empties.
- *
- * @param account Account whose profile stacks are spent in place.
- * @param definitionHash Plug definition being applied.
- * @return True when one unit was taken.
- */
+/** Spends one socket-action source unit and removes an emptied row. */
 [[nodiscard]] bool spend_plug_source(AccountState& account, std::uint32_t definitionHash) noexcept {
     std::size_t row = account.profileItemCount;
     for (std::size_t index = 0; index < account.profileItemCount; ++index) {
@@ -442,6 +361,64 @@ apply_action_materials(const AccountState& before,
 /** @return True when a pending profile acquisition carries canonical dense before/after images. */
 [[nodiscard]] bool
 valid_profile_mutation_shape(const PendingProfileItemAcquisition& mutation) noexcept {
+    // An exchange is the other shape this mutation carries. Its quantities move by more than one
+    // and it changes more than one row, so the single-increment rules below cannot describe it -
+    // they exist to pin the Collections pull, which is the only thing that should reach them.
+    if (mutation.changeCount != 0) {
+        if (!mutation.prepared || mutation.accountSoid == 0 || mutation.actionSource
+            || mutation.appended || mutation.acquiredInstanceSoid != 0
+            || mutation.acquiredDefinitionHash == authored_inventory::kNoDefinitionHash
+            || mutation.changeCount > mutation.changes.size()
+            || mutation.expectedItemCount > authored_inventory::kProfileItemCapacity
+            || mutation.afterItemCount > authored_inventory::kProfileItemCapacity
+            || mutation.afterItemCount == 0) {
+            return false;
+        }
+        for (std::size_t index = 0; index < mutation.beforeItems.size(); ++index) {
+            const authored_inventory::ProfileItem& before = mutation.beforeItems[index];
+            const authored_inventory::ProfileItem& after = mutation.afterItems[index];
+            if (index >= mutation.expectedItemCount
+                && (before.instanceSoid != 0 || before.definitionHash != 0 || before.quantity != 0
+                    || before.mutationSerial != 0)) {
+                return false;
+            }
+            if (index >= mutation.afterItemCount
+                && (after.instanceSoid != 0 || after.definitionHash != 0 || after.quantity != 0
+                    || after.mutationSerial != 0)) {
+                return false;
+            }
+        }
+        // Every announced row has to exist exactly once in the after-image, carrying the serial and
+        // quantity the change names. The account's change ring points at rows by serial, so a
+        // serial naming no row or two rows would announce a gain the Client cannot resolve.
+        for (std::size_t change = 0; change < mutation.changeCount; ++change) {
+            const ProfileStackChange& announced = mutation.changes[change];
+            if (announced.mutationSerial <= 0 || announced.afterQuantity <= 0) {
+                return false;
+            }
+            // Two changes naming one row would announce the same gain twice, and the ring has no
+            // way to say they meant different things.
+            for (std::size_t earlier = 0; earlier < change; ++earlier) {
+                if (mutation.changes[earlier].mutationSerial == announced.mutationSerial) {
+                    return false;
+                }
+            }
+            std::size_t matches = 0;
+            for (std::size_t index = 0; index < mutation.afterItemCount; ++index) {
+                if (mutation.afterItems[index].mutationSerial != announced.mutationSerial) {
+                    continue;
+                }
+                if (mutation.afterItems[index].quantity != announced.afterQuantity) {
+                    return false;
+                }
+                ++matches;
+            }
+            if (matches != 1) {
+                return false;
+            }
+        }
+        return true;
+    }
     if (!mutation.prepared || mutation.accountSoid == 0
         || mutation.actionSource != (mutation.acquiredInstanceSoid != 0)
         || mutation.acquiredDefinitionHash == authored_inventory::kNoDefinitionHash
@@ -449,16 +426,20 @@ valid_profile_mutation_shape(const PendingProfileItemAcquisition& mutation) noex
         || mutation.afterItemCount > authored_inventory::kProfileItemCapacity
         || mutation.profileIndex >= mutation.afterItemCount || mutation.previousQuantity < 0
         || mutation.acquiredQuantity <= mutation.previousQuantity
-        || mutation.acquiredQuantity - mutation.previousQuantity != 1
+        || (!mutation.directGrant && mutation.acquiredQuantity - mutation.previousQuantity != 1)
         || mutation.previousMutationSerial < 0
         || mutation.acquiredMutationSerial <= mutation.previousMutationSerial) {
         return false;
     }
     if (mutation.appended) {
-        if (mutation.afterItemCount == 0 || mutation.previousQuantity != 0) {
+        if (mutation.afterItemCount == 0 || mutation.previousQuantity != 0
+            || (mutation.directGrant
+                && (mutation.afterItemCount != mutation.expectedItemCount + 1U
+                    || mutation.profileIndex != mutation.expectedItemCount))) {
             return false;
         }
-    } else if (mutation.previousQuantity == 0) {
+    } else if (mutation.previousQuantity == 0
+               || (mutation.directGrant && mutation.afterItemCount != mutation.expectedItemCount)) {
         return false;
     }
 
@@ -466,6 +447,10 @@ valid_profile_mutation_shape(const PendingProfileItemAcquisition& mutation) noex
     for (std::size_t index = 0; index < mutation.beforeItems.size(); ++index) {
         const authored_inventory::ProfileItem& before = mutation.beforeItems[index];
         const authored_inventory::ProfileItem& after = mutation.afterItems[index];
+        if (mutation.directGrant && index != mutation.profileIndex
+            && !same_profile_item(before, after)) {
+            return false;
+        }
         if (index < mutation.expectedItemCount
             && before.mutationSerial >= mutation.acquiredMutationSerial) {
             return false;
@@ -506,18 +491,45 @@ valid_profile_mutation_shape(const PendingProfileItemAcquisition& mutation) noex
         || !same_profile_inventory(current, mutation.beforeItems, mutation.expectedItemCount)) {
         return false;
     }
+    // An exchange names no collectible, no bucket and no single acquired row, so none of the
+    // acquisition's definition checks apply to it. Its after-image was already checked whole when
+    // it was prepared, and the shape check above proved every announced row is in it.
+    if (mutation.changeCount != 0) {
+        after = current;
+        after.profileItems = mutation.afterItems;
+        after.profileItemCount = mutation.afterItemCount;
+        return account::valid(after) && valid_profile_inventory(after);
+    }
     item_details::Definition detail{};
     inventory_buckets::Descriptor bucket{};
     build_data::items::Definition item{};
-    build_data::collectibles::Definition collectible{};
-    if (!build_data::find_collectible_definition(mutation.collectibleIndex, collectible)
-        || collectible.itemDefinitionIndex
-               == build_data::collectibles::kUnavailableItemDefinitionIndex
-        || collectible.materialRequirementSetHash != mutation.materialRequirementSetHash
-        || collectible.materialRequirementCount != mutation.materialRequirementCount
-        || !build_data::find_item_definition_hash(mutation.acquiredDefinitionHash, item)
-        || collectible.itemDefinitionIndex != item.definitionIndex
-        || !build_data::find_configured_item_detail(item.definitionIndex, detail)
+    if (!build_data::find_item_definition_hash(mutation.acquiredDefinitionHash, item)) {
+        return false;
+    }
+    if (mutation.directGrant) {
+        // Direct rewards have no collectible or material source.
+        if (mutation.collectibleIndex != 0 || mutation.materialRequirementSetHash != 0
+            || mutation.materialRequirementCount != 0) {
+            return false;
+        }
+    } else if (mutation.collectibleIndex == build_data::collectibles::kNoCollectibleIndex) {
+        // A vendor purchase names an item, never a collectible, and arrives with the sentinel.
+        // With no collectible to hold them, both cost fields must still be clear.
+        if (mutation.materialRequirementSetHash != 0 || mutation.materialRequirementCount != 0) {
+            return false;
+        }
+    } else {
+        build_data::collectibles::Definition collectible{};
+        if (!build_data::find_collectible_definition(mutation.collectibleIndex, collectible)
+            || collectible.itemDefinitionIndex
+                   == build_data::collectibles::kUnavailableItemDefinitionIndex
+            || collectible.materialRequirementSetHash != mutation.materialRequirementSetHash
+            || collectible.materialRequirementCount != mutation.materialRequirementCount
+            || collectible.itemDefinitionIndex != item.definitionIndex) {
+            return false;
+        }
+    }
+    if (!build_data::find_configured_item_detail(item.definitionIndex, detail)
         || detail.definitionHash != mutation.acquiredDefinitionHash
         || detail.definitionIndex != item.definitionIndex || detail.bucketId != item.bucketId
         || detail.bucketId != mutation.bucketId
@@ -536,4 +548,116 @@ valid_profile_mutation_shape(const PendingProfileItemAcquisition& mutation) noex
 }
 
 } // namespace runtime::detail
+
+/** Prepares one vendor recycle row: charges the stack it names and credits what it pays out. */
+bool prepare_vendor_exchange(std::uint32_t costDefinitionHash,
+                             std::int32_t costQuantity,
+                             std::span<const ProfileExchangePayout> payouts,
+                             PendingProfileItemAcquisition& mutation) noexcept {
+    namespace authored_inventory = account::inventory;
+    namespace item_details = build_data::items::details;
+    mutation = {};
+    if (costDefinitionHash == authored_inventory::kNoDefinitionHash || costDefinitionHash == 0
+        || costQuantity <= 0 || payouts.empty() || payouts.size() > kProfileStackChangeCapacity) {
+        return false;
+    }
+    const AccountState account = account_snapshot();
+    if (!account::valid(account) || account.primarySoid == 0) {
+        return false;
+    }
+    const auto stack_limit = [](std::uint32_t definitionHash, std::int32_t& limit) noexcept {
+        build_data::items::Definition definition{};
+        item_details::Definition detail{};
+        if (!build_data::find_item_definition_hash(definitionHash, definition)
+            || !build_data::find_configured_item_detail(definition.definitionIndex, detail)
+            || detail.maxStackSize <= 0) {
+            return false;
+        }
+        limit = detail.maxStackSize;
+        return true;
+    };
+    const auto find_stack = [](const AccountState& state, std::uint32_t definitionHash) noexcept {
+        std::size_t at = state.profileItemCount;
+        for (std::size_t index = 0; index < state.profileItemCount; ++index) {
+            if (state.profileItems[index].definitionHash == definitionHash) {
+                at = index;
+                break;
+            }
+        }
+        return at;
+    };
+
+    AccountState after = account;
+    const std::size_t costIndex = find_stack(after, costDefinitionHash);
+    if (costIndex >= after.profileItemCount
+        || after.profileItems[costIndex].quantity < costQuantity) {
+        return false;
+    }
+    // The charged row keeps its ordering token. Only a gain is announced, and the decrement is
+    // read straight off the republished account object, so bumping it would buy nothing and would
+    // move the charged stack to the front of its bucket for no reason the player asked for.
+    after.profileItems[costIndex].quantity -= costQuantity;
+
+    // Serials rise from the greatest already in the profile, so every announced row is unique and
+    // no existing row is displaced in the Client's ordering.
+    std::int32_t serial = 0;
+    for (std::size_t index = 0; index < after.profileItemCount; ++index) {
+        serial = (std::max)(serial, after.profileItems[index].mutationSerial);
+    }
+    if (serial > (std::numeric_limits<std::int32_t>::max)()
+                     - static_cast<std::int32_t>(payouts.size())) {
+        return false;
+    }
+    std::size_t changeCount = 0;
+    for (const ProfileExchangePayout& payout : payouts) {
+        std::int32_t limit = 0;
+        const std::size_t at = find_stack(after, payout.definitionHash);
+        // Paying back into the stack being charged is refused rather than netted out. It says
+        // nothing a recycle could mean, and it would leave the charged row's emptiness decided by
+        // payout order - the row is removed when the charge empties it, and a credit arriving
+        // afterwards would be crediting a row that is about to leave the array.
+        if (payout.quantity <= 0 || payout.definitionHash == costDefinitionHash
+            || !stack_limit(payout.definitionHash, limit) || at >= after.profileItemCount) {
+            return false;
+        }
+        // A currency already at its native cap takes nothing, which is the same outcome the Client
+        // reports as "your Glimmer is full" rather than a failed exchange.
+        const std::int32_t room = (std::max)(limit - after.profileItems[at].quantity, 0);
+        const std::int32_t credited = (std::min)(payout.quantity, room);
+        if (credited == 0) {
+            continue;
+        }
+        after.profileItems[at].quantity += credited;
+        after.profileItems[at].mutationSerial = ++serial;
+        mutation.changes[changeCount++] = {after.profileItems[at].mutationSerial,
+                                           after.profileItems[at].quantity};
+    }
+    // Nothing to announce means nothing was credited, and charging for that would be theft.
+    if (changeCount == 0) {
+        return false;
+    }
+    // A stack the charge emptied has to leave the array, because a zero-quantity row is not a valid
+    // profile row. It is removed last so the credited rows above were found at their real indices.
+    if (after.profileItems[costIndex].quantity == 0) {
+        for (std::size_t index = costIndex; index + 1U < after.profileItemCount; ++index) {
+            after.profileItems[index] = after.profileItems[index + 1U];
+        }
+        --after.profileItemCount;
+        after.profileItems[after.profileItemCount] = {};
+    }
+    if (!account::valid(after) || !runtime::detail::valid_profile_inventory(after)) {
+        return false;
+    }
+
+    mutation.beforeItems = account.profileItems;
+    mutation.afterItems = after.profileItems;
+    mutation.accountSoid = account.primarySoid;
+    mutation.acquiredDefinitionHash = costDefinitionHash;
+    mutation.expectedItemCount = account.profileItemCount;
+    mutation.afterItemCount = after.profileItemCount;
+    mutation.changeCount = changeCount;
+    mutation.prepared = true;
+    return true;
+}
+
 } // namespace sunrise::state

@@ -1,5 +1,8 @@
 #include <algorithm>
+#include <array>
+#include <cstdio>
 
+#include "../../../../core/logging/log.h"
 #include "codec.h"
 
 namespace sunrise::state::build_data::cache::records {
@@ -36,12 +39,59 @@ bool decode(const SpawnStemRecord& record, spawn_sets::Stem& value) noexcept {
     return true;
 }
 
+/**
+ * Names the map-global bubbles one spawn set is offered by.
+ *
+ * `bubble` in an `arrival_overrides` row is read against this mask through
+ * `bubbleMapIndices[bubble]`, so the row that works names a bubble whose map index has a bit here
+ * -- which is not the bubble the player lands in, and is the part that reads as a bad mapping when
+ * an override has to be found by trial. Printing the bits turns that from trial into a lookup.
+ * @param value Finished spawn-set row.
+ */
+void report_offered_bubbles(const spawn_sets::NameHash& value) noexcept {
+    if (!core::log::accepts(core::log::Channel::state, core::log::Level::debug)) {
+        return;
+    }
+    std::array<char, core::log::kLineCapacity> line{};
+    int written = std::snprintf(line.data(),
+                                line.size(),
+                                "ev=build_data stage=spawn_set hash=0x%08X stem=%u points=%u "
+                                "unbound=%u offered_map_bubbles=",
+                                value.value,
+                                static_cast<unsigned>(value.stemIndex),
+                                static_cast<unsigned>(value.pointCount),
+                                static_cast<unsigned>(value.unbound));
+    bool first = true;
+    for (std::size_t bit = 0; bit < value.bubbleMask.size() * 8 && written > 0
+                              && static_cast<std::size_t>(written) + 6 < line.size();
+         ++bit) {
+        if ((value.bubbleMask[bit / 8] >> (bit % 8) & 1U) == 0) {
+            continue;
+        }
+        const int more = std::snprintf(line.data() + written,
+                                       line.size() - static_cast<std::size_t>(written),
+                                       first ? "%zu" : ",%zu",
+                                       bit);
+        if (more <= 0) {
+            break;
+        }
+        written += more;
+        first = false;
+    }
+    if (written > 0) {
+        core::log::write(core::log::Channel::state,
+                         core::log::Level::debug,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
 /** Encodes one distinct spawn-name hash and its point count. */
 bool encode(const spawn_sets::NameHash& value, SpawnNameHashRecord& record) noexcept {
     record = {};
     if (value.pointCount == 0) {
         return false;
     }
+    report_offered_bubbles(value);
     record.value = value.value;
     record.pointCount = value.pointCount;
     record.stemIndex = value.stemIndex;

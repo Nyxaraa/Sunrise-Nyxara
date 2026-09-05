@@ -8,12 +8,16 @@
 #include "../../collectibles/collectible_catalog.h"
 #include "../../hash_names/definition.h"
 #include "../../inventory/buckets/definition.h"
+#include "../../items/catalysts/definition.h"
 #include "../../items/details/definition.h"
 #include "../../items/item_catalog.h"
 #include "../../items/socket_plugs/definition.h"
 #include "../../material_requirements/material_requirement_catalog.h"
+#include "../../nodes/definition.h"
 #include "../../progressions/definition.h"
+#include "../../records/definition.h"
 #include "../../scenarios/definition.h"
+#include "../../sobjects/sobject_catalog.h"
 #include "../../socket_entry_lists/definition.h"
 #include "../../spawn_sets/definition.h"
 #include "../../vendors/definition.h"
@@ -31,11 +35,15 @@ struct DomainCounts {
     std::size_t socketPlugRules{};
     std::size_t socketPlugPools{};
     std::size_t socketPlugMembers{};
+    std::size_t exoticCatalysts{};
     std::size_t inventoryBuckets{};
     std::size_t socketEntryLists{};
     std::size_t socketEntryTables{};
     std::size_t abilityBuckets{};
     std::size_t progressions{};
+    std::size_t records{};
+    std::size_t nodes{};
+    std::size_t sobjects{};
     std::size_t scenarios{};
     std::size_t rosterGroups{};
     std::size_t spawnStems{};
@@ -60,11 +68,15 @@ struct MutableDomains {
     std::span<items::socket_plugs::Rule> socketPlugRules;
     std::span<items::socket_plugs::Pool> socketPlugPools;
     std::span<items::socket_plugs::Member> socketPlugMembers;
+    std::span<items::catalysts::Definition> exoticCatalysts;
     std::span<inventory::buckets::Descriptor> inventoryBuckets;
     std::span<socket_entry_lists::Definition> socketEntryLists;
     std::span<socket_entry_lists::EntryTable> socketEntryTables;
     std::span<abilities::Definition> abilityBuckets;
     std::span<progressions::Definition> progressions;
+    std::span<build_data::records::Definition> records;
+    std::span<nodes::Definition> nodes;
+    std::span<sobjects::Definition> sobjects;
     std::span<scenarios::Definition> scenarios;
     std::span<scenarios::RosterGroup> rosterGroups;
     std::span<spawn_sets::Stem> spawnStems;
@@ -88,11 +100,15 @@ struct Domains {
     std::span<const items::socket_plugs::Rule> socketPlugRules;
     std::span<const items::socket_plugs::Pool> socketPlugPools;
     std::span<const items::socket_plugs::Member> socketPlugMembers;
+    std::span<const items::catalysts::Definition> exoticCatalysts;
     std::span<const inventory::buckets::Descriptor> inventoryBuckets;
     std::span<const socket_entry_lists::Definition> socketEntryLists;
     std::span<const socket_entry_lists::EntryTable> socketEntryTables;
     std::span<const abilities::Definition> abilityBuckets;
     std::span<const progressions::Definition> progressions;
+    std::span<const build_data::records::Definition> records;
+    std::span<const nodes::Definition> nodes;
+    std::span<const sobjects::Definition> sobjects;
     std::span<const scenarios::Definition> scenarios;
     std::span<const scenarios::RosterGroup> rosterGroups;
     std::span<const spawn_sets::Stem> spawnStems;

@@ -50,7 +50,8 @@ bool prepare_seed_identity(std::uint64_t sessionId,
 }
 
 /** Builds the membership snapshot a first join commits, without reading State. */
-bool prepare_join_seed_snapshot(std::uint64_t memberKey,
+bool prepare_join_seed_snapshot(std::uint64_t createdRevision,
+                                std::uint64_t memberKey,
                                 std::uint64_t characterSoid,
                                 state::activity::membership::PendingMutation& mutation) noexcept {
     mutation = {};
@@ -61,6 +62,7 @@ bool prepare_join_seed_snapshot(std::uint64_t memberKey,
     // the seed identity over cleared state at the initial revision, epoch, and token.
     mutation.snapshot.identity = seed_identity(memberKey, characterSoid);
     mutation.snapshot.revision = state::activity::membership::kInitialRevision;
+    mutation.snapshot.epoch = state::activity::membership::session_epoch(createdRevision);
     mutation.snapshot.transitionToken = state::activity::membership::kInitialTransitionToken;
     mutation.hasSnapshot = true;
     return true;

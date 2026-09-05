@@ -65,32 +65,38 @@ __declspec(noinline) void __fastcall enter_handler(std::byte* step) noexcept {
 } // namespace
 
 /**
- * Attaches the character-select hold.
- * @return True when the target is found and the detour attaches.
+ * Stages the character-select hold.
+ * @param spec Receives the target and replacement.
+ * @return True when the target is found and the fix wants attaching.
  */
-bool install_character_select_hold() noexcept {
+StageResult stage_character_select_hold(hooking::detour::Spec& spec) noexcept {
     if (g_handle.attached) {
-        return true;
+        return StageResult::attached;
     }
     std::byte* const target = scan_main_image_unique(kEnterSignature, "character_signin_enter");
     if (target == nullptr) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=character_select result=fail reason=target");
-        return false;
+        return StageResult::unavailable;
     }
-    const hooking::detour::Spec spec{target, reinterpret_cast<void*>(&enter_handler)};
-    if (!hooking::detour::install(spec, g_handle)) {
+    spec = hooking::detour::Spec{target, reinterpret_cast<void*>(&enter_handler)};
+    return StageResult::staged;
+}
+
+/** Takes the character-select hold's attached handle, or a detached one. */
+void publish_character_select_hold(const hooking::detour::Handle& handle) noexcept {
+    if (!handle.attached) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=character_select result=fail reason=attach");
-        return false;
+        return;
     }
+    g_handle = handle;
     g_original.store(reinterpret_cast<EnterHandler>(g_handle.original), std::memory_order_release);
     core::log::write(core::log::Channel::client,
                      core::log::Level::info,
                      "ev=bootflow stage=character_select result=ok");
-    return true;
 }
 
 /** Detaches the character-select hold. */

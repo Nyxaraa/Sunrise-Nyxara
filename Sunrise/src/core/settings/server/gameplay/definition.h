@@ -42,6 +42,19 @@ inline constexpr std::uint16_t kClientLeaseMinimum = 4096;
 inline constexpr std::uint16_t kDefaultClientJoinGrant = 8'192;
 /** Below this a join cannot cover the client's own low water mark of 400. */
 inline constexpr std::uint16_t kMinimumClientJoinGrant = 400;
+/**
+ * Lease the client is topped up to whenever it asks for more slots. Zero disables the top-up.
+ * Disabled by default because a run on 2026-08-25 measured it as useless: the top-up landed
+ * (`held=2048`) and the client returned the surplus 32 ms later (`kind=release picked=1840`,
+ * back to `held=208`), then failed to create the same three `sobject` entities it always fails
+ * on. The client manages its own lease tightly and will not hold slots it has not asked for.
+ * Capacity was never the constraint either — it failed with 208 slots held while needing 3
+ * entities, and the bubble-14 switch succeeded holding only 151. Kept as a knob because it is
+ * the cheapest way to re-run that experiment, not because a value above zero is expected to help.
+ */
+inline constexpr std::uint16_t kDefaultClientLeaseHighWater = 0;
+/** Below the client's own 400 low water mark a top-up would not change what it can create. */
+inline constexpr std::uint16_t kMinimumClientLeaseHighWater = 400;
 
 /**
  * Gameplay endpoint topology and the entity-slot split it implies.
@@ -69,6 +82,19 @@ struct Settings {
      * refuses; a family-4 completion at arrival frees it. Off by default.
      */
     bool holdLaunchCinematic{false};
+    /** Lease one grant tops the client up to, so the next slice set is covered before it asks. */
+    std::uint16_t clientLeaseHighWater{kDefaultClientLeaseHighWater};
+    /**
+     * Ignore the slot mask the client sends on message 21 instead of shrinking its lease by it.
+     * Measured 2026-08-25: the client "releases" 7785 of the 7936 slots its join was granted, and
+     * 1840 of every later top-up, always within 32 ms and always leaving exactly what it had asked
+     * for. A client handing back 98% of a lease it never used is not plausible; a mask that names
+     * the slots it is KEEPING, read as the ones it is giving up, produces precisely this. The
+     * consequence is real: the client reconciles its own entity bitmap to the host's mask, so the
+     * shrunken lease starves entity creation and an encounter bubble kicks to orbit.
+     * On, the release is still framed and reported, only the lease is left alone.
+     */
+    bool ignoreClientSlotRelease{false};
 };
 
 /**
@@ -94,5 +120,13 @@ struct Settings {
  * @return Configured grant, capped at what the reserve leaves free.
  */
 [[nodiscard]] std::size_t join_grant(const Settings& settings) noexcept;
+
+/**
+ * Reports the lease one grant tops the client up to.
+ * A disabled channel reserves nothing, so the high water is bounded by the whole slot space.
+ * @param settings Active gameplay settings.
+ * @return Configured high water, capped at what the reserve leaves free.
+ */
+[[nodiscard]] std::size_t lease_high_water(const Settings& settings) noexcept;
 
 } // namespace sunrise::core::settings::server::gameplay

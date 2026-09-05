@@ -68,29 +68,34 @@ std::uint32_t* __fastcall pick_target(LoaderContext* context, std::uint32_t* sel
 
 } // namespace
 
-/** Attaches the picker so the orbit target is found. */
-bool install_orbit_slice_set() noexcept {
+/** Stages the picker so the orbit target is found. */
+StageResult stage_orbit_slice_set(hooking::detour::Spec& spec) noexcept {
     if (g_handle.attached) {
-        return true;
+        return StageResult::attached;
     }
     std::byte* const picker = scan_main_image_unique(kPickerSignature, "slice_set_target_picker");
     if (picker == nullptr) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=slice_set result=fail reason=target");
-        return false;
+        return StageResult::unavailable;
     }
-    const hooking::detour::Spec spec{picker, reinterpret_cast<void*>(&pick_target)};
-    if (!hooking::detour::install(spec, g_handle)) {
+    spec = hooking::detour::Spec{picker, reinterpret_cast<void*>(&pick_target)};
+    return StageResult::staged;
+}
+
+/** Takes the picker's attached handle, or a detached one. */
+void publish_orbit_slice_set(const hooking::detour::Handle& handle) noexcept {
+    if (!handle.attached) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=slice_set result=fail reason=attach");
-        return false;
+        return;
     }
+    g_handle = handle;
     core::log::write(core::log::Channel::client,
                      core::log::Level::info,
                      "ev=bootflow stage=slice_set result=ok");
-    return true;
 }
 
 /** Detaches the picker. */

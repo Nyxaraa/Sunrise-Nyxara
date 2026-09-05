@@ -1,26 +1,16 @@
-﻿/**
- * Equipment placement helpers: native and semantic slots, resolved positions, and the
- * comparisons one equipment transition is checked against.
- */
+﻿/** Equipment placement and transition-validation helpers. */
 
-#include <Windows.h>
-
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
 #include <string_view>
-#include <utility>
 
 #include "../../core/logging/log.h"
 #include "../../middleware/datagen/family4/loadout/loadout_resolver.h"
 #include "../build_data/runtime.h"
-#include "runtime.h"
-#include "state.h"
 #include "state_account_transaction_helpers.h"
-#include "storage/internal.h"
 
 namespace sunrise::state {
 namespace runtime::detail {
@@ -66,7 +56,7 @@ namespace family4_loadout = middleware::datagen::family4::loadout;
     return true;
 }
 
-/** Maps the 16 proven native equipment positions onto their stable authored State slots. */
+/** Maps supported native equipment positions onto stable authored State slots. */
 [[nodiscard]] bool semantic_equipment_slot(std::uint8_t nativeSlot,
                                            std::size_t& semanticIndex) noexcept {
     using EquipmentSlot = authored_inventory::EquipmentSlot;
@@ -120,6 +110,9 @@ namespace family4_loadout = middleware::datagen::family4::loadout;
     case 17:
         semanticSlot = EquipmentSlot::finisher;
         break;
+    case 18:
+        semanticSlot = EquipmentSlot::artifact;
+        break;
     default:
         return false;
     }
@@ -156,11 +149,7 @@ namespace family4_loadout = middleware::datagen::family4::loadout;
            && left.equipped == right.equipped;
 }
 
-/**
- * Applies canonical mutation generations after one shape-only equipment transition.
- * Every surviving instance keeps its native bucket, and a generation advances exactly when its
- * published row or equipped marker changes. An equip swap rewrites the moved serial afterwards.
- */
+/** Applies mutation serials only to items whose native placement changed. */
 [[nodiscard]] bool
 finalize_equipment_transition(const AccountState& account,
                               std::size_t characterIndex,
@@ -284,8 +273,8 @@ finalize_equipment_transition(const AccountState& account,
 }
 
 /** @return True when two authored item values are identical, including socket policy and tail. */
-[[nodiscard]] bool same_item(const authored_inventory::Item& left,
-                             const authored_inventory::Item& right) noexcept {
+[[nodiscard]] static bool same_item(const authored_inventory::Item& left,
+                                    const authored_inventory::Item& right) noexcept {
     return left.instanceSoid == right.instanceSoid && left.definitionHash == right.definitionHash
            && left.level == right.level && left.quantity == right.quantity
            && left.flags == right.flags && left.sockets.policy == right.sockets.policy
@@ -342,7 +331,8 @@ void report_item_state(std::string_view stage,
 }
 
 /** @return True when every item-bearing field of two character views is identical. */
-[[nodiscard]] bool same_loadout(const CharacterState& left, const CharacterState& right) noexcept {
+[[nodiscard]] static bool same_loadout(const CharacterState& left,
+                                       const CharacterState& right) noexcept {
     if (left.soid != right.soid || left.selected != right.selected || left.race != right.race
         || left.gender != right.gender || left.characterClass != right.characterClass
         || left.level != right.level || left.accepted != right.accepted
@@ -351,8 +341,10 @@ void report_item_state(std::string_view stage,
         || left.lastOrbitedDestination != right.lastOrbitedDestination
         || left.currentActivityIndex != right.currentActivityIndex
         || left.contentBypass != right.contentBypass
+        || left.equippedTitleRecordIndex != right.equippedTitleRecordIndex
         || left.nextInventorySerial != right.nextInventorySerial
-        || left.inventory.count != right.inventory.count) {
+        || left.inventory.count != right.inventory.count
+        || left.stacks.count != right.stacks.count) {
         return false;
     }
     for (std::size_t index = 0; index < left.equipment.slots.size(); ++index) {
@@ -365,6 +357,15 @@ void report_item_state(std::string_view stage,
     }
     for (std::size_t index = 0; index < left.inventory.count; ++index) {
         if (!same_stationary_item(left.inventory.values[index], right.inventory.values[index])) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < left.stacks.values.size(); ++index) {
+        const auto& leftStack = left.stacks.values[index];
+        const auto& rightStack = right.stacks.values[index];
+        if (leftStack.definitionHash != rightStack.definitionHash
+            || leftStack.quantity != rightStack.quantity
+            || leftStack.mutationSerial != rightStack.mutationSerial) {
             return false;
         }
     }

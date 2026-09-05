@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <mutex>
 #include <string_view>
 
 #include "../../client/runtime/host/game_host_classification.h"
@@ -26,12 +27,13 @@
 #include "../ui/modules/logs/logs.h"
 #include "../ui/modules/registry/ui_module_registry.h"
 #include "../ui/runtime/ui_visibility_runtime.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::core {
 namespace {
 
 std::atomic_bool g_initialized{false};
-SRWLOCK g_runtimeLock{SRWLOCK_INIT};
+threading::SrwLock g_runtimeLock{};
 
 /** The installed public package headers live beside the game executable. */
 constexpr std::wstring_view kInstalledPackagesDirectory = L"packages";
@@ -136,9 +138,8 @@ void report_stage_failure(const char* stage) noexcept {
 
 /** Initializes every runtime layer in dependency order. */
 bool initialize(void* module) noexcept {
-    AcquireSRWLockExclusive(&g_runtimeLock);
+    const std::lock_guard lock(g_runtimeLock);
     if (g_initialized.load(std::memory_order_relaxed)) {
-        ReleaseSRWLockExclusive(&g_runtimeLock);
         return true;
     }
     // Taken before the first stage, so the reported duration covers settings and the sinks too.
@@ -146,7 +147,6 @@ bool initialize(void* module) noexcept {
 
     if (!settings::initialize(module)) {
         // Settings name their own failure; the sinks do not exist yet to carry a second line.
-        ReleaseSRWLockExclusive(&g_runtimeLock);
         return false;
     }
     state::unlocks::publish(settings::get().initialUnlocks);
@@ -200,26 +200,22 @@ bool initialize(void* module) noexcept {
         state::unlocks::clear();
         log::shutdown();
         settings::shutdown();
-        ReleaseSRWLockExclusive(&g_runtimeLock);
         return false;
     }
     g_initialized.store(true, std::memory_order_release);
     log::write(log::Channel::core, log::Level::info, "ev=initialize result=ok");
     log::write_elapsed(log::Channel::core, "ev=initialize phase=complete", startedTick, "ok");
-    ReleaseSRWLockExclusive(&g_runtimeLock);
     return true;
 }
 
 /** Stops every runtime layer in reverse dependency order. */
 bool shutdown() noexcept {
-    AcquireSRWLockExclusive(&g_runtimeLock);
+    const std::lock_guard lock(g_runtimeLock);
     if (!g_initialized.load(std::memory_order_acquire)) {
-        ReleaseSRWLockExclusive(&g_runtimeLock);
         return true;
     }
     if (!client::shutdown()) {
         // Server and State must remain valid while any Client hook is attached.
-        ReleaseSRWLockExclusive(&g_runtimeLock);
         return false;
     }
     g_initialized.store(false, std::memory_order_release);
@@ -237,7 +233,6 @@ bool shutdown() noexcept {
     state::unlocks::clear();
     log::shutdown();
     settings::shutdown();
-    ReleaseSRWLockExclusive(&g_runtimeLock);
     return true;
 }
 

@@ -33,6 +33,15 @@ bool carries_roster_slot(std::span<const std::byte> object) noexcept {
     if (!object_slots(object, slots)) {
         return false;
     }
+    // A named key is admitted on its own account, before the type test it would fail.
+    std::uint32_t key = 0;
+    if (object_key(object, key)) {
+        for (const std::uint32_t forced : kForcedRosterKeys) {
+            if (key == forced) {
+                return true;
+            }
+        }
+    }
     for (std::uint64_t index = 0; index < slots.count; ++index) {
         Slot slot{};
         if (!object_slot_at(object, slots, index, slot)) {

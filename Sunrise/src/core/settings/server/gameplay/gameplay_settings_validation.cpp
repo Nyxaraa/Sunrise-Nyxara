@@ -46,6 +46,12 @@ bool valid(const Settings& settings) noexcept {
     // leaves. Requiring it to fit beside the reserve here would refuse the default, which asks
     // for the whole space on purpose.
     constexpr std::size_t kSlotCount = state::activity::entity_slots::kSlotCount;
+    // Zero disables the top-up. Any other value must still clear the client's own low water.
+    if (settings.clientLeaseHighWater != 0
+        && (settings.clientLeaseHighWater < kMinimumClientLeaseHighWater
+            || static_cast<std::size_t>(settings.clientLeaseHighWater) > kSlotCount)) {
+        return false;
+    }
     return settings.clientJoinGrantCount >= kMinimumClientJoinGrant
            && static_cast<std::size_t>(settings.clientJoinGrantCount) <= kSlotCount;
 }
@@ -61,6 +67,15 @@ std::size_t join_grant(const Settings& settings) noexcept {
     constexpr std::size_t kSlotCount = state::activity::entity_slots::kSlotCount;
     const std::size_t free = kSlotCount - static_cast<std::size_t>(effective_reserve(settings));
     const std::size_t wanted = settings.clientJoinGrantCount;
+    return wanted < free ? wanted : free;
+}
+
+/** Reports the lease one grant tops the client up to. */
+std::size_t lease_high_water(const Settings& settings) noexcept {
+    // One activity session owns exactly this many entity-slot lease bits.
+    constexpr std::size_t kSlotCount = state::activity::entity_slots::kSlotCount;
+    const std::size_t free = kSlotCount - static_cast<std::size_t>(effective_reserve(settings));
+    const std::size_t wanted = settings.clientLeaseHighWater;
     return wanted < free ? wanted : free;
 }
 

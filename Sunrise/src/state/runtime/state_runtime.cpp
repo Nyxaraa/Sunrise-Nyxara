@@ -5,7 +5,6 @@
 #include <bcrypt.h>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <limits>
 #include <memory>
 #include <new>
@@ -13,13 +12,16 @@
 #include <utility>
 #include <vector>
 
-#include "../../core/logging/log.h"
 #include "../../core/settings/settings.h"
 #include "../activity/defaults/activity_defaults_validation.h"
+#include "../build_data/records/rewards/reward_persistence.h"
 #include "../build_data/runtime.h"
+#include "../progression/seasonal_experience.h"
+#include "../record_claims/record_claims.h"
 #include "equipment/configured_equipment_identity.h"
 #include "runtime.h"
 #include "state.h"
+#include "state_account_transaction_helpers.h"
 #include "storage/internal.h"
 
 namespace sunrise::state {
@@ -39,6 +41,96 @@ constexpr std::uint32_t kDefaultTokenLifetimeSeconds = 3600;
 /** Family 5 uses the largest signed 64-bit value as its process-global object key. */
 constexpr std::uint64_t kGlobalFamily5Soid =
     static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)());
+/** Global unlock-value slot named by the installed build's season constants. */
+constexpr std::uint16_t kActiveSeasonValueSlot = 607;
+/** One-based season number carried by the Season of Arrivals definition. */
+constexpr std::int32_t kSeasonOfArrivalsNumber = 11;
+constexpr std::uint32_t kGlimmerHash = 3159615086U;
+constexpr std::array<std::uint32_t, 25> kArtifactModHashes{
+    715026181U,  715026182U,  715026183U,  715026176U,  715026177U,
+    3213968582U, 3213968581U, 3213968580U, 3213968579U, 3213968578U,
+    3465659109U, 3465659110U, 3465659111U, 3465659104U, 3465659105U,
+    3175764264U, 3175764267U, 3175764266U, 3175764269U, 3175764268U,
+    4186620519U, 4186620516U, 4186620517U, 4186620514U, 4186620515U};
+
+[[nodiscard]] bool is_artifact_mod(std::uint32_t hash) noexcept {
+    return std::find(kArtifactModHashes.begin(), kArtifactModHashes.end(), hash)
+           != kArtifactModHashes.end();
+}
+
+[[nodiscard]] bool same_profile_item(const account::inventory::ProfileItem& left,
+                                     const account::inventory::ProfileItem& right) noexcept {
+    return left.instanceSoid == right.instanceSoid
+           && left.definitionHash == right.definitionHash && left.quantity == right.quantity
+           && left.mutationSerial == right.mutationSerial;
+}
+
+/** Restores artifact-mod sockets to their manifest-declared initial plugs. */
+[[nodiscard]] bool clear_artifact_sockets(account::inventory::Item& item) noexcept {
+    if (item.sockets.policy != account::inventory::SocketPolicy::authored) {
+        return true;
+    }
+    build_data::items::Definition base{};
+    build_data::items::details::Definition detail{};
+    if (!build_data::find_item_definition_hash(item.definitionHash, base)
+        || !build_data::find_configured_item_detail(base.definitionIndex, detail)
+        || detail.definitionIndex != base.definitionIndex
+        || item.sockets.plugCount != detail.ordinarySocketCount) {
+        return false;
+    }
+    for (std::size_t lane = 0; lane < item.sockets.plugCount; ++lane) {
+        const auto& plug = item.sockets.plugs[lane];
+        if (!plug.has_value() || !is_artifact_mod(*plug)) {
+            continue;
+        }
+        const std::uint16_t initial = detail.initialPlugIndices[lane];
+        if (initial == build_data::items::details::kUnavailableItemIndex) {
+            item.sockets.plugs[lane].reset();
+            continue;
+        }
+        build_data::items::Definition replacement{};
+        if (!build_data::find_item_definition_index(initial, replacement)) {
+            return false;
+        }
+        item.sockets.plugs[lane] = replacement.definitionHash;
+    }
+    return true;
+}
+
+[[nodiscard]] bool record_changed_item(const account::inventory::Item& prior,
+                                       const account::inventory::Item& current,
+                                       ArtifactResetResult& result) noexcept {
+    if (prior.sockets.policy == current.sockets.policy
+        && prior.sockets.plugCount == current.sockets.plugCount
+        && prior.sockets.plugs == current.sockets.plugs) {
+        return true;
+    }
+    if (result.instanceCount >= result.instanceSoids.size()) {
+        return false;
+    }
+    result.instanceSoids[result.instanceCount++] = current.instanceSoid;
+    return true;
+}
+
+/**
+ * Makes one process-owned global value authoritative without disturbing authored overrides.
+ * @return False only when a new row is needed and the bounded family-5 list is full.
+ */
+[[nodiscard]] bool
+upsert_family5_value(Family5State& family, std::uint16_t slot, std::int32_t value) noexcept {
+    for (std::size_t index = 0; index < family.valueCount; ++index) {
+        if (family.values[index].slot == slot) {
+            family.values[index].value = value;
+            return true;
+        }
+    }
+    if (family.valueCount >= family.values.size()) {
+        return false;
+    }
+    family.values[family.valueCount++] = UnlockValueOverride{slot, value};
+    return true;
+}
+
 /**
  * Fills fixed secret storage with Windows system randomness.
  * @tparam Size Required secret byte count.
@@ -119,6 +211,9 @@ void secure_reset(State& state) noexcept {
         for (std::size_t index = 0; index < character.inventory.count; ++index) {
             character.inventory.values[index].mutationSerial = static_cast<std::int32_t>(next++);
         }
+        for (std::size_t index = 0; index < character.stacks.count; ++index) {
+            character.stacks.values[index].mutationSerial = static_cast<std::int32_t>(next++);
+        }
         character.nextInventorySerial = next;
     }
     return account::valid(accountState);
@@ -182,7 +277,7 @@ void secure_reset(State& state) noexcept {
         if (!actionSources[index] || item.instanceSoid != 0) {
             continue;
         }
-        while (identity_uses_soid(accountState, nextProfileSoid)) {
+        while (runtime::detail::account_owns_soid(accountState, nextProfileSoid)) {
             if (nextProfileSoid == (std::numeric_limits<std::uint64_t>::max)()) {
                 return false;
             }
@@ -233,6 +328,13 @@ bool initialize(void* module,
     if (!build_data::initialize(module, runtime::equipment::configured_hash(*runtimeAccount))) {
         return false;
     }
+    build_data::set_exotic_catalyst_completion_enabled(
+        core::settings::get().completeExoticCatalysts);
+    if (build_data::records::rewards::initialize(module)) {
+        (void)build_data::records::rewards::load_and_publish();
+    }
+    (void)record_claims::initialize(module);
+    (void)progression::seasonal_experience::initialize(module);
     // A cache hit already has the complete plug relation, so publish canonical profile identities
     // in the first State image. On a first cache build, snapshot preparation repeats this step
     // after package extraction has published the relation.
@@ -277,6 +379,13 @@ bool initialize(void* module,
     initialized->investment.family5.flagCount = authored.flagCount;
     initialized->investment.family5.values = authored.values;
     initialized->investment.family5.valueCount = authored.valueCount;
+    if (!upsert_family5_value(initialized->investment.family5,
+                              kActiveSeasonValueSlot,
+                              kSeasonOfArrivalsNumber)) {
+        secure_reset(*initialized);
+        build_data::shutdown();
+        return false;
+    }
     // The arm is account-wide and rides the first ws-503, which goes out before any pick. Nothing
     // is selected at boot, so it is armed when any authored character carries the bypass. The
     // per-character objB byte is the other half, and it still decides which character it opens.
@@ -301,6 +410,7 @@ void shutdown() noexcept {
     AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
     secure_reset(runtime::storage::g_state);
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+    progression::seasonal_experience::shutdown();
     build_data::shutdown();
 }
 
@@ -362,12 +472,182 @@ bool new_bap_session(BapState& output) noexcept {
     return true;
 }
 
-/** @return A copy of the evaluated content state, read under the lock. */
-InvestmentState investment_snapshot() noexcept {
+/** Copies one complete evaluated content state with build-derived catalyst overrides. */
+bool investment_snapshot(InvestmentState& output) noexcept {
     AcquireSRWLockShared(&runtime::storage::g_stateLock);
-    const InvestmentState snapshot = runtime::storage::g_state.investment;
+    InvestmentState snapshot = runtime::storage::g_state.investment;
     ReleaseSRWLockShared(&runtime::storage::g_stateLock);
-    return snapshot;
+    (void)progression::seasonal_experience::apply_artifact_state(snapshot.family5);
+    if (!build_data::complete_exotic_catalyst_investment(snapshot.family5)) {
+        return false;
+    }
+    output = snapshot;
+    return true;
+}
+
+bool prepare_artifact_mod_unlock(std::uint16_t saleIndex,
+                                 PendingArtifactPurchase& mutation) noexcept {
+    mutation = {};
+    const AccountState account = account_snapshot();
+    if (!account::valid(account)) {
+        return false;
+    }
+    std::size_t selected = account.characterCount;
+    for (std::size_t index = 0; index < account.characterCount; ++index) {
+        if (account.characters[index].selected) {
+            selected = index;
+            break;
+        }
+    }
+    if (selected >= account.characterCount
+        || !progression::seasonal_experience::prepare_artifact_mod_unlock(
+            saleIndex, mutation.beforeMask, mutation.afterMask)) {
+        mutation = {};
+        return false;
+    }
+    mutation.accountSoid = account.primarySoid;
+    mutation.characterSoid = account.characters[selected].soid;
+    mutation.characterIndex = selected;
+    mutation.saleIndex = saleIndex;
+    mutation.prepared = true;
+    return true;
+}
+
+bool commit_artifact_mod_unlock(PendingArtifactPurchase& mutation) noexcept {
+    const PendingArtifactPurchase prepared = mutation;
+    mutation = {};
+    const AccountState account = account_snapshot();
+    if (!prepared.prepared || prepared.accountSoid == 0 || prepared.characterSoid == 0
+        || prepared.beforeMask == prepared.afterMask
+        || prepared.characterIndex >= account.characterCount
+        || account.primarySoid != prepared.accountSoid
+        || account.characters[prepared.characterIndex].soid != prepared.characterSoid
+        || !account.characters[prepared.characterIndex].selected) {
+        return false;
+    }
+    return progression::seasonal_experience::replace_artifact_mod_mask(
+        prepared.beforeMask, prepared.afterMask);
+}
+
+bool reset_artifact(std::int32_t glimmerCost, ArtifactResetResult& result) noexcept {
+    result = {};
+    if (glimmerCost <= 0) {
+        return false;
+    }
+
+    const std::uint32_t previousMods = progression::seasonal_experience::artifact_mod_mask();
+    const AccountState before = account_snapshot();
+    if (previousMods == 0 || !account::valid(before)
+        || !runtime::detail::valid_profile_inventory(before)) {
+        return false;
+    }
+
+    std::int32_t remainingCost = glimmerCost;
+    auto compacted = before.profileItems;
+    std::size_t compactedCount = 0;
+    for (std::size_t index = 0; index < before.profileItemCount; ++index) {
+        auto item = before.profileItems[index];
+        if (item.definitionHash == kGlimmerHash && remainingCost > 0) {
+            const std::int32_t spent = (std::min)(item.quantity, remainingCost);
+            item.quantity -= spent;
+            remainingCost -= spent;
+        }
+        if (item.quantity > 0 && !is_artifact_mod(item.definitionHash)) {
+            compacted[compactedCount++] = item;
+        }
+    }
+    if (remainingCost != 0) {
+        return false;
+    }
+    std::fill(compacted.begin() + static_cast<std::ptrdiff_t>(compactedCount),
+              compacted.end(),
+              account::inventory::ProfileItem{});
+
+    std::int32_t serial = 0;
+    for (std::size_t index = 0; index < before.profileItemCount; ++index) {
+        serial = (std::max)(serial, before.profileItems[index].mutationSerial);
+    }
+    std::size_t changedRows = 0;
+    for (std::size_t index = 0; index < compactedCount; ++index) {
+        changedRows += static_cast<std::size_t>(index >= before.profileItemCount
+                                                || !same_profile_item(compacted[index],
+                                                                      before.profileItems[index]));
+    }
+    if (changedRows > static_cast<std::size_t>((std::numeric_limits<std::int32_t>::max)()
+                                               - serial)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < compactedCount; ++index) {
+        if (index >= before.profileItemCount
+            || !same_profile_item(compacted[index], before.profileItems[index])) {
+            compacted[index].mutationSerial = ++serial;
+        }
+    }
+
+    AccountState candidate = before;
+    candidate.profileItems = compacted;
+    candidate.profileItemCount = compactedCount;
+    for (std::size_t characterIndex = 0; characterIndex < candidate.characterCount;
+         ++characterIndex) {
+        auto& character = candidate.characters[characterIndex];
+        for (auto& item : character.equipment.slots) {
+            if (item.has_value() && !clear_artifact_sockets(*item)) {
+                return false;
+            }
+        }
+        for (std::size_t itemIndex = 0; itemIndex < character.inventory.count; ++itemIndex) {
+            if (!clear_artifact_sockets(character.inventory.values[itemIndex])) {
+                return false;
+            }
+        }
+    }
+    ArtifactResetResult changed{};
+    for (std::size_t characterIndex = 0; characterIndex < candidate.characterCount;
+         ++characterIndex) {
+        if (!before.characters[characterIndex].selected) {
+            continue;
+        }
+        const auto& prior = before.characters[characterIndex];
+        const auto& current = candidate.characters[characterIndex];
+        for (std::size_t slot = 0; slot < current.equipment.slots.size(); ++slot) {
+            if (current.equipment.slots[slot].has_value()
+                && (!prior.equipment.slots[slot].has_value()
+                    || !record_changed_item(*prior.equipment.slots[slot],
+                                            *current.equipment.slots[slot],
+                                            changed))) {
+                return false;
+            }
+        }
+        for (std::size_t index = 0; index < current.inventory.count; ++index) {
+            if (!record_changed_item(
+                    prior.inventory.values[index], current.inventory.values[index], changed)) {
+                return false;
+            }
+        }
+    }
+    if (!account::valid(candidate) || !runtime::detail::valid_profile_inventory(candidate)
+        || !progression::seasonal_experience::replace_artifact_mod_mask(previousMods, 0)) {
+        return false;
+    }
+
+    AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
+    bool current = runtime::detail::same_profile_inventory(
+        runtime::storage::g_state.account, before.profileItems, before.profileItemCount)
+                   && runtime::storage::g_state.account.characterCount == before.characterCount;
+    for (std::size_t index = 0; current && index < before.characterCount; ++index) {
+        current = runtime::detail::same_character(runtime::storage::g_state.account.characters[index],
+                                                  before.characters[index]);
+    }
+    if (current) {
+        runtime::storage::g_state.account = candidate;
+    }
+    ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+    if (!current) {
+        (void)progression::seasonal_experience::replace_artifact_mod_mask(0, previousMods);
+    } else {
+        result = changed;
+    }
+    return current;
 }
 
 } // namespace sunrise::state

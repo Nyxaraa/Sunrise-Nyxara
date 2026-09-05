@@ -1,20 +1,24 @@
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
-#include <atomic>
-#include <cstdio>
 #include <limits>
+#include <mutex>
+#include <shared_mutex>
 #include <string_view>
 
+#include "../../client/hooks/network/investment/investment_derived_rebuild.h"
 #include "../../core/logging/log.h"
 #include "../../middleware/content/packages/tables/region_reader.h"
 #include "../../state/activity/runtime.h"
 #include "../../state/build_data/runtime.h"
 #include "../../state/matchmaking/matchmaking_state.h"
+#include "../../state/progression/seasonal_experience.h"
 #include "../activity/host_runtime.h"
 #include "activity_authority_query_owner.h"
 #include "activity_authority_reset_owner.h"
 #include "activity_mission_seed_lease.h"
+#include "core/threading/srw_lock.h"
 #include "encrypted/bap_connection_publication.h"
 #include "encrypted/push/activity/internal.h"
 #include "internal.h"
@@ -28,42 +32,72 @@ namespace layouts = state::build_data::scenarios;
 namespace roster_message = middleware::bap::activity_message::sensor_auth_update;
 namespace tables = middleware::content::packages::tables;
 
-SRWLOCK g_lock{SRWLOCK_INIT};
+core::threading::SrwLock g_lock{};
 std::array<Session, kSessionCount> g_sessions{};
 Scratch g_scratch{};
-std::uint64_t g_accountGeneration{};
+std::array<WorldRewardRequest, kWorldRewardQueueCapacity> g_worldRewards{};
+std::size_t g_worldRewardHead{};
+std::size_t g_worldRewardCount{};
+/** Measured lifetime of the native item-acquisition flyout. */
+constexpr std::uint64_t kAcquisitionPresentationHoldMs = 8'000;
+constexpr std::uint8_t kWorldRewardFailureLimit = 8;
+
+[[nodiscard]] bool has_active_family4_peer() noexcept {
+    return std::any_of(g_sessions.begin(), g_sessions.end(), [](const Session& session) {
+        return session.id != 0 && session.authenticated && session.queuez.family4Active;
+    });
+}
+
+void pop_world_reward() noexcept {
+    g_worldRewards[g_worldRewardHead] = {};
+    g_worldRewardHead = (g_worldRewardHead + 1) % g_worldRewards.size();
+    --g_worldRewardCount;
+}
+
+[[nodiscard]] bool commit_world_reward(const WorldRewardRequest& request) noexcept {
+    if (request.kind == WorldRewardKind::item) {
+        state::PendingItemAcquisition acquisition{};
+        return state::prepare_item_acquisition_for_item(request.itemDefinitionIndex, acquisition)
+               && state::commit_item_acquisition(acquisition);
+    }
+    state::PendingProfileItemAcquisition acquisition{};
+    return state::prepare_profile_item_acquisition_for_item(
+               request.itemDefinitionIndex, request.quantity, acquisition)
+           && state::commit_profile_item_acquisition(acquisition);
+}
+
+[[nodiscard]] bool enqueue_world_reward(WorldRewardRequest request) noexcept {
+    if (!has_active_family4_peer()) {
+        while (g_worldRewardCount != 0) {
+            if (!commit_world_reward(g_worldRewards[g_worldRewardHead])) {
+                core::log::write(core::log::Channel::server,
+                                 core::log::Level::warn,
+                                 "ev=world_reward stage=direct result=drop");
+            }
+            pop_world_reward();
+        }
+        return commit_world_reward(request);
+    }
+    if (g_worldRewardCount == g_worldRewards.size()) {
+        const bool committed = commit_world_reward(g_worldRewards[g_worldRewardHead]);
+        if (committed) {
+            arm_account_resync_everywhere();
+        }
+        pop_world_reward();
+        core::log::write(core::log::Channel::server,
+                         core::log::Level::warn,
+                         committed ? "ev=world_reward stage=queue_full result=direct"
+                                   : "ev=world_reward stage=queue_full result=drop");
+    }
+    g_worldRewards[(g_worldRewardHead + g_worldRewardCount) % g_worldRewards.size()] = request;
+    ++g_worldRewardCount;
+    return true;
+}
 
 /** Arms every other active peer after one shared-account transaction is published. */
 void publish_account_mutation(Session& origin) noexcept {
     origin.accountMutationPublished = false;
-    g_accountGeneration = g_accountGeneration == (std::numeric_limits<std::uint64_t>::max)()
-                              ? 1
-                              : g_accountGeneration + 1;
-    origin.accountGeneration = g_accountGeneration;
-    origin.accountResyncGeneration = g_accountGeneration;
-    origin.accountResyncArmed = false;
-    std::size_t armed = 0;
-    for (auto& peer : g_sessions) {
-        if (&peer == &origin || peer.id == 0 || !peer.authenticated || !peer.queuez.family4Active) {
-            continue;
-        }
-        peer.accountResyncGeneration = g_accountGeneration;
-        peer.accountResyncArmed = true;
-        ++armed;
-    }
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(line.data(),
-                                    line.size(),
-                                    "ev=queuez stage=peer_resync_arm result=ok generation=%llu "
-                                    "origin=%u peers=%zu",
-                                    static_cast<unsigned long long>(g_accountGeneration),
-                                    origin.id,
-                                    armed);
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::debug,
-                         {line.data(), static_cast<std::size_t>(count)});
-    }
+    arm_account_resync_elsewhere(origin);
 }
 /** @param id Nonzero connection id. @return Matching open session, or null. */
 [[nodiscard]] Session* session_for(std::uint32_t id) noexcept {
@@ -99,6 +133,19 @@ same_destination(const state::activity::destination::DestinationSelection& left,
            && left.descriptorBitLength == right.descriptorBitLength
            && left.descriptorNameBit == right.descriptorNameBit
            && left.hasDescriptorName == right.hasDescriptorName;
+}
+
+/**
+ * Tests the world-package identity used by the HUD and generated scenario layout.
+ * Public targets are separate selections and may legitimately carry a different reason, nonce,
+ * activity index or descriptor while still naming the same loaded destination. Those fields are
+ * binding identity, not evidence that two ActivityClients belong to different maps.
+ */
+[[nodiscard]] bool
+same_destination_package(const state::activity::destination::DestinationSelection& left,
+                         const state::activity::destination::DestinationSelection& right) noexcept {
+    return left.packageNameLength != 0 && left.packageNameLength == right.packageNameLength
+           && left.packageName == right.packageName;
 }
 
 /** Finds one exact authenticated ActivityClient while the caller owns the BAP lock. */
@@ -800,18 +847,118 @@ void clear_session(Session& session) noexcept {
 [[nodiscard]] bool consume_poll(const client::network::BapRequest& request,
                                 client::network::BapResponse& response,
                                 bool& touchesScratch) noexcept {
-    static std::atomic_bool reported{false};
-    if (!reported.exchange(true, std::memory_order_relaxed)) {
-        core::log::write(
-            core::log::Channel::server, core::log::Level::info, "ev=queuez stage=poll result=ok");
-    }
     auto* session = session_for(request.connectionId);
-    return session != nullptr
-           && encrypted::consume_deferred(
-               *session, g_scratch, request.response, response.size, touchesScratch);
+    if (session == nullptr) {
+        return false;
+    }
+    // The purchase response carries the Family-4 ownership rows. Refresh Family 5 only after the
+    // client has consumed that response, so derived artifact state never mixes adjacent purchases.
+    if (session->artifactRefreshArmed) {
+        state::InvestmentState investment{};
+        if (state::investment_snapshot(investment)
+            && client::hooks::network::investment::publish_live_family5(investment.family5)) {
+            session->artifactRefreshArmed = false;
+        }
+    }
+    return encrypted::consume_deferred(
+        *session, g_scratch, request.response, response.size, touchesScratch);
 }
 
 } // namespace
+
+void arm_account_resync_elsewhere(Session& origin) noexcept {
+    for (auto& peer : g_sessions) {
+        if (&peer != &origin && peer.id != 0 && peer.authenticated && peer.queuez.family4Active) {
+            peer.accountResyncArmed = true;
+        }
+    }
+}
+
+/** Arms every active peer to re-read the account, including the origin. */
+void arm_account_resync_everywhere() noexcept {
+    for (auto& peer : g_sessions) {
+        if (peer.id == 0 || !peer.authenticated || !peer.queuez.family4Active) {
+            continue;
+        }
+        peer.accountResyncArmed = true;
+    }
+}
+
+void arm_acquisition_presentation_hold(Session& session) noexcept {
+    const std::uint64_t now = GetTickCount64();
+    if (now >= session.acquisitionPresentationUntilTick) {
+        session.acquisitionPresentationRows = {};
+        session.acquisitionPresentationRowCount = 0;
+    }
+    session.acquisitionPresentationUntilTick =
+        (std::max)(session.acquisitionPresentationUntilTick, now + kAcquisitionPresentationHoldMs);
+}
+
+bool arm_world_item_acquisition(std::uint16_t itemDefinitionIndex) noexcept {
+    return enqueue_world_reward({1, itemDefinitionIndex, WorldRewardKind::item});
+}
+
+bool arm_world_profile_item_acquisition(std::uint16_t itemDefinitionIndex,
+                                        std::int32_t quantity) noexcept {
+    if (quantity <= 0) {
+        return false;
+    }
+    return enqueue_world_reward({quantity, itemDefinitionIndex, WorldRewardKind::profileItem});
+}
+
+bool current_world_reward(WorldRewardRequest& request) noexcept {
+    if (g_worldRewardCount == 0) {
+        request = {};
+        return false;
+    }
+    request = g_worldRewards[g_worldRewardHead];
+    return true;
+}
+
+void complete_world_reward() noexcept {
+    if (g_worldRewardCount == 0) {
+        return;
+    }
+    pop_world_reward();
+}
+
+void fail_world_reward_attempt() noexcept {
+    if (g_worldRewardCount == 0
+        || ++g_worldRewards[g_worldRewardHead].failures < kWorldRewardFailureLimit) {
+        return;
+    }
+    const bool committed = commit_world_reward(g_worldRewards[g_worldRewardHead]);
+    pop_world_reward();
+    if (committed) {
+        arm_account_resync_everywhere();
+    }
+    core::log::write(core::log::Channel::server,
+                     core::log::Level::warn,
+                     committed ? "ev=world_reward stage=retry_limit result=direct"
+                               : "ev=world_reward stage=retry_limit result=drop");
+}
+
+bool arm_seasonal_experience_presentation(std::int32_t amount) noexcept {
+    if (amount <= 0) {
+        return false;
+    }
+    for (auto& peer : g_sessions) {
+        if (peer.id == 0 || !peer.authenticated || !peer.queuez.family4Active
+            || peer.pendingSeasonalExperienceAmount
+                   > (std::numeric_limits<std::int32_t>::max)() - amount) {
+            continue;
+        }
+        if (!state::progression::seasonal_experience::grant(amount)) {
+            return false;
+        }
+        peer.pendingSeasonalExperienceAmount += amount;
+        peer.pendingSeasonalExperienceFailures = 0;
+        return true;
+    }
+    return false;
+}
+
+/** Applies one serialized BAP connection lifecycle event. */
 
 /** Finds one unambiguous registry identity in a committed connection-local roster map. */
 const RosterDecodeEntry* find_roster_decode_entry(const RosterDecodeMap& map,
@@ -847,7 +994,7 @@ std::size_t activity_link_count_locked(const state::activity::SessionBinding& bi
 bool consume(const client::network::BapRequest& request,
              client::network::BapResponse& response) noexcept {
     response = {};
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     bool success = false;
     // Polls report whether they reached scratch.
     bool touchesScratch = request.event != client::network::BapEvent::poll;
@@ -870,15 +1017,13 @@ bool consume(const client::network::BapRequest& request,
     if (touchesScratch) {
         SecureZeroMemory(&g_scratch, sizeof g_scratch);
     }
-    ReleaseSRWLockExclusive(&g_lock);
     return success;
 }
 
 /** Counts authenticated BAP links that currently own one exact activity generation. */
 std::size_t activity_link_count(const state::activity::SessionBinding& binding) noexcept {
-    AcquireSRWLockShared(&g_lock);
+    const std::shared_lock lock(g_lock);
     const std::size_t count = activity_link_count_locked(binding);
-    ReleaseSRWLockShared(&g_lock);
     return count;
 }
 
@@ -886,7 +1031,7 @@ std::size_t activity_link_count(const state::activity::SessionBinding& binding) 
 bool activity_link_view(const state::activity::SessionBinding& binding,
                         ActivityLinkView& output) noexcept {
     output = {};
-    AcquireSRWLockShared(&g_lock);
+    const std::shared_lock lock(g_lock);
     const Session* const session = unique_activity_link_locked(binding, output.matchingLinks);
     if (session != nullptr) {
         const auto region = selected_region_locked(*session);
@@ -902,7 +1047,6 @@ bool activity_link_view(const state::activity::SessionBinding& binding,
         output.rosterReason = session->activityRosterReason;
         output.playerKey = encrypted::push::activity::published_player_key(*session);
     }
-    ReleaseSRWLockShared(&g_lock);
     return session != nullptr;
 }
 
@@ -911,7 +1055,7 @@ ActivityMissionSeedLeaseStatus
 activity_mission_seed_available(const state::activity::SessionBinding& binding,
                                 std::uint32_t scenarioRow,
                                 std::uint64_t expectedGeneration) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     Session* session = nullptr;
     std::size_t matchingLinks = 0;
     ActivityMissionSeedLeaseStatus status =
@@ -919,7 +1063,6 @@ activity_mission_seed_available(const state::activity::SessionBinding& binding,
     if (status == ActivityMissionSeedLeaseStatus::ready && session->activityRosterStaged.staged) {
         status = ActivityMissionSeedLeaseStatus::outputBusy;
     }
-    ReleaseSRWLockExclusive(&g_lock);
     return status;
 }
 
@@ -930,7 +1073,7 @@ activity_mission_seed_lease(const state::activity::SessionBinding& binding,
                             std::uint64_t expectedGeneration,
                             ActivityMissionSeedLeaseView& output) noexcept {
     output = {};
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     Session* session = nullptr;
     ActivityMissionSeedLeaseStatus status = mission_seed_link_locked(
         binding, scenarioRow, expectedGeneration, session, output.matchingLinks);
@@ -940,7 +1083,6 @@ activity_mission_seed_lease(const state::activity::SessionBinding& binding,
     if (status == ActivityMissionSeedLeaseStatus::ready) {
         read_mission_seed_lease(*session, output.matchingLinks, output);
     }
-    ReleaseSRWLockExclusive(&g_lock);
     return status;
 }
 
@@ -949,7 +1091,7 @@ ActivityMissionSeedLeaseStatus
 select_activity_mission_seed(const state::activity::SessionBinding& binding,
                              const ActivityMissionSeedPlan& plan,
                              std::uint64_t expectedGeneration) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     Session* session = nullptr;
     std::size_t matchingLinks = 0;
     ActivityMissionSeedLeaseStatus status = mission_seed_link_locked(
@@ -963,7 +1105,6 @@ select_activity_mission_seed(const state::activity::SessionBinding& binding,
         if (lease.configured && same_mission_seed_plan(lease.plan, plan)) {
             // The script may select the plan the roster adopted by default. That is a selection.
             lease.scriptSelected = true;
-            ReleaseSRWLockExclusive(&g_lock);
             return ActivityMissionSeedLeaseStatus::ready;
         }
         if (lease.configured && lease.revision == (std::numeric_limits<std::uint64_t>::max)()) {
@@ -983,7 +1124,6 @@ select_activity_mission_seed(const state::activity::SessionBinding& binding,
             }
             if (!regionKnown) {
                 if (lease.registeredRegionCount >= lease.registeredRegions.size()) {
-                    ReleaseSRWLockExclusive(&g_lock);
                     return ActivityMissionSeedLeaseStatus::refused;
                 }
                 lease.registeredRegions[lease.registeredRegionCount++] = plan.effectiveRegion;
@@ -1002,7 +1142,6 @@ select_activity_mission_seed(const state::activity::SessionBinding& binding,
             lease.scriptSelected = true;
         }
     }
-    ReleaseSRWLockExclusive(&g_lock);
     return status;
 }
 
@@ -1011,13 +1150,12 @@ bool activity_type23_override_available(const state::activity::SessionBinding& b
                                         const activity::host::ScriptableTarget& target,
                                         std::int32_t expectedRegion,
                                         std::uint64_t expectedGeneration) noexcept {
-    AcquireSRWLockShared(&g_lock);
+    const std::shared_lock lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const bool available =
         session != nullptr
         && canonical_type23_available_locked(*session, target, expectedRegion, expectedGeneration);
-    ReleaseSRWLockShared(&g_lock);
     return available;
 }
 
@@ -1027,33 +1165,69 @@ bool current_activity_link_view(std::int32_t localSliceSet,
     output = {};
     const Session* only = nullptr;
     const Session* matched = nullptr;
-    AcquireSRWLockShared(&g_lock);
+    const Session* coherent = nullptr;
+    const Session* privateCurrent = nullptr;
+    bool oneDestination = true;
+    const std::shared_lock lock(g_lock);
     for (const Session& session : g_sessions) {
         if (session.id == 0 || !session.authenticated
             || session.activity.role == ActivityClientRole::none
             || session.activity.bindingGeneration == 0
-            || !state::activity::binding_matches(session.activity.session)
-            || !state::activity::binding_matches(session.activity.source)) {
+            || !state::activity::binding_matches(session.activity.session)) {
             continue;
         }
         only = &session;
         ++output.activeLinks;
+        if (session.activity.role == ActivityClientRole::privateCurrent
+            && (privateCurrent == nullptr
+                || session.activity.bindingGeneration
+                       > privateCurrent->activity.bindingGeneration)) {
+            privateCurrent = &session;
+        }
+        if (coherent == nullptr) {
+            coherent = &session;
+        } else {
+            oneDestination =
+                oneDestination
+                && same_destination_package(coherent->activity.session.destination,
+                                            session.activity.session.destination);
+            // Prefer the persistent private-current link for destination metadata. Public targets
+            // are disposable region views and can overlap while the client changes bubbles.
+            if ((session.activity.role == ActivityClientRole::privateCurrent
+                 && coherent->activity.role != ActivityClientRole::privateCurrent)
+                || (session.activity.role == coherent->activity.role
+                    && session.activity.bindingGeneration
+                           > coherent->activity.bindingGeneration)) {
+                coherent = &session;
+            }
+        }
         if (localSliceSet >= 0 && selected_region_locked(session).index == localSliceSet) {
-            matched = &session;
             ++output.matchingRegions;
+            // A public region may be represented by several overlapping links. Prefer the stable
+            // private-current owner; within one role, use the newest binding.
+            const bool moreSpecific =
+                matched == nullptr
+                || (session.activity.role == ActivityClientRole::privateCurrent
+                    && matched->activity.role != ActivityClientRole::privateCurrent)
+                || (session.activity.role == matched->activity.role
+                    && session.activity.bindingGeneration
+                           > matched->activity.bindingGeneration);
+            if (moreSpecific) {
+                matched = &session;
+            }
         }
     }
-    const Session* const selected = output.matchingRegions == 1 ? matched
-                                    : output.matchingRegions == 0 && output.activeLinks == 1
-                                        ? only
-                                        : nullptr;
+    const Session* const selected = privateCurrent != nullptr ? privateCurrent
+                                    : matched != nullptr       ? matched
+                                    : output.activeLinks == 1 ? only
+                                    : oneDestination          ? coherent
+                                                              : nullptr;
     if (selected != nullptr) {
         output.binding = selected->activity.session;
         output.activityClientGeneration = selected->activity.bindingGeneration;
         output.effectiveRegion = selected_region_locked(*selected).index;
         output.publicTarget = selected->activity.role == ActivityClientRole::publicTarget;
     }
-    ReleaseSRWLockShared(&g_lock);
     return selected != nullptr;
 }
 
@@ -1061,7 +1235,7 @@ bool current_activity_link_view(std::int32_t localSliceSet,
 bool activity_replication_view(const state::activity::SessionBinding& binding,
                                ActivityReplicationView& output) noexcept {
     output = {};
-    AcquireSRWLockShared(&g_lock);
+    const std::shared_lock lock(g_lock);
     std::size_t count = 0;
     const Session* const session = unique_activity_link_locked(binding, count);
     const bool ready =
@@ -1075,7 +1249,6 @@ bool activity_replication_view(const state::activity::SessionBinding& binding,
         output.memberId = session->activityMemberKey;
         output.replicationEpoch = session->activity.replicationEpoch;
     }
-    ReleaseSRWLockShared(&g_lock);
     return ready;
 }
 
@@ -1086,7 +1259,7 @@ bool activity_replication_view_for_session(std::uint64_t activitySessionId,
     if (activitySessionId == 0) {
         return false;
     }
-    AcquireSRWLockShared(&g_lock);
+    const std::shared_lock lock(g_lock);
     const Session* selected = nullptr;
     std::size_t count = 0;
     for (const Session& session : g_sessions) {
@@ -1110,7 +1283,6 @@ bool activity_replication_view_for_session(std::uint64_t activitySessionId,
         output.memberId = selected->activityMemberKey;
         output.replicationEpoch = selected->activity.replicationEpoch;
     }
-    ReleaseSRWLockShared(&g_lock);
     return count == 1;
 }
 
@@ -1121,7 +1293,7 @@ bool activity_replication_view_for_group(std::uint64_t groupSessionId,
     if (groupSessionId == 0) {
         return false;
     }
-    AcquireSRWLockShared(&g_lock);
+    const std::shared_lock lock(g_lock);
     const Session* selected = nullptr;
     std::size_t count = 0;
     for (const Session& session : g_sessions) {
@@ -1143,7 +1315,6 @@ bool activity_replication_view_for_group(std::uint64_t groupSessionId,
         output.memberId = selected->activityMemberKey;
         output.replicationEpoch = selected->activity.replicationEpoch;
     }
-    ReleaseSRWLockShared(&g_lock);
     return count == 1;
 }
 
@@ -1151,7 +1322,7 @@ bool activity_replication_view_for_group(std::uint64_t groupSessionId,
 bool request_replication_epoch(const state::activity::SessionBinding& binding,
                                std::uint64_t expectedGeneration,
                                std::uint8_t generation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t count = 0;
     Session* const session = unique_mutable_activity_link_locked(binding, count);
     bool queued = session != nullptr && expectedGeneration != 0
@@ -1169,7 +1340,6 @@ bool request_replication_epoch(const state::activity::SessionBinding& binding,
             session->activityKeepaliveDueTick = 0;
         }
     }
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1179,7 +1349,7 @@ request_activity_authority_query(const state::activity::SessionBinding& binding,
                                  std::uint64_t expectedGeneration,
                                  std::int32_t& correlation) noexcept {
     correlation = -1;
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     Session* const session = unique_mutable_activity_link_locked(binding, linkCount);
     ActivityAuthorityQueryStatus status = ActivityAuthorityQueryStatus::noActivityLink;
@@ -1189,7 +1359,6 @@ request_activity_authority_query(const state::activity::SessionBinding& binding,
                            session->activityAuthorityQuery, expectedGeneration, correlation)
                      : ActivityAuthorityQueryStatus::staleActivityClient;
     }
-    ReleaseSRWLockExclusive(&g_lock);
     return status;
 }
 
@@ -1199,7 +1368,7 @@ activity_authority_query_snapshot(const state::activity::SessionBinding& binding
                                   std::uint64_t expectedGeneration,
                                   ActivityAuthorityQuerySnapshot& output) noexcept {
     output = {};
-    AcquireSRWLockShared(&g_lock);
+    const std::shared_lock lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     ActivityAuthorityQueryStatus status = ActivityAuthorityQueryStatus::noActivityLink;
@@ -1209,7 +1378,6 @@ activity_authority_query_snapshot(const state::activity::SessionBinding& binding
                            session->activityAuthorityQuery, expectedGeneration, output)
                      : ActivityAuthorityQueryStatus::staleActivityClient;
     }
-    ReleaseSRWLockShared(&g_lock);
     return status;
 }
 
@@ -1219,7 +1387,7 @@ request_activity_authority_reset(const state::activity::SessionBinding& binding,
                                  std::uint64_t expectedGeneration,
                                  std::int32_t& correlation) noexcept {
     correlation = -1;
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     Session* const session = unique_mutable_activity_link_locked(binding, linkCount);
     ActivityAuthorityResetStatus status = ActivityAuthorityResetStatus::noActivityLink;
@@ -1229,7 +1397,6 @@ request_activity_authority_reset(const state::activity::SessionBinding& binding,
                            session->activityAuthorityReset, expectedGeneration, correlation)
                      : ActivityAuthorityResetStatus::staleActivityClient;
     }
-    ReleaseSRWLockExclusive(&g_lock);
     return status;
 }
 
@@ -1239,7 +1406,7 @@ activity_authority_reset_snapshot(const state::activity::SessionBinding& binding
                                   std::uint64_t expectedGeneration,
                                   ActivityAuthorityResetSnapshot& output) noexcept {
     output = {};
-    AcquireSRWLockShared(&g_lock);
+    const std::shared_lock lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     ActivityAuthorityResetStatus status = ActivityAuthorityResetStatus::noActivityLink;
@@ -1249,7 +1416,6 @@ activity_authority_reset_snapshot(const state::activity::SessionBinding& binding
                            session->activityAuthorityReset, expectedGeneration, output)
                      : ActivityAuthorityResetStatus::staleActivityClient;
     }
-    ReleaseSRWLockShared(&g_lock);
     return status;
 }
 
@@ -1263,7 +1429,7 @@ bool request_activity_type23_override(
     std::int32_t expectedRegion,
     std::uint64_t expectedGeneration,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const bool queued =
@@ -1271,7 +1437,6 @@ bool request_activity_type23_override(
         && canonical_type23_available_locked(*session, target, expectedRegion, expectedGeneration)
         && activity::host::request_type23_override(
             binding, target, channel, value, snap, expectedGeneration, reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1282,14 +1447,13 @@ bool request_activity_lifetime_override(
     std::int32_t expectedRegion,
     std::uint64_t expectedGeneration,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const bool queued = session != nullptr
                         && lifetime_available_locked(*session, expectedRegion, expectedGeneration)
                         && activity::host::request_lifetime_override(
                             binding, lifetimeState, expectedGeneration, reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1306,7 +1470,7 @@ bool request_activity_state_local_type23_override(
     std::uint32_t scenarioRow,
     std::uint32_t stateRow,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const bool queued =
@@ -1326,7 +1490,6 @@ bool request_activity_state_local_type23_override(
                                                                snap,
                                                                expectedGeneration,
                                                                reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1342,7 +1505,7 @@ bool request_activity_sdk_auth_override(
     std::uint32_t scenarioRow,
     std::uint32_t stateRow,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const bool available =
@@ -1367,7 +1530,6 @@ bool request_activity_sdk_auth_override(
                                                                      bitCount,
                                                                      expectedGeneration,
                                                                      reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1377,13 +1539,12 @@ bool request_activity_type31_override(
     const activity::host::ScriptableTarget& target,
     std::int32_t expectedRegion,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const bool queued = expectedRegion >= 0 && session != nullptr
                         && selected_region_locked(*session).index == expectedRegion
                         && activity::host::request_type31_override(binding, target, reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1397,7 +1558,7 @@ bool request_activity_state_local_type31_override(
     std::uint32_t,
     std::uint32_t,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const encrypted::push::activity::EffectiveRegion region =
@@ -1411,7 +1572,6 @@ bool request_activity_state_local_type31_override(
         && valid_state_local_type31_target(target, stateLocalRosterGroup)
         && activity::host::request_state_local_type31_override(
             binding, target, stateLocalRosterGroup, expectedGeneration, reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1425,7 +1585,7 @@ bool request_activity_state_local_sequence_override(
     std::uint32_t,
     std::uint32_t,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const encrypted::push::activity::EffectiveRegion region =
@@ -1441,7 +1601,6 @@ bool request_activity_state_local_sequence_override(
         && target.authSchema == middleware::bap::activity_message::scriptable_auth::kType5Schema
         && activity::host::request_state_local_sequence_override(
             binding, target, stateLocalRosterGroup, expectedGeneration, reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1456,7 +1615,7 @@ bool request_activity_state_local_cinematic_override(
     std::uint32_t,
     std::uint32_t,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const encrypted::push::activity::EffectiveRegion region =
@@ -1472,7 +1631,6 @@ bool request_activity_state_local_cinematic_override(
         && target.authSchema == middleware::bap::activity_message::scriptable_auth::kType6Schema
         && activity::host::request_state_local_cinematic_override(
             binding, target, stateLocalRosterGroup, active, expectedGeneration, reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1487,7 +1645,7 @@ bool request_activity_state_local_performance_override(
     std::uint32_t,
     std::uint32_t,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const encrypted::push::activity::EffectiveRegion region =
@@ -1503,7 +1661,6 @@ bool request_activity_state_local_performance_override(
         && target.authSchema == middleware::bap::activity_message::scriptable_auth::kType42Schema
         && activity::host::request_state_local_performance_override(
             binding, target, stateLocalRosterGroup, stateNameHash, expectedGeneration, reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1517,7 +1674,7 @@ bool request_activity_state_local_authored_scene_override(
     std::uint32_t,
     std::uint32_t,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const encrypted::push::activity::EffectiveRegion region =
@@ -1531,7 +1688,6 @@ bool request_activity_state_local_authored_scene_override(
         && valid_state_local_authored_scene_target(target, stateLocalRosterGroup)
         && activity::host::request_state_local_authored_scene_override(
             binding, target, stateLocalRosterGroup, expectedGeneration, reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1547,7 +1703,7 @@ bool request_activity_state_local_dialogue_override(
     std::uint32_t,
     std::uint32_t,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const encrypted::push::activity::EffectiveRegion region =
@@ -1568,7 +1724,6 @@ bool request_activity_state_local_dialogue_override(
                                                                  authoredCueCount,
                                                                  expectedGeneration,
                                                                  reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1582,7 +1737,7 @@ bool request_activity_state_local_objective_reset(
     std::uint32_t,
     std::uint32_t,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const encrypted::push::activity::EffectiveRegion region =
@@ -1598,7 +1753,6 @@ bool request_activity_state_local_objective_reset(
         && target.authSchema == middleware::bap::activity_message::scriptable_auth::kType3Schema
         && activity::host::request_state_local_objective_reset(
             binding, target, stateLocalRosterGroup, expectedGeneration, reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1612,7 +1766,7 @@ bool request_activity_state_local_task_override(
     std::uint32_t,
     std::uint32_t,
     const activity::host::ScriptableOutputReservation* reservation) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const encrypted::push::activity::EffectiveRegion region =
@@ -1628,7 +1782,6 @@ bool request_activity_state_local_task_override(
         && target.authSchema == middleware::bap::activity_message::scriptable_auth::kType38Schema
         && activity::host::request_state_local_task_override(
             binding, target, stateLocalRosterGroup, expectedGeneration, reservation);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
@@ -1644,7 +1797,7 @@ bool request_activity_squad_override(
     std::uint64_t expectedGeneration,
     const activity::host::ScriptableOutputReservation* reservation,
     std::array<std::int8_t, 4> authoredProfile) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     std::size_t linkCount = 0;
     const Session* const session = unique_activity_link_locked(binding, linkCount);
     const encrypted::push::activity::EffectiveRegion region =
@@ -1664,25 +1817,22 @@ bool request_activity_squad_override(
                                                                   nameHash,
                                                                   reservation,
                                                                   authoredProfile);
-    ReleaseSRWLockExclusive(&g_lock);
     return queued;
 }
 
 /** Cancels one exact typed override revision while excluding activity-link publication. */
 bool cancel_activity_scriptable_override(const state::activity::SessionBinding& binding,
                                          std::uint64_t expectedRevision) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     const bool canceled =
         activity::host::cancel_pending_scriptable_override(binding, expectedRevision);
-    ReleaseSRWLockExclusive(&g_lock);
     return canceled;
 }
 
 /** Cancels a pending raw incident while excluding activity-link publication. */
 bool cancel_activity_host_incident(const state::activity::SessionBinding& binding) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     const bool canceled = server::activity::host::cancel_pending_incident(binding);
-    ReleaseSRWLockExclusive(&g_lock);
     return canceled;
 }
 
@@ -1691,21 +1841,28 @@ bool cancel_activity_host_incident(const state::activity::SessionBinding& bindin
 bool session_channel(std::uint32_t connectionId,
                      std::array<std::byte, state::kBapNonceSize>& sendNonce,
                      std::array<std::byte, state::kAesKeySize>& sessionKey) noexcept {
-    AcquireSRWLockShared(&g_lock);
+    const std::shared_lock lock(g_lock);
     const Session* const session = session_for(connectionId);
     const bool armed = session != nullptr && session->authenticated;
     if (armed) {
         sendNonce = session->sendNonce;
         sessionKey = session->sessionKey;
     }
-    ReleaseSRWLockShared(&g_lock);
     return armed;
 }
 #endif
 
 /** Securely erases every connection-owned nonce and transform buffer. */
 void shutdown() noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
+    while (g_worldRewardCount != 0) {
+        if (!commit_world_reward(g_worldRewards[g_worldRewardHead])) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             "ev=world_reward stage=shutdown result=drop");
+        }
+        pop_world_reward();
+    }
     for (auto& session : g_sessions) {
         if (session.id != 0
             && session.matchmakingContext.generation != state::matchmaking::kInvalidGeneration) {
@@ -1717,9 +1874,10 @@ void shutdown() noexcept {
         }
     }
     SecureZeroMemory(g_sessions.data(), sizeof g_sessions);
+    g_worldRewards = {};
+    g_worldRewardHead = 0;
+    g_worldRewardCount = 0;
     SecureZeroMemory(&g_scratch, sizeof g_scratch);
-    g_accountGeneration = 0;
-    ReleaseSRWLockExclusive(&g_lock);
 }
 
 } // namespace sunrise::server::bap

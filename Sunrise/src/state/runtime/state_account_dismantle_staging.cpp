@@ -500,6 +500,12 @@ apply_dismantle_rewards(const AccountState& before,
         return false;
     }
 
+    // Every survivor must still resolve to the same equipment lane, and how many the removal
+    // shifted is reported so a dismantle that rearranged a bucket stays visible. Their ordering
+    // tokens are deliberately left alone: the serial on an unequipped row is also the Client's
+    // ordering token for its bucket, and a fresh serial moves the item to the first cell. The rows
+    // below a dismantled item shift up only because the array closed the gap; stamping them
+    // reshuffled the bucket on screen. The whole character is republished, so the shift still lands.
     std::size_t movedItemCount = 0;
     for (std::size_t index = 0; index < after.inventory.count; ++index) {
         const std::uint64_t survivorSoid = after.inventory.values[index].instanceSoid;
@@ -513,31 +519,6 @@ apply_dismantle_rewards(const AccountState& before,
             return false;
         }
         movedItemCount += static_cast<std::size_t>(beforeRow != afterRow);
-    }
-
-    // The serial is signed on the wire, so it must stay inside the positive int32 range.
-    constexpr std::uint32_t kMaximumInventorySerial =
-        static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)());
-    if (after.nextInventorySerial > kMaximumInventorySerial
-        || movedItemCount > kMaximumInventorySerial - after.nextInventorySerial) {
-        return false;
-    }
-
-    for (std::size_t index = 0; index < after.inventory.count; ++index) {
-        const std::uint64_t survivorSoid = after.inventory.values[index].instanceSoid;
-        std::uint16_t beforeRow = 0;
-        std::uint16_t afterRow = 0;
-        std::uint8_t beforeSlot = 0;
-        std::uint8_t afterSlot = 0;
-        if (!find_unequipped_row(beforeLoadout, survivorSoid, beforeRow, beforeSlot)
-            || !find_unequipped_row(placedAfter, survivorSoid, afterRow, afterSlot)
-            || beforeSlot != afterSlot) {
-            return false;
-        }
-        if (beforeRow != afterRow) {
-            after.inventory.values[index].mutationSerial =
-                static_cast<std::int32_t>(after.nextInventorySerial++);
-        }
     }
 
     candidate.characters[characterIndex] = after;
@@ -570,10 +551,20 @@ apply_dismantle_rewards(const AccountState& before,
         || dismantledDetail.definitionIndex != dismantledDefinition.definitionIndex
         || dismantledDetail.definitionHash != dismantledDefinition.definitionHash
         || dismantledDetail.bucketId != dismantledDefinition.bucketId
-        || dismantledDetail.instancedDefinitionState
-               != item_details::InstancedDefinitionState::instanced
-        || !dismantledDetail.equipmentSlot.has_value()
-        || static_cast<std::uint8_t>(*dismantledDetail.equipmentSlot) != dismantledSlot) {
+        // A quest step is authored stackable, not instanced - in the pursuit bucket only bounties
+        // and containers set the instanced flag - so it is accepted while the row holds exactly
+        // one. A larger stack stays refused: decrementing one is a different mutation.
+        || (dismantledDetail.instancedDefinitionState
+                != item_details::InstancedDefinitionState::instanced
+            && dismantledItem.quantity != 1)
+        // A pursuit names no equipment slot, because nothing equips it. The loadout resolver stands
+        // such an item at slot zero, so compare against that default rather than demand a slot.
+        // Native slot zero is the subclass slot, which `gear_class_of` maps to no gear class, so a
+        // dismantled pursuit pays out nothing.
+        || (dismantledDetail.equipmentSlot.has_value()
+                ? static_cast<std::uint8_t>(*dismantledDetail.equipmentSlot)
+                : std::uint8_t{0})
+               != dismantledSlot) {
         return false;
     }
 

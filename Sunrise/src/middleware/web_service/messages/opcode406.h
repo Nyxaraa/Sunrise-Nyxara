@@ -19,7 +19,7 @@ struct Request {
 
 /**
  * Parses the exact reflected opcode-406 item-state descriptor.
- * The state value is biased from INT32_MIN, and only the two supported state bits are accepted.
+ * The state value is biased from INT32_MIN, and only the three supported state bits are accepted.
  * Fields are filled as far as the parse reaches, so a refused request still describes itself.
  * @param message Parsed Web Service envelope.
  * @param request Receives the instance, definition row, and unbiased state bits.

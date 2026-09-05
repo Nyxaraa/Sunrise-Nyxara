@@ -15,6 +15,7 @@
 #include "../../../../state/build_data/collectibles/collectible_catalog.h"
 #include "../../../../state/build_data/constants/definition.h"
 #include "../../../../state/build_data/inventory/buckets/definition.h"
+#include "../../../../state/build_data/items/catalysts/definition.h"
 #include "../../../../state/build_data/items/details/definition.h"
 #include "../../../../state/build_data/items/item_catalog.h"
 #include "../../../../state/build_data/material_requirements/material_requirement_catalog.h"
@@ -55,12 +56,26 @@ inline constexpr std::size_t kContainerCandidates = 16;
 /** Lock-owned storage kept off the caller stack, shared by every stage of the pass. */
 struct Storage {
     reader::Scratch scratch{};
+    /** Node rows held until the value slot and owned records are resolved. */
+    std::array<state::build_data::nodes::Definition, state::build_data::nodes::kDefinitionCapacity>
+        nodeRows{};
+    /** Record rows held until the completion flag mapping is resolved. */
+    std::array<state::build_data::records::Definition,
+               state::build_data::records::kDefinitionCapacity>
+        recordRows{};
     std::vector<std::byte> container{};
     std::vector<std::byte> child{};
     std::vector<std::byte> root{};
     std::vector<std::byte> definition{};
     /** Shared reusable/randomized plug-set table read from investment-root slot 51. */
     std::vector<std::byte> plugSetTable{};
+    /** Dense item-indexed catalyst completion expressions for this package pass. */
+    std::vector<state::build_data::items::catalysts::CompletionCondition>
+        catalystCompletionConditions{};
+    /** Dense socket-type-indexed acquired-state gates for this package pass. */
+    std::vector<state::build_data::items::catalysts::AcquisitionGate> catalystAcquisitionGates{};
+    /** Dense native objective completion values used by legacy catalyst progress items. */
+    std::vector<std::int32_t> catalystObjectiveValues{};
     /** Compact 0..3 special plug-category code of every dense installed item row. */
     std::array<std::uint8_t, state::build_data::items::kDefinitionCapacity> specialPlugCategories{};
     /** Inventory routing rows held until the paired bucket-definition table is resolved. */
@@ -117,12 +132,7 @@ struct Storage {
 /** Publishes parsed inventory buckets after applying the extracted item-slot relation. */
 [[nodiscard]] bool publish_buckets(Storage& storage) noexcept;
 
-/**
- * Adds one definition index to the deduplicated requested set.
- * @param definitionIndex Native
- * item index.
- * @param requested Requested-set storage.
- */
+/** Adds one native definition index to the deduplicated request set. */
 void request(std::uint16_t definitionIndex, DetailRequests& requested) noexcept;
 
 /**
@@ -236,18 +246,23 @@ read_investment_constants(const reader::Source& source,
     std::array<std::uint8_t, state::build_data::socket_entry_lists::kEntryCapacity>&
         output) noexcept;
 
-/**
- * Reads the progression definition table and the object array each definition routes to.
- * The table is inline rows, not index rows. The scope byte in a row picks the replicated object
- * holding that progression, and the row's place among rows of that scope is its slot there.
- * @param source Package source.
- * @param scratch Reader scratch.
- * @param root Investment root bytes.
- * @param blob Scratch storage for the table.
- * @param output Row storage in native definition order.
- * @param count Receives the number of rows read.
- * @return True when the table reads and every row fits.
- */
+/** Reads nodes and resolves their value slots and owned records. */
+[[nodiscard]] bool build_nodes(const reader::Source& source,
+                               reader::Scratch& scratch,
+                               std::span<const std::byte> root,
+                               std::vector<std::byte>& blob,
+                               std::span<state::build_data::nodes::Definition> output,
+                               std::size_t& count) noexcept;
+
+/** Reads records and resolves their completion-flag indices. */
+[[nodiscard]] bool build_records(const reader::Source& source,
+                                 reader::Scratch& scratch,
+                                 std::span<const std::byte> root,
+                                 std::vector<std::byte>& blob,
+                                 std::span<state::build_data::records::Definition> output,
+                                 std::size_t& count) noexcept;
+
+/** Reads progression definitions and resolves their replicated-object slots. */
 [[nodiscard]] bool build_progressions(const reader::Source& source,
                                       reader::Scratch& scratch,
                                       std::span<const std::byte> root,
@@ -308,6 +323,14 @@ void report_socket_plug_count(std::size_t rules,
                               std::size_t members,
                               std::size_t skipped) noexcept;
 
+/**
+ * Reports released, placeholder, and unsupported catalyst catalog counts.
+ * @param report Complete catalog report from the build pass.
+ * @param built True when all released catalyst relations were safe.
+ */
+void report_catalyst_catalog(const state::build_data::items::catalysts::Report& report,
+                             bool built) noexcept;
+
 /** Reports the validated installed bucket/equipment-slot coverage. */
 void report_bucket_equipment_mapping(std::size_t mappedSlots) noexcept;
 
@@ -345,14 +368,7 @@ void report(std::size_t published, const char* reason) noexcept;
                                             Storage& storage,
                                             std::span<const std::byte> root) noexcept;
 
-/**
- * Reads and publishes the root's dense collectible-to-item mapping table.
- * @param source Package source.
- * @param storage Pass storage, including scratch bytes and bounded row storage.
- * @param root Investment root bytes.
- * @param itemDefinitionCount Number of rows in the installed item index table.
- * @return True when every tag, class, bound, and item link validates and publishes.
- */
+/** Reads and publishes the dense collectible-to-item mapping. */
 [[nodiscard]] bool build_collectibles(const reader::Source& source,
                                       Storage& storage,
                                       std::span<const std::byte> root,

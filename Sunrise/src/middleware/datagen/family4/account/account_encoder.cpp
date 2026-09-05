@@ -1,10 +1,17 @@
 #include "account_encoder.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <limits>
+#include <optional>
+#include <span>
 
+#include "../../../../state/build_data/nodes/node_catalog.h"
 #include "../../../../state/build_data/runtime.h"
+#include "../../../../state/progression/season_pass_reward_catalog.h"
+#include "../../../../state/progression/seasonal_experience.h"
+#include "../../../../state/record_claims/record_claims.h"
 #include "../../../../state/unlocks/unlocks_runtime.h"
 #include "../progression/progression_bank_keys.h"
 #include "layout.h"
@@ -12,6 +19,8 @@
 
 namespace sunrise::middleware::datagen::family4::account {
 namespace {
+
+namespace seasonal = state::progression::seasonal_experience;
 
 /** Every bit set is the native empty biased 16-bit definition index. */
 constexpr std::uint16_t kEmptyDefinitionIndex = (std::numeric_limits<std::uint16_t>::max)();
@@ -23,20 +32,10 @@ constexpr std::byte kSeenMessageByte{0xFF};
 /** A native inventory bucket id is 1 byte, so this covers every bucket. */
 constexpr std::size_t kBucketIdentityCapacity = 256;
 
-/**
- * Places one authored profile item in the slot run its inventory bucket owns.
- * The slot is not authored: the bucket descriptor names the first slot of its run, and items
- * sharing a bucket take consecutive slots in configuration order.
- * @param item Authored account-wide item.
- * @param taken Slots already claimed inside each bucket, indexed by bucket id.
- * @param rows Profile inventory rows.
- * @return True when the item resolves to a free profile slot.
- */
+/** Places one profile item in the next free row of its inventory bucket. */
 [[nodiscard]] bool place_profile_item(const state::account::inventory::ProfileItem& item,
                                       std::array<std::uint16_t, kBucketIdentityCapacity>& taken,
                                       std::span<inventory::layout::Entry> rows) noexcept {
-    // The dense item table already carries the bucket, so a profile item needs no detail record.
-    // Only equipped items and their plugs have one.
     state::build_data::items::Definition definition{};
     state::build_data::items::details::Definition detail{};
     state::build_data::inventory::buckets::Descriptor bucket{};
@@ -76,7 +75,10 @@ constexpr std::size_t kBucketIdentityCapacity = 256;
 } // namespace
 
 /** Encodes a sentinel-correct account object from authored State. */
-bool encode(const state::AccountState& state, std::span<std::byte> output) noexcept {
+bool encode(const state::AccountState& state,
+            std::span<std::byte> output,
+            std::optional<std::uint16_t> pendingSeasonReward,
+            const state::record_claims::PendingClaim* pendingRecordClaim) noexcept {
     if (state.primarySoid == 0 || !state::account::valid(state)
         || output.size() < layout::kMinimumSize) {
         return false;
@@ -85,16 +87,37 @@ bool encode(const state::AccountState& state, std::span<std::byte> output) noexc
     layout::Object object{};
     object.accountSoid = state.primarySoid;
     object.selectedCharacterSoid = state::account::selected_character_soid(state);
+    object.profileSetupCompleted = state.profileSetupCompleted ? 1U : 0U;
     if (!roster::initialize(state, object.roster)
         || !preferences::encode(state.settings, object.preferences, object.bindings)) {
         return false;
     }
 
-    // Acquired flags and objective progress are authored policy, published once per process.
     const state::unlocks::Table& unlocks = state::unlocks::get();
     object.acquiredFlags = unlocks.accountFlags;
     object.profileUnlockFlags = unlocks.profileFlags;
     object.objectiveValues = unlocks.objectiveValues;
+    if (!state::build_data::complete_exotic_catalyst_objectives(object.objectiveValues)) {
+        return false;
+    }
+    // Season claims map to account flags; pending claims overlay the same response.
+    if (!seasonal::apply_reward_claims(object.acquiredFlags)) {
+        return false;
+    }
+    if (pendingSeasonReward.has_value()) {
+        const std::size_t flag =
+            state::progression::season_pass::claim_account_flag_index(*pendingSeasonReward);
+        if (state::progression::season_pass::find(*pendingSeasonReward) == nullptr
+            || flag >= object.acquiredFlags.size()) {
+            return false;
+        }
+        object.acquiredFlags[flag] = state::unlocks::kFlagSet;
+    }
+    state::record_claims::apply_account_projection(
+        object.acquiredFlags, object.objectiveValues, pendingRecordClaim);
+    // Value-gated categories run last so their sentinel cannot replace real progress.
+    (void)state::build_data::nodes::apply_category_gates(object.objectiveValues);
+
     for (layout::CharacterUnlockBlock& block : object.characterUnlocks) {
         block.flags = unlocks.characterFlags;
     }
@@ -110,6 +133,26 @@ bool encode(const state::AccountState& state, std::span<std::byte> output) noexc
                                object.progressions)) {
         return false;
     }
+    const std::int32_t earnedExperience = seasonal::earned();
+    for (std::size_t slot = 0; slot < object.progressions.size(); ++slot) {
+        progression::layout::Entry& entry = object.progressions[slot];
+        std::int32_t projectedExperience = earnedExperience;
+        if (entry.definitionIndex == state::progression::season_pass::kProgressionDefinitionIndex) {
+            projectedExperience = (std::min)(earnedExperience, seasonal::kMaximumPassExperience);
+        } else if (entry.definitionIndex
+                   == state::progression::season_pass::kHudProgressionDefinitionIndex) {
+            projectedExperience =
+                earnedExperience < seasonal::kMaximumPassExperience
+                    ? earnedExperience % seasonal::kExperiencePerRank
+                    : earnedExperience - seasonal::kMaximumPassExperience;
+        } else if (entry.definitionIndex
+                       != seasonal::kArtifactPowerProgressionDefinitionIndex
+                   && entry.definitionIndex
+                          != seasonal::kArtifactUnlockProgressionDefinitionIndex) {
+            continue;
+        }
+        entry.values[0] = (std::max)(entry.values[0], projectedExperience);
+    }
     // Profile rows are sentinelled above, so placement only has to claim its own slots.
     std::array<std::uint16_t, kBucketIdentityCapacity> takenSlots{};
     for (std::size_t index = 0; index < state.profileItemCount; ++index) {
@@ -119,8 +162,7 @@ bool encode(const state::AccountState& state, std::span<std::byte> output) noexc
     }
     object.profileItemCount = static_cast<std::uint32_t>(state.profileItemCount);
 
-    // Commit only after every fallible conversion succeeds so callers never receive a partial
-    // account object.
+    // Publish only after every fallible conversion succeeds.
     std::fill(output.begin(), output.end(), std::byte{});
     std::memcpy(output.data(), &object, sizeof object);
     return true;

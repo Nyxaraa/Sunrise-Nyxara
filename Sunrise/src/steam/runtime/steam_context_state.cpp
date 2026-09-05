@@ -5,8 +5,10 @@
 #include <atomic>
 #include <cstddef>
 #include <cstring>
+#include <mutex>
 
 #include "../interfaces/steam_interface_factory.h"
+#include "core/threading/srw_lock.h"
 #include "internal.h"
 #include "runtime.h"
 
@@ -32,7 +34,7 @@ enum class ContextField : std::size_t {
     interface = 2,   // Cached context interface pointer.
 };
 
-SRWLOCK g_contextLock{SRWLOCK_INIT};
+core::threading::SrwLock g_contextLock;
 std::atomic_uintptr_t g_contextGeneration{kFirstContextGeneration};
 std::atomic<DWORD> g_appId{};
 std::atomic<ApiCall> g_nextApiCall{kFirstApiCall};
@@ -77,7 +79,7 @@ void* context_init(void* data) noexcept {
     std::uintptr_t storedGeneration{};
     std::memcpy(&storedGeneration, &fields[generationIndex], sizeof(storedGeneration));
 
-    AcquireSRWLockExclusive(&g_contextLock);
+    const std::lock_guard lock(g_contextLock);
     if (storedGeneration != generation) {
         fields[interfaceIndex] = nullptr;
         const auto initializer = reinterpret_cast<void (*)(void*)>(fields[initializerIndex]);
@@ -88,7 +90,6 @@ void* context_init(void* data) noexcept {
         std::memcpy(&fields[generationIndex], &generation, sizeof(generation));
     }
     void* result = &fields[interfaceIndex];
-    ReleaseSRWLockExclusive(&g_contextLock);
     return result;
 }
 

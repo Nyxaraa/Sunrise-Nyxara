@@ -3,107 +3,68 @@
 namespace sunrise::server::bap::encrypted::routing {
 
 /**
- * Maps an authenticated request service to its response codec and metadata.
+ * Maps an authenticated request service to its response codec.
  * @param request Numeric request service from the decrypted inner header.
- * @param route Gets the response and structured-log metadata.
+ * @param route Gets the response contract.
  * @return True when the encrypted service is implemented.
  */
 bool resolve(std::uint16_t request, ServiceRoute& route) noexcept {
-    switch (static_cast<middleware::bap::RequestService>(request)) {
-    case middleware::bap::RequestService::activityHostManager:
+    using Request = middleware::bap::RequestService;
+    using Response = middleware::bap::ResponseService;
+    switch (static_cast<Request>(request)) {
+    case Request::activityHostManager:
         route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::activityHostManager,
-                 BodyCodec::activityHostManagerResponse,
-                 "ev=bap svc=6 rsp=7 result=ok"};
+                 Response::activityHostManager,
+                 BodyCodec::activityHostManagerResponse};
         return true;
-    case middleware::bap::RequestService::activityMessage:
-        route = {ResponseMode::uncorrelatedPush,
-                 {},
-                 BodyCodec::activityMessageRequest,
-                 "ev=bap svc=8 rsp=none result=ok"};
+    case Request::activityMessage:
+        route = {ResponseMode::uncorrelatedPush, {}, BodyCodec::activityMessageRequest};
         return true;
-    case middleware::bap::RequestService::webService:
+    case Request::webService:
+        route = {ResponseMode::reply, Response::webService, BodyCodec::webService};
+        return true;
+    case Request::webServiceServer:
+        route = {ResponseMode::reply, Response::webServiceServer, BodyCodec::webService};
+        return true;
+    case Request::notification29:
+        route = {ResponseMode::none, {}, BodyCodec::empty};
+        return true;
+    case Request::subscribeFamily:
+        route = {ResponseMode::reply, Response::subscribeFamily, BodyCodec::familySubscription};
+        return true;
+    case Request::unsubscribeFamily:
+        route = {ResponseMode::reply, Response::unsubscribeFamily, BodyCodec::familyUnsubscription};
+        return true;
+    case Request::activityHost:
+        route = {ResponseMode::reply, Response::activityHost, BodyCodec::activityHostResponse};
+        return true;
+    case Request::clientConfig:
+        route = {ResponseMode::reply, Response::clientConfig, BodyCodec::clientConfigResponse};
+        return true;
+    case Request::purchasedOffers:
+        route = {ResponseMode::reply, Response::purchasedOffers, BodyCodec::empty};
+        return true;
+    case Request::accountTranslation:
         route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::webService,
-                 BodyCodec::webService,
-                 "ev=bap svc=10 rsp=11 result=ok"};
-        return true;
-    case middleware::bap::RequestService::webServiceServer:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::webServiceServer,
-                 BodyCodec::webService,
-                 "ev=bap svc=110 rsp=112 result=ok"};
-        return true;
-    case middleware::bap::RequestService::notification29:
-        route = {ResponseMode::none, {}, BodyCodec::empty, "ev=bap svc=29 rsp=none result=ok"};
-        return true;
-    case middleware::bap::RequestService::subscribeFamily:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::subscribeFamily,
-                 BodyCodec::familySubscription,
-                 "ev=bap svc=12 rsp=13 result=ok"};
-        return true;
-    case middleware::bap::RequestService::unsubscribeFamily:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::unsubscribeFamily,
-                 BodyCodec::familyUnsubscription,
-                 "ev=bap svc=14 rsp=15 result=ok"};
-        return true;
-    case middleware::bap::RequestService::activityHost:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::activityHost,
-                 BodyCodec::activityHostResponse,
-                 "ev=bap svc=16 rsp=17 result=ok"};
-        return true;
-    case middleware::bap::RequestService::clientConfig:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::clientConfig,
-                 BodyCodec::clientConfigResponse,
-                 "ev=bap svc=18 rsp=19 result=ok"};
-        return true;
-    case middleware::bap::RequestService::purchasedOffers:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::purchasedOffers,
-                 BodyCodec::empty,
-                 "ev=bap svc=21 rsp=22 result=ok"};
-        return true;
-    case middleware::bap::RequestService::accountTranslation:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::accountTranslation,
-                 BodyCodec::accountTranslationResponse,
-                 "ev=bap svc=23 rsp=24 result=ok"};
+                 Response::accountTranslation,
+                 BodyCodec::accountTranslationResponse};
         return true;
     // These five need a reply: each holds the head of the Client's pending queue until one comes.
     // Every field of their response bodies is optional, so an empty body is valid.
-    case middleware::bap::RequestService::skill:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::skill,
-                 BodyCodec::empty,
-                 "ev=bap svc=34 rsp=35 result=ok"};
+    case Request::skill:
+        route = {ResponseMode::reply, Response::skill, BodyCodec::empty};
         return true;
-    case middleware::bap::RequestService::request36:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::response37,
-                 BodyCodec::empty,
-                 "ev=bap svc=36 rsp=37 result=ok"};
+    case Request::request36:
+        route = {ResponseMode::reply, Response::response37, BodyCodec::empty};
         return true;
-    case middleware::bap::RequestService::request38:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::response39,
-                 BodyCodec::empty,
-                 "ev=bap svc=38 rsp=39 result=ok"};
+    case Request::request38:
+        route = {ResponseMode::reply, Response::response39, BodyCodec::empty};
         return true;
-    case middleware::bap::RequestService::request40:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::response41,
-                 BodyCodec::empty,
-                 "ev=bap svc=40 rsp=41 result=ok"};
+    case Request::request40:
+        route = {ResponseMode::reply, Response::response41, BodyCodec::empty};
         return true;
-    case middleware::bap::RequestService::request48:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::response49,
-                 BodyCodec::empty,
-                 "ev=bap svc=48 rsp=49 result=ok"};
+    case Request::request48:
+        route = {ResponseMode::reply, Response::response49, BodyCodec::empty};
         return true;
     case middleware::bap::RequestService::request50:
         route = {ResponseMode::reply,
@@ -117,56 +78,34 @@ bool resolve(std::uint16_t request, ServiceRoute& route) noexcept {
                  BodyCodec::matchmakingResponse,
                  "ev=bap svc=42 rsp=43 result=ok"};
         return true;
-    case middleware::bap::RequestService::clan:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::clan,
-                 BodyCodec::empty,
-                 "ev=bap svc=44 rsp=45 result=ok"};
+    case Request::clan:
+        route = {ResponseMode::reply, Response::clan, BodyCodec::empty};
         return true;
-    case middleware::bap::RequestService::registerSubscriber:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::registerSubscriber,
-                 BodyCodec::empty,
-                 "ev=bap svc=121 rsp=122 result=ok"};
+    case Request::registerSubscriber:
+        route = {ResponseMode::reply, Response::registerSubscriber, BodyCodec::empty};
         return true;
-    case middleware::bap::RequestService::notification171:
-        route = {ResponseMode::none, {}, BodyCodec::empty, "ev=bap svc=171 rsp=none result=ok"};
+    case Request::notification171:
+        route = {ResponseMode::none, {}, BodyCodec::empty};
         return true;
-    case middleware::bap::RequestService::echo:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::echo,
-                 BodyCodec::empty,
-                 "ev=bap svc=250 rsp=251 result=ok"};
+    case Request::echo:
+        route = {ResponseMode::reply, Response::echo, BodyCodec::empty};
         return true;
-    case middleware::bap::RequestService::registerRelayClient:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::registerRelayClient,
-                 BodyCodec::empty,
-                 "ev=bap svc=302 rsp=303 result=ok"};
+    case Request::registerRelayClient:
+        route = {ResponseMode::reply, Response::registerRelayClient, BodyCodec::empty};
         return true;
-    case middleware::bap::RequestService::signSteamCertificate:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::signSteamCertificate,
-                 BodyCodec::steamCertificate,
-                 "ev=bap svc=304 rsp=305 result=ok"};
+    case Request::signSteamCertificate:
+        route = {ResponseMode::reply, Response::signSteamCertificate, BodyCodec::steamCertificate};
         return true;
-    case middleware::bap::RequestService::accountFromMembership:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::accountFromMembership,
-                 BodyCodec::empty,
-                 "ev=bap svc=306 rsp=307 result=ok"};
+    case Request::accountFromMembership:
+        route = {ResponseMode::reply, Response::accountFromMembership, BodyCodec::empty};
         return true;
-    case middleware::bap::RequestService::userMessage:
-        route = {ResponseMode::reply,
-                 middleware::bap::ResponseService::userMessage,
-                 BodyCodec::userMessageResponse,
-                 "ev=bap svc=32 rsp=33 result=ok"};
+    case Request::userMessage:
+        route = {ResponseMode::reply, Response::userMessage, BodyCodec::userMessageResponse};
         return true;
     default:
         // Unknown services stay quiet. Failing the send would drop the whole BAP link.
         // Quiet is only safe when the service has no response id. A request needs a case above.
-        route = {
-            ResponseMode::none, {}, BodyCodec::empty, "ev=bap svc=unhandled rsp=none result=ok"};
+        route = {ResponseMode::none, {}, BodyCodec::empty};
         return true;
     }
 }

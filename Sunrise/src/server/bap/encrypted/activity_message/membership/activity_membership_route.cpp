@@ -76,33 +76,6 @@ make_identity(const service::client_identity::ClientIdentity& parsed) noexcept {
     return update;
 }
 
-/**
- * Reports one client identity update.
- * Without it, a run where the client sent its own identity looks the same as one where message 12
- * shipped the seeded fallback all the way.
- * @param parsed Typed identity the client sent.
- */
-void report_identity(const service::client_identity::ClientIdentity& parsed) noexcept {
-    std::array<char, core::log::kLineCapacity> line{};
-    const int written =
-        std::snprintf(line.data(),
-                      line.size(),
-                      "ev=activity stage=identity result=ok key=0x%llX field1=%d field2=%d "
-                      "field3=0x%llX acct=0x%llX character=0x%llX field6=0x%llX",
-                      static_cast<unsigned long long>(parsed.memberKey),
-                      static_cast<int>(parsed.field1),
-                      static_cast<int>(parsed.field2),
-                      static_cast<unsigned long long>(parsed.field3),
-                      static_cast<unsigned long long>(parsed.accountSoid),
-                      static_cast<unsigned long long>(parsed.field5),
-                      static_cast<unsigned long long>(parsed.field6));
-    if (written > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::info,
-                         {line.data(), static_cast<std::size_t>(written)});
-    }
-}
-
 } // namespace
 
 /** Stages every accepted identity with its exact reflected membership snapshot. */
@@ -111,7 +84,6 @@ bool prepare_identity(const service::Request& request, ActivityPlan& plan) noexc
     if (!service::client_identity::parse_client_identity(request.payload, parsed)) {
         return false;
     }
-    report_identity(parsed);
     if (!membership_state::prepare_identity(
             request.sessionId, make_identity(parsed), plan.membershipMutation)) {
         core::log::write(core::log::Channel::server,
@@ -207,21 +179,19 @@ bool prepare_start_activity(const service::Request& request, ActivityPlan& plan)
     const bool routed =
         parsed.destinationActivityIndex >= 0
         && parsed.destinationActivityIndex <= state::activity::destination::kMaximumActivityIndex;
-    std::array<char, core::log::kLineCapacity> line{};
-    const int written = std::snprintf(line.data(),
-                                      line.size(),
-                                      "ev=activity stage=start_activity result=%s from=%d to=%d "
-                                      "tail=%u",
-                                      routed ? "accepted" : "out_of_range",
-                                      parsed.sourceActivityIndex,
-                                      parsed.destinationActivityIndex,
-                                      parsed.tailBits);
-    if (written > 0) {
-        core::log::write(core::log::Channel::server,
-                         routed ? core::log::Level::info : core::log::Level::warn,
-                         {line.data(), static_cast<std::size_t>(written)});
-    }
     if (!routed) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int written =
+            std::snprintf(line.data(),
+                          line.size(),
+                          "ev=activity stage=start_activity result=out_of_range from=%d to=%d",
+                          parsed.sourceActivityIndex,
+                          parsed.destinationActivityIndex);
+        if (written > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             {line.data(), static_cast<std::size_t>(written)});
+        }
         return false;
     }
     // The request carries no revision or bubble of its own. So the refresh guard is built from

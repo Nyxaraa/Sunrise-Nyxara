@@ -3,13 +3,35 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string_view>
+#include <type_traits>
 
 #include "../../middleware/datagen/family4/loadout/loadout_resolver.h"
 #include "../build_data/runtime.h"
 #include "runtime.h"
 
 namespace sunrise::state::runtime::detail {
+
+/** Clears a consumed mutation on every commit exit without copying its full snapshot. */
+template <typename Pending> class PendingConsumption final {
+public:
+    static_assert(std::is_nothrow_default_constructible_v<Pending>);
+    static_assert(std::is_nothrow_destructible_v<Pending>);
+
+    explicit PendingConsumption(Pending& pending) noexcept : pending_(pending) {}
+    PendingConsumption(const PendingConsumption&) = delete;
+    PendingConsumption(PendingConsumption&&) = delete;
+    PendingConsumption& operator=(const PendingConsumption&) = delete;
+    PendingConsumption& operator=(PendingConsumption&&) = delete;
+    ~PendingConsumption() noexcept {
+        std::destroy_at(std::addressof(pending_));
+        std::construct_at(std::addressof(pending_));
+    }
+
+private:
+    Pending& pending_;
+};
 
 struct ResolvedPosition {
     std::uint16_t inventoryRow{};
@@ -24,40 +46,6 @@ struct CharacterItemLocation {
     bool equipped{};
 };
 
-void report_equipment(std::string_view stage,
-                      std::string_view result,
-                      EquipmentMutationKind kind,
-                      std::uint64_t characterSoid,
-                      std::uint64_t previousSoid,
-                      std::uint64_t requestedSoid,
-                      std::size_t equipmentIndex,
-                      std::size_t inventoryIndex,
-                      std::uint8_t nativeSlot,
-                      std::size_t movedItemCount,
-                      std::uint32_t previousHash,
-                      std::uint32_t requestedHash) noexcept;
-void report_acquisition(std::string_view stage,
-                        std::string_view result,
-                        std::string_view reason,
-                        std::uint32_t definitionHash,
-                        std::uint64_t characterSoid,
-                        std::uint64_t instanceSoid,
-                        std::size_t inventoryIndex,
-                        std::uint16_t inventoryRow,
-                        std::uint8_t equipmentSlot,
-                        std::uint32_t nextInventorySerial) noexcept;
-void report_profile_acquisition(std::string_view stage,
-                                std::string_view result,
-                                std::string_view reason,
-                                std::uint32_t definitionHash,
-                                std::uint64_t accountSoid,
-                                std::uint64_t instanceSoid,
-                                std::uint8_t bucketId,
-                                std::size_t profileIndex,
-                                std::size_t itemCount,
-                                std::int32_t previousQuantity,
-                                std::int32_t acquiredQuantity,
-                                bool appended) noexcept;
 void report_dismantle(std::string_view stage,
                       std::string_view result,
                       std::string_view reason,
@@ -159,12 +147,8 @@ find_resolved_position(const middleware::datagen::family4::loadout::ResolvedLoad
                                            std::uint64_t& output) noexcept;
 [[nodiscard]] bool next_profile_item_instance_soid(const AccountState& account,
                                                    std::uint64_t& output) noexcept;
+[[nodiscard]] bool account_owns_soid(const AccountState& account, std::uint64_t soid) noexcept;
 [[nodiscard]] std::int32_t acquisition_level(const CharacterState& character) noexcept;
-[[nodiscard]] bool
-find_acquired_row(const middleware::datagen::family4::loadout::ResolvedLoadout& loadout,
-                  std::uint64_t instanceSoid,
-                  std::uint16_t& inventoryRow,
-                  std::uint8_t& equipmentSlot) noexcept;
 [[nodiscard]] bool stage_item_dismantle(const AccountState& account,
                                         std::size_t characterIndex,
                                         std::uint64_t instanceSoid,
@@ -196,8 +180,6 @@ apply_action_materials(const AccountState& before,
 character_item_at(const CharacterState& character, const CharacterItemLocation& location) noexcept;
 [[nodiscard]] account::inventory::Item*
 character_item_at(CharacterState& character, const CharacterItemLocation& location) noexcept;
-[[nodiscard]] std::uint32_t character_item_definition_hash(const CharacterState& character,
-                                                           std::uint64_t instanceSoid) noexcept;
 [[nodiscard]] bool
 find_unequipped_row(const middleware::datagen::family4::loadout::ResolvedLoadout& loadout,
                     std::uint64_t instanceSoid,

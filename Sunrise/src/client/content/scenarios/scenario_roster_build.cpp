@@ -107,7 +107,7 @@ void note_candidate(Walk& walk,
                 return false;
             }
             std::uint16_t group = kNotARosterGroup;
-            if (!resolve_object(source, scratch, storage, objectTag, group)) {
+            if (!resolve_object(source, scratch, storage, objectTag, sliceSetIndex, group)) {
                 return false;
             }
             if (group == kNotARosterGroup) {
@@ -197,6 +197,7 @@ bool build_rosters(const reader::Source& source,
         }
         layouts::Definition& row = rows[storage.cursor];
         ++storage.cursor;
+        storage.destinationTag = row.tag;
         row.rosterGroupCount = 0;
         row.rosterGroups = {};
         row.bubbleGroupCount = 0;

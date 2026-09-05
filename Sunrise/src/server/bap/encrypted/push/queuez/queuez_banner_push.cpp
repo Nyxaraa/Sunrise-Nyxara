@@ -1,5 +1,6 @@
 #include <array>
 #include <cstdio>
+#include <limits>
 #include <span>
 
 #include "../../../../../core/logging/log.h"
@@ -10,7 +11,6 @@
 #include "../../../../../state/runtime/runtime.h"
 #include "../../queuez/queuez_state_validation.h"
 #include "../snapshot/snapshot.h"
-#include "queuez_push_reporting.h"
 #include "queuez_update_frame.h"
 
 namespace sunrise::server::bap::encrypted::push {
@@ -56,13 +56,12 @@ void report_fail(const char* stage, const char* reason) noexcept {
 [[nodiscard]] bool append_appearance_frame(Scratch& scratch,
                                            const queuez::CharacterAppearanceRefresh& refresh,
                                            snapshot::Prepared& prepared,
-                                           const char* stage,
+                                           [[maybe_unused]] const char* stage,
                                            std::span<const std::byte, state::kAesKeySize> key,
                                            std::array<std::byte, state::kBapNonceSize>& nonce,
                                            std::span<std::byte> response,
                                            std::size_t& written) noexcept {
     const std::size_t objectCount = prepared.family.objects.size();
-    const std::size_t beforeBytes = written;
     const bool replacement =
         objectCount >= 2
         && prepared.family.objects.front().id == middleware::datagen::kBannerCharacterObjectId
@@ -74,8 +73,10 @@ void report_fail(const char* stage, const char* reason) noexcept {
         || prepared.family.type != queuez::kBannerFamilyType
         || prepared.family.rootSoid != refresh.after.family4RootSoid
         || prepared.family.version != refresh.after.family0Version || prepared.family.flags != 0
+        // The replacement begins with upstream's codec-free delete, not a raw upsert.
+        // Rejecting that marker drops the entire appearance refresh (including titles).
         || (replacement
-            && prepared.family.objects.front().encoding != middleware::queuez::Encoding::raw)
+            && prepared.family.objects.front().encoding != middleware::queuez::Encoding::none)
         || prepared.family.objects[characterIndex].id
                != middleware::datagen::kBannerCharacterObjectId
         || prepared.family.objects[characterIndex].version != refresh.characterSoid
@@ -97,7 +98,6 @@ void report_fail(const char* stage, const char* reason) noexcept {
         return false;
     }
     middleware::secure_channel::advance_nonce(nonce);
-    queuez_report::push(stage, queuez::kBannerFamilyType, objectCount, written - beforeBytes, 1);
     return true;
 }
 
@@ -106,14 +106,13 @@ void report_fail(const char* stage, const char* reason) noexcept {
 append_roster_appearance_frame(Scratch& scratch,
                                const queuez::RosterAppearanceRefresh& refresh,
                                snapshot::Prepared& prepared,
-                               const char* stage,
+                               [[maybe_unused]] const char* stage,
                                std::span<const std::byte, state::kAesKeySize> key,
                                std::array<std::byte, state::kBapNonceSize>& nonce,
                                std::span<std::byte> response,
                                std::size_t& written) noexcept {
     const std::size_t expectedObjects = refresh.includeRoster ? 2U : 1U;
     const std::size_t objectCount = prepared.family.objects.size();
-    const std::size_t beforeBytes = written;
     if (objectCount != expectedObjects || prepared.family.type != queuez::kRosterFamilyType
         || prepared.family.rootSoid != refresh.after.family3RootSoid
         || prepared.family.version != refresh.after.family3Version || prepared.family.flags != 0
@@ -137,7 +136,6 @@ append_roster_appearance_frame(Scratch& scratch,
         return false;
     }
     middleware::secure_channel::advance_nonce(nonce);
-    queuez_report::push(stage, queuez::kRosterFamilyType, objectCount, written - beforeBytes, 1);
     return true;
 }
 
@@ -164,13 +162,13 @@ bool append_banner_notification(Scratch& scratch,
                                 std::size_t& written,
                                 queuez::SessionState& after) noexcept {
     after = before;
+    // Before the account is read, so this pair cannot describe a different account than the
+    // family-three roster or the family-four manifest.
+    ensure_account_canonical();
     // The pair names the first character when none is picked yet. The client's family-zero record
     // accepts a snapshot for about ten seconds, then clears the family and refuses every later
     // one, so holding the pair for the pick spends that window and the subscription times out.
     if (state::account::banner_character_soid(state::account_snapshot()) == 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::info,
-                         "ev=queuez stage=banner result=skip reason=nocharacter");
         return false;
     }
     snapshot::Prepared prepared{};
@@ -182,8 +180,6 @@ bool append_banner_notification(Scratch& scratch,
                          "ev=queuez stage=banner result=fail reason=prepare");
         return false;
     }
-    const std::size_t objectCount = prepared.family.objects.size();
-    const std::size_t beforeBytes = written;
     if (!queuez_frame::append(scratch,
                               prepared.family,
                               prepared.rawClearSize,
@@ -207,11 +203,6 @@ bool append_banner_notification(Scratch& scratch,
         after.family0Character = delivered;
         after.family0Version = queuez::kInitialFamilyVersion;
     }
-    queuez_report::push("banner",
-                        prepared.family.type,
-                        objectCount,
-                        written - beforeBytes,
-                        queuez_report::kNoRecordOutcome);
     return true;
 }
 
@@ -240,6 +231,7 @@ bool append_banner_move_notification(Scratch& scratch,
     bool publish = false;
     bool incremental = false;
     after = before;
+    ensure_account_canonical();
     // A family zero with no first delivery yet has no ladder to move, and no root to name it with.
     const char* reason = nullptr;
     if (!queuez::stage_family0_subscription(
@@ -258,6 +250,11 @@ bool append_banner_move_notification(Scratch& scratch,
     // because deleting the key the same frame re-adds tears the family down.
     const bool republish = !publish;
     if (republish) {
+        if (before.family0Version == (std::numeric_limits<std::int32_t>::max)()) {
+            report_skip("version_exhausted");
+            after = before;
+            return false;
+        }
         incremental = false;
         after.family0Version = before.family0Version + 1;
     }
@@ -274,8 +271,6 @@ bool append_banner_move_notification(Scratch& scratch,
         after = before;
         return false;
     }
-    const std::size_t objectCount = prepared.family.objects.size();
-    const std::size_t beforeBytes = written;
     if (!queuez_frame::append(scratch,
                               prepared.family,
                               prepared.rawClearSize,
@@ -289,11 +284,6 @@ bool append_banner_move_notification(Scratch& scratch,
         return false;
     }
     middleware::secure_channel::advance_nonce(nonce);
-    queuez_report::push(stage,
-                        prepared.family.type,
-                        objectCount,
-                        written - beforeBytes,
-                        queuez_report::kNoRecordOutcome);
     return true;
 }
 
@@ -344,24 +334,25 @@ bool append_socket_appearance_refresh_notification(
         return false;
     }
     state::build_data::items::details::Definition detail{};
+    std::uint8_t nativeEquipmentSlot = 0;
     if (!state::build_data::find_configured_item_detail(mutation.targetDefinitionIndex, detail)
         || detail.definitionIndex != mutation.targetDefinitionIndex
         || detail.definitionHash != mutation.targetDefinitionHash
-        || detail.bucketId != mutation.targetBucketId || !detail.equipmentSlot.has_value()
-        || *detail.equipmentSlot < 0
-        || static_cast<std::size_t>(*detail.equipmentSlot)
+        || detail.bucketId != mutation.targetBucketId
+        || !state::account::inventory::resolve_native_equipment_slot(
+            mutation.targetDefinitionHash, detail.equipmentSlot, nativeEquipmentSlot)
+        || static_cast<std::size_t>(nativeEquipmentSlot)
                >= state::build_data::items::details::kEquipmentSlotCount) {
         return false;
     }
     snapshot::Prepared prepared{};
-    if (!snapshot::prepare_character_appearance_refresh(
-            scratch,
-            refresh,
-            mutation.afterCharacter,
-            mutation.characterIndex,
-            static_cast<std::uint8_t>(*detail.equipmentSlot),
-            true,
-            prepared)) {
+    if (!snapshot::prepare_character_appearance_refresh(scratch,
+                                                        refresh,
+                                                        mutation.afterCharacter,
+                                                        mutation.characterIndex,
+                                                        nativeEquipmentSlot,
+                                                        true,
+                                                        prepared)) {
         return false;
     }
     return append_appearance_frame(
@@ -381,10 +372,11 @@ bool append_subclass_appearance_refresh_notification(
     constexpr std::size_t kSubclassSlot =
         static_cast<std::size_t>(state::account::inventory::EquipmentSlot::subclass);
     if (!mutation.prepared || mutation.characterSoid != refresh.characterSoid
-        || kSubclassSlot >= mutation.afterCharacter.equipment.slots.size()
-        || !mutation.afterCharacter.equipment.slots[kSubclassSlot].has_value()
-        || mutation.afterCharacter.equipment.slots[kSubclassSlot]->instanceSoid
-               != mutation.subclassInstanceSoid) {
+        || kSubclassSlot >= mutation.afterCharacter.equipment.slots.size()) {
+        return false;
+    }
+    const auto& subclass = mutation.afterCharacter.equipment.slots[kSubclassSlot];
+    if (!subclass.has_value() || subclass->instanceSoid != mutation.subclassInstanceSoid) {
         return false;
     }
     state::build_data::items::details::Definition detail{};
@@ -443,10 +435,11 @@ bool append_socket_roster_refresh_notification(Scratch& scratch,
                                                std::size_t& written) noexcept {
     if (!mutation.prepared || !mutation.targetEquipped || refresh.includeRoster
         || mutation.characterSoid != refresh.characterSoid
-        || mutation.itemIndex >= mutation.afterCharacter.equipment.slots.size()
-        || !mutation.afterCharacter.equipment.slots[mutation.itemIndex].has_value()
-        || mutation.afterCharacter.equipment.slots[mutation.itemIndex]->instanceSoid
-               != mutation.targetInstanceSoid) {
+        || mutation.itemIndex >= mutation.afterCharacter.equipment.slots.size()) {
+        return false;
+    }
+    const auto& target = mutation.afterCharacter.equipment.slots[mutation.itemIndex];
+    if (!target.has_value() || target->instanceSoid != mutation.targetInstanceSoid) {
         return false;
     }
     snapshot::Prepared prepared{};
@@ -471,10 +464,11 @@ bool append_subclass_roster_refresh_notification(Scratch& scratch,
         static_cast<std::size_t>(state::account::inventory::EquipmentSlot::subclass);
     if (!mutation.prepared || refresh.includeRoster
         || mutation.characterSoid != refresh.characterSoid
-        || kSubclassSlot >= mutation.afterCharacter.equipment.slots.size()
-        || !mutation.afterCharacter.equipment.slots[kSubclassSlot].has_value()
-        || mutation.afterCharacter.equipment.slots[kSubclassSlot]->instanceSoid
-               != mutation.subclassInstanceSoid) {
+        || kSubclassSlot >= mutation.afterCharacter.equipment.slots.size()) {
+        return false;
+    }
+    const auto& subclass = mutation.afterCharacter.equipment.slots[kSubclassSlot];
+    if (!subclass.has_value() || subclass->instanceSoid != mutation.subclassInstanceSoid) {
         return false;
     }
     snapshot::Prepared prepared{};
@@ -496,6 +490,7 @@ bool append_account_resync_appearance_notification(
     std::size_t& written,
     queuez::SessionState& after) noexcept {
     after = before;
+    ensure_account_canonical();
     if (!before.family0Active) {
         return true;
     }
@@ -538,6 +533,7 @@ bool append_account_resync_roster_notification(Scratch& scratch,
                                                std::size_t& written,
                                                queuez::SessionState& after) noexcept {
     after = before;
+    ensure_account_canonical();
     if (!before.family3Active) {
         return true;
     }

@@ -6,6 +6,7 @@
 #include "../internal.h"
 #include "../runtime.h"
 #include "../worker.h"
+#include "core/threading/data_mutex.h"
 
 namespace sunrise::client::content::investment::worker {
 namespace {
@@ -17,73 +18,75 @@ namespace {
  */
 constexpr std::uint64_t kRefreshIntervalMilliseconds = 0;
 
-SRWLOCK g_lifecycleLock{SRWLOCK_INIT};
-bool g_accepting{};
-bool g_complete{};
-bool g_overlayPending{};
-std::uint64_t g_nextEligible{};
+struct Lifecycle {
+    bool accepting{};
+    bool complete{};
+    bool overlayPending{};
+    std::uint64_t nextEligible{};
+};
+
+core::threading::DataMutex<Lifecycle> g_lifecycle{};
 
 } // namespace
 
 /** Allows cooperative investment refresh slices on the caller-owned game thread. */
 void activate() noexcept {
-    AcquireSRWLockExclusive(&g_lifecycleLock);
-    g_accepting = true;
-    g_complete = false;
-    g_overlayPending = false;
-    g_nextEligible = 0;
-    sunrise::core::ui::busy::end(sunrise::core::ui::busy::Task::contentExtraction);
-    ReleaseSRWLockExclusive(&g_lifecycleLock);
+    g_lifecycle.lock([](Lifecycle& lifecycle) {
+        lifecycle.accepting = true;
+        lifecycle.complete = false;
+        lifecycle.overlayPending = false;
+        lifecycle.nextEligible = 0;
+        sunrise::core::ui::busy::end(sunrise::core::ui::busy::Task::contentExtraction);
+    });
 }
 
 /** Runs one due bounded refresh slice on the caller-owned game thread. */
 void service(std::uint64_t nowMilliseconds) noexcept {
-    AcquireSRWLockExclusive(&g_lifecycleLock);
-    if (!g_accepting || g_complete || !sunrise::client::targets::game::content::is_resolved()
-        || nowMilliseconds < g_nextEligible) {
-        ReleaseSRWLockExclusive(&g_lifecycleLock);
-        return;
-    }
-    g_nextEligible = nowMilliseconds + kRefreshIntervalMilliseconds;
-
-    if (sunrise::client::content::investment::requires_package_sweep()) {
-        g_overlayPending = true;
-        if (sunrise::core::ui::busy::raise_early(
-                sunrise::core::ui::busy::Task::contentExtraction)) {
-            ReleaseSRWLockExclusive(&g_lifecycleLock);
+    g_lifecycle.lock([nowMilliseconds](Lifecycle& lifecycle) {
+        if (!lifecycle.accepting || lifecycle.complete
+            || !sunrise::client::targets::game::content::is_resolved()
+            || nowMilliseconds < lifecycle.nextEligible) {
             return;
         }
-    } else if (g_overlayPending) {
-        // A stale preflight must not leave a task raised after another path publishes the rows.
-        sunrise::core::ui::busy::end(sunrise::core::ui::busy::Task::contentExtraction);
-        g_overlayPending = false;
-    }
+        lifecycle.nextEligible = nowMilliseconds + kRefreshIntervalMilliseconds;
 
-    g_complete = sunrise::client::content::investment::refresh();
-    sunrise::client::content::diagnostics::report_readiness();
-    g_overlayPending = false;
-    ReleaseSRWLockExclusive(&g_lifecycleLock);
+        if (sunrise::client::content::investment::requires_package_sweep()) {
+            lifecycle.overlayPending = true;
+            if (sunrise::core::ui::busy::raise_early(
+                    sunrise::core::ui::busy::Task::contentExtraction)) {
+                return;
+            }
+        } else if (lifecycle.overlayPending) {
+            // A stale preflight must not leave a task raised after another path publishes the rows.
+            sunrise::core::ui::busy::end(sunrise::core::ui::busy::Task::contentExtraction);
+            lifecycle.overlayPending = false;
+        }
+
+        lifecycle.complete = sunrise::client::content::investment::refresh();
+        sunrise::client::content::diagnostics::report_readiness();
+        lifecycle.overlayPending = false;
+    });
 }
 
 /** Stops taking refresh slices and clears the pending overlay. */
 void reset() noexcept {
-    AcquireSRWLockExclusive(&g_lifecycleLock);
-    g_accepting = false;
-    g_complete = false;
-    g_overlayPending = false;
-    g_nextEligible = 0;
-    sunrise::core::ui::busy::end(sunrise::core::ui::busy::Task::contentExtraction);
-    ReleaseSRWLockExclusive(&g_lifecycleLock);
+    g_lifecycle.lock([](Lifecycle& lifecycle) {
+        lifecycle.accepting = false;
+        lifecycle.complete = false;
+        lifecycle.overlayPending = false;
+        lifecycle.nextEligible = 0;
+        sunrise::core::ui::busy::end(sunrise::core::ui::busy::Task::contentExtraction);
+    });
 }
 
 /** Makes the next due pump take another refresh slice even though a prior one completed. */
 void request_slice() noexcept {
-    AcquireSRWLockExclusive(&g_lifecycleLock);
-    if (g_accepting) {
-        g_complete = false;
-        g_nextEligible = 0;
-    }
-    ReleaseSRWLockExclusive(&g_lifecycleLock);
+    g_lifecycle.lock([](Lifecycle& lifecycle) {
+        if (lifecycle.accepting) {
+            lifecycle.complete = false;
+            lifecycle.nextEligible = 0;
+        }
+    });
 }
 
 } // namespace sunrise::client::content::investment::worker

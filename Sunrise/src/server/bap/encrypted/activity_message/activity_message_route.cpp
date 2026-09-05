@@ -9,6 +9,7 @@
 
 #include "../../../../core/logging/log.h"
 #include "../../../../core/settings/settings.h"
+#include "../../../../client/hooks/bootflow/bootflow_hook_lifecycle.h"
 #include "../../../../middleware/bap/activity_message/activity_client_identity_parser.h"
 #include "../../../../middleware/bap/activity_message/activity_join_request_parser.h"
 #include "../../../../middleware/bap/activity_message/activity_membership_acknowledgement_parser.h"
@@ -29,6 +30,8 @@
 #include "../../../../middleware/crypto/hmac.h"
 #include "../../../../middleware/crypto/random_bytes.h"
 #include "../../../../middleware/encoding/byte_order.h"
+#include "../../../../state/activity/bubble_authority/runtime.h"
+#include "../../../../state/activity/membership/activity_membership_query.h"
 #include "../../../../state/activity/receipts/activity_receipts.h"
 #include "../../../../state/activity/runtime.h"
 #include "../../../../state/activity_sdk/runtime.h"
@@ -45,6 +48,7 @@ namespace sunrise::server::bap::encrypted::activity_message {
 namespace {
 
 namespace service = middleware::bap::activity_message;
+namespace authority = middleware::bap::activity_message::entity_authority;
 namespace store = state::activity::receipts;
 namespace wire_schema = middleware::bap::activity_message::wire_schema;
 namespace communication = wire_schema::communication;
@@ -428,13 +432,22 @@ void report_message(std::uint32_t messageType,
     } else if (plan.bindingIntent == BindingIntent::preserveCurrent) {
         // A private join's burst carries the seed membership; the commit lands the same seed.
         static_cast<void>(push::activity::prepare_join_seed_snapshot(
-            parsed.memberKey, parsed.characterSoid, plan.membershipMutation));
+            plan.targetBinding.createdRevision,
+            parsed.memberKey,
+            parsed.characterSoid,
+            plan.membershipMutation));
     }
     return true;
 }
 
 /**
  * Prepares only currently free slots for one positive client request.
+ * The ask is a floor, not the amount. The client requests the slots one slice set needs only once
+ * it has begun creating that slice set's entities, so a grant sized to the ask arrives after the
+ * creates it was meant to cover have already failed. Topping the lease up to a standing high
+ * water instead leaves the slots held before the next switch starts. `prepare_grant` picks from
+ * the free complement and documents that an ask above the slot count degrades to every remaining
+ * free slot, so an over-large top-up cannot fail a request that would otherwise have succeeded.
  * @param request Validated owned svc8 envelope.
  * @param plan Cleared, then receives the chosen lease mask.
  * @return True for a valid positive request, including an exhausted zero-mask grant.
@@ -442,10 +455,39 @@ void report_message(std::uint32_t messageType,
 [[nodiscard]] bool prepare_grant(const service::Request& request, ActivityPlan& plan) noexcept {
     std::int32_t requested = 0;
     if (!service::entity_slot_request::parse_entity_slot_request(request.payload, requested)
-        || requested <= 0
-        || !state::activity::entity_slots::prepare_grant(
-            request.sessionId, static_cast<std::size_t>(requested), plan.entitySlotMutation)) {
+        || requested <= 0) {
         return false;
+    }
+    std::size_t wanted = static_cast<std::size_t>(requested);
+    const std::size_t highWater = core::settings::server::gameplay::lease_high_water(
+        core::settings::get().server.gameplay);
+    std::size_t held = 0;
+    std::size_t reserved = 0;
+    // A session with no readable lease keeps the client's own ask, which is today's behaviour.
+    if (state::activity::entity_slots::lease_counts(request.sessionId, held, reserved)
+        && held < highWater) {
+        wanted = (std::max)(wanted, highWater - held);
+    }
+    if (!state::activity::entity_slots::prepare_grant(
+            request.sessionId, wanted, plan.entitySlotMutation)) {
+        return false;
+    }
+    // The lease line downstream reports the topped-up count, so without this the size of the
+    // client's own ask — the thing that says which slice set it is about to build — is lost.
+    std::array<char, core::log::kLineCapacity> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=activity stage=lease_topup soid=0x%llX asked=%d "
+                                      "wanted=%zu held=%zu high_water=%zu",
+                                      static_cast<unsigned long long>(request.sessionId),
+                                      requested,
+                                      wanted,
+                                      held,
+                                      highWater);
+    if (written > 0) {
+        core::log::write(core::log::Channel::server,
+                         core::log::Level::debug,
+                         {line.data(), static_cast<std::size_t>(written)});
     }
     plan.sessionId = request.sessionId;
     plan.entitySlotsRequested.requestedCount = requested;
@@ -465,6 +507,15 @@ void report_message(std::uint32_t messageType,
     if (!service::entity_slots::decode_entity_slots(request.payload, decoded)) {
         return false;
     }
+    if (core::settings::get().server.gameplay.ignoreClientSlotRelease) {
+        // Framed and receipted as before; only the lease is left standing. The mask's meaning is
+        // unproven, and reading it the wrong way round shrinks the lease the client's own entity
+        // bitmap mirrors, which starves entity creation.
+        plan.sessionId = request.sessionId;
+        plan.delivery = Delivery::none;
+        plan.mutationDomain = MutationDomain::none;
+        return true;
+    }
     state::activity::entity_slots::LeaseMask returned{};
     std::copy(decoded.begin(), decoded.end(), returned.begin());
     if (!state::activity::entity_slots::prepare_release(
@@ -483,17 +534,81 @@ struct FramingRoute {
     receipts::Framed (*frame)(const service::Request&) noexcept;
 };
 
+/**
+ * Drops the recorded grant for the bubble one release names, but only once the client has left it.
+ * The receipts module reports without touching State by design, so the State change a hand-back
+ * implies is made here. Without it the bubble stays recorded as granted for the rest of the
+ * session and re-entering it — which is what every wipe, retry and backtrack does — runs with no
+ * authority, because `select_grant` only ever grants a bubble whose token is zero.
+ *
+ * The occupancy test is what makes this safe on the common path. Msg 26 is documented as the
+ * bubble exit, but msg 33 gives up *a set of slots* and the client sends it without leaving.
+ * Clearing the token while the player is still inside would let the next roster push — one every
+ * second during the load burst — re-grant the occupied bubble under a new token, on every
+ * destination rather than only this raid. Comparing the selector against the region the client
+ * last reported keeps the release to a real exit; a session that has reported no region yet
+ * cannot be judged, so it is left alone.
+ *
+ * The test is deliberately fail-safe rather than exact. `reported_region` lags a boundary
+ * crossing, so a release sent the instant the client leaves can still name the region it is
+ * leaving and be skipped. That loses a re-arm, which is the behaviour before this change; it
+ * never clears a bubble the player occupies, which would be worse than that behaviour.
+ * The selector is the raw bubble index, not a biased field: the captured releases carry 1, 14
+ * and 12, matching dream_shore, raid_larceny_staging and raid_larceny_alarm — the three bubbles
+ * that run actually visited.
+ * @param request Validated owned activity envelope carrying the release.
+ * @param expectReason True for abandon, which trails a reason after the mask.
+ */
+void release_named_bubble(const service::Request& request, bool expectReason) noexcept {
+    authority::Release decoded{};
+    const bool parsed = expectReason ? authority::parse_abandon(request.payload, decoded)
+                                     : authority::parse_abdicate(request.payload, decoded);
+    if (!parsed || decoded.selector >= state::activity::bubble_authority::kFallbackBubble) {
+        return;
+    }
+    const std::int32_t region =
+        state::activity::membership::reported_region(request.sessionId);
+    if (region < 0) {
+        return;
+    }
+    const auto occupied = static_cast<std::uint8_t>(
+        region >> state::activity::bubble_authority::kSliceSetToBubbleShift);
+    if (decoded.selector == occupied) {
+        return;
+    }
+    state::activity::bubble_authority::release_grant(request.sessionId, decoded.selector);
+    std::array<char, core::log::kLineCapacity> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=activity stage=authority result=released type=%u "
+                                      "selector=%u occupied=%u",
+                                      request.messageType,
+                                      static_cast<unsigned>(decoded.selector),
+                                      static_cast<unsigned>(occupied));
+    if (written > 0) {
+        core::log::write(core::log::Channel::server,
+                         core::log::Level::debug,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
 /** Frames one abandon, which trails a reason after the mask. */
 [[nodiscard]] receipts::Framed frame_abandon(const service::Request& request) noexcept {
+    release_named_bubble(request, true);
     return receipts::frame_authority_release(request, true);
 }
 
 /** Frames one abdicate, which carries no reason. */
 [[nodiscard]] receipts::Framed frame_abdicate(const service::Request& request) noexcept {
+    release_named_bubble(request, false);
     return receipts::frame_authority_release(request, false);
 }
 
-/** Every adapter this route frames and records without changing State. */
+/**
+ * Every adapter this route frames and records.
+ * All of these are read-only except the two authority releases, which drop the grant token for a
+ * bubble the client has left so it can be granted again on re-entry.
+ */
 constexpr std::array<FramingRoute, 19> kFramingRoutes{{
     {IngressAdapter::routeMisuseReceipt, receipts::frame_route_misuse},
     {IngressAdapter::reservationRequest, receipts::frame_reservation_request},
@@ -517,7 +632,8 @@ constexpr std::array<FramingRoute, 19> kFramingRoutes{{
 }};
 
 /**
- * Frames one message that changes no State and records its receipt.
+ * Frames one message and records its receipt.
+ * Read-only except for the two authority releases, which clear a departed bubble's grant token.
  * @param request Validated envelope.
  * @return Always true: a framing-only message can never fail the transport frame.
  */

@@ -62,6 +62,9 @@ bool Parser::activity_settings(state::activity::defaults::ActivityDefaults& outp
     bool hasDefaultDestination = false;
     bool hasArrivalOverrides = false;
     bool hasRosterKeyFromIdentity = false;
+    bool hasRosterKeyOnAllSlots = false;
+    bool hasAuthorDirectorBodies = false;
+    bool hasAuthorWideRecordBodies = false;
     if (consume('}')) {
         return true;
     }
@@ -85,6 +88,21 @@ bool Parser::activity_settings(state::activity::defaults::ActivityDefaults& outp
                 return false;
             }
             hasRosterKeyFromIdentity = true;
+        } else if (key == "roster_key_on_all_slots") {
+            if (hasRosterKeyOnAllSlots || !boolean(output.rosterKeyOnAllSlots)) {
+                return false;
+            }
+            hasRosterKeyOnAllSlots = true;
+        } else if (key == "author_director_bodies") {
+            if (hasAuthorDirectorBodies || !boolean(output.authorDirectorBodies)) {
+                return false;
+            }
+            hasAuthorDirectorBodies = true;
+        } else if (key == "author_wide_record_bodies") {
+            if (hasAuthorWideRecordBodies || !boolean(output.authorWideRecordBodies)) {
+                return false;
+            }
+            hasAuthorWideRecordBodies = true;
         } else if (!skip_value(0)) {
             return false;
         }

@@ -1,15 +1,17 @@
 #include "vendor_catalog.h"
 
 #include <algorithm>
+#include <shared_mutex>
 
 #include "../table.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::state::build_data::vendors {
 namespace {
 
 // One lock covers all four tables. A definition names its rows by range, so a reader must
 // never see one table replaced and another not.
-Lock g_lock;
+core::threading::SrwLock g_lock;
 Table<IndexEntry, kIndexCapacity> g_index;
 Table<Definition, kDefinitionCapacity> g_definitions;
 Table<SaleRow, kSaleRowCapacity> g_saleRows;
@@ -88,10 +90,10 @@ Table<InstalledRow, kInstalledRowCapacity> g_installedRows;
                                        std::span<const SaleRow> saleRows) noexcept {
     for (std::size_t row = 0; row < definition.saleCount; ++row) {
         const SaleRow& value = saleRows[definition.saleRowOffset + row];
-        // Row +100 selects an installed row, so it is bounded before a reader strides with it.
+        // Row +100 is bounded by the installed count before any reader strides with it.
         const bool selects =
-            value.installedIndex == kAbsentInstalledIndex
-            || (value.installedIndex >= 0 && value.installedIndex < definition.installedCount);
+            value.categoryIndex == kAbsentCategoryIndex
+            || (value.categoryIndex >= 0 && value.categoryIndex < definition.installedCount);
         if (value.vendorIndex != definition.index || value.rowIndex != row || !selects) {
             return false;
         }
@@ -147,7 +149,7 @@ template <typename Row>
 
 /** Clears the index, every held definition, and both row banks under the catalog lock. */
 void clear() noexcept {
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_index.clear();
     g_definitions.clear();
     g_saleRows.clear();
@@ -195,7 +197,7 @@ bool replace(std::span<const IndexEntry> index,
     if (!valid(index, definitions, saleRows, installedRows)) {
         return false;
     }
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     // All four run with no short-circuit, so the set cannot be left half replaced. Capacity is
     // the only reason one can refuse, and valid() already checked it.
     const bool storedIndex = g_index.replace(index);
@@ -208,7 +210,7 @@ bool replace(std::span<const IndexEntry> index,
 /** Finds one index row by the vendor definition hash. */
 bool find_hash(std::uint32_t definitionHash, IndexEntry& entry) noexcept {
     entry = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const IndexEntry> rows = g_index.rows();
     const auto found =
         std::find_if(rows.begin(), rows.end(), [definitionHash](const IndexEntry& row) {
@@ -229,7 +231,7 @@ bool find_hash(std::uint32_t definitionHash, IndexEntry& entry) noexcept {
 /** Reads one index row by its position. */
 bool find_index(std::uint16_t index, IndexEntry& entry) noexcept {
     entry = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const IndexEntry> rows = g_index.rows();
     const bool present = index < rows.size();
     if (present) {
@@ -241,7 +243,7 @@ bool find_index(std::uint16_t index, IndexEntry& entry) noexcept {
 /** Finds one held definition by the vendor definition hash. */
 bool find(std::uint32_t definitionHash, Definition& definition) noexcept {
     definition = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const Definition> rows = g_definitions.rows();
     const auto found =
         std::find_if(rows.begin(), rows.end(), [definitionHash](const Definition& row) {
@@ -258,16 +260,32 @@ bool find(std::uint32_t definitionHash, Definition& definition) noexcept {
 bool sale_rows(const Definition& definition,
                std::span<SaleRow> output,
                std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return copy_range(
         g_saleRows.rows(), definition.saleRowOffset, definition.saleCount, output, count);
+}
+
+/** Reads one sale row of one definition. */
+bool sale_row(const Definition& definition, std::size_t row, SaleRow& output) noexcept {
+    output = {};
+    if (row >= definition.saleCount) {
+        return false;
+    }
+    const std::shared_lock guard(g_lock);
+    const auto bank = g_saleRows.rows();
+    const std::size_t at = static_cast<std::size_t>(definition.saleRowOffset) + row;
+    if (at >= bank.size()) {
+        return false;
+    }
+    output = bank[at];
+    return true;
 }
 
 /** Copies the installed rows one definition owns. */
 bool installed_rows(const Definition& definition,
                     std::span<InstalledRow> output,
                     std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return copy_range(g_installedRows.rows(),
                       definition.installedRowOffset,
                       definition.installedCount,
@@ -275,51 +293,67 @@ bool installed_rows(const Definition& definition,
                       count);
 }
 
+/** Reads one installed row of one definition. */
+bool installed_row(const Definition& definition, std::size_t row, InstalledRow& output) noexcept {
+    output = {};
+    if (row >= definition.installedCount) {
+        return false;
+    }
+    const std::shared_lock guard(g_lock);
+    const auto bank = g_installedRows.rows();
+    const std::size_t at = static_cast<std::size_t>(definition.installedRowOffset) + row;
+    if (at >= bank.size()) {
+        return false;
+    }
+    output = bank[at];
+    return true;
+}
+
 /** Copies every index row in ascending index order. */
 bool snapshot_index(std::span<IndexEntry> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_index.snapshot(output, count);
 }
 
 /** Copies every held definition in ascending index order. */
 bool snapshot_definitions(std::span<Definition> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.snapshot(output, count);
 }
 
 /** Copies the whole flat sale bank. */
 bool snapshot_sale_rows(std::span<SaleRow> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_saleRows.snapshot(output, count);
 }
 
 /** Copies the whole flat installed bank. */
 bool snapshot_installed_rows(std::span<InstalledRow> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_installedRows.snapshot(output, count);
 }
 
 /** @return The index row count, read under the lock. */
 std::size_t count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_index.count();
 }
 
 /** @return The held definition count, read under the lock. */
 std::size_t definition_count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.count();
 }
 
 /** @return The flat sale bank row count, read under the lock. */
 std::size_t sale_row_count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_saleRows.count();
 }
 
 /** @return The flat installed bank row count, read under the lock. */
 std::size_t installed_row_count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_installedRows.count();
 }
 

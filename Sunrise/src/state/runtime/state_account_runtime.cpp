@@ -4,9 +4,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
-#include <limits>
-#include <string_view>
 #include <utility>
 
 #include "../../core/logging/log.h"
@@ -25,86 +22,6 @@ namespace item_details = build_data::items::details;
 namespace inventory_buckets = build_data::inventory::buckets;
 namespace family4_loadout = middleware::datagen::family4::loadout;
 namespace socket_lists = build_data::socket_entry_lists;
-
-/** Writes one exhaustive equipment-transaction checkpoint to the persistent diagnostic log. */
-void report_equipment(std::string_view stage,
-                      std::string_view result,
-                      EquipmentMutationKind kind,
-                      std::uint64_t characterSoid,
-                      std::uint64_t previousSoid,
-                      std::uint64_t requestedSoid,
-                      std::size_t equipmentIndex,
-                      std::size_t inventoryIndex,
-                      std::uint8_t nativeSlot,
-                      std::size_t movedItemCount,
-                      std::uint32_t previousHash,
-                      std::uint32_t requestedHash) noexcept {
-    const std::string_view operation = kind == EquipmentMutationKind::unequip ? "unequip" : "equip";
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=equip operation=%.*s stage=%.*s result=%.*s character=0x%llX previous=0x%llX "
-        "requested=0x%llX equipment_index=%zu inventory_index=%zu native_slot=%u "
-        "moved_items=%zu previous_hash=0x%08X requested_hash=0x%08X",
-        static_cast<int>(operation.size()),
-        operation.data(),
-        static_cast<int>(stage.size()),
-        stage.data(),
-        static_cast<int>(result.size()),
-        result.data(),
-        static_cast<unsigned long long>(characterSoid),
-        static_cast<unsigned long long>(previousSoid),
-        static_cast<unsigned long long>(requestedSoid),
-        equipmentIndex,
-        inventoryIndex,
-        static_cast<unsigned>(nativeSlot),
-        movedItemCount,
-        previousHash,
-        requestedHash);
-    if (count > 0) {
-        core::log::write(core::log::Channel::state,
-                         result == "ok" ? core::log::Level::debug : core::log::Level::warn,
-                         {line.data(), static_cast<std::size_t>(count)});
-    }
-}
-
-/** Writes one exhaustive item-acquisition transaction checkpoint. */
-void report_acquisition(std::string_view stage,
-                        std::string_view result,
-                        std::string_view reason,
-                        std::uint32_t definitionHash,
-                        std::uint64_t characterSoid,
-                        std::uint64_t instanceSoid,
-                        std::size_t inventoryIndex,
-                        std::uint16_t inventoryRow,
-                        std::uint8_t equipmentSlot,
-                        std::uint32_t nextInventorySerial) noexcept {
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=acquire stage=%.*s result=%.*s reason=%.*s definition_hash=0x%08X character=0x%llX "
-        "instance=0x%llX inventory_index=%zu inventory_row=%u equipment_slot=%u next_serial=%u",
-        static_cast<int>(stage.size()),
-        stage.data(),
-        static_cast<int>(result.size()),
-        result.data(),
-        static_cast<int>(reason.size()),
-        reason.data(),
-        definitionHash,
-        static_cast<unsigned long long>(characterSoid),
-        static_cast<unsigned long long>(instanceSoid),
-        inventoryIndex,
-        static_cast<unsigned>(inventoryRow),
-        static_cast<unsigned>(equipmentSlot),
-        nextInventorySerial);
-    if (count > 0) {
-        core::log::write(core::log::Channel::state,
-                         result == "ok" ? core::log::Level::debug : core::log::Level::warn,
-                         {line.data(), static_cast<std::size_t>(count)});
-    }
-}
 
 /**
  * Prepares a subclass ability-entry transition without publishing account State.
@@ -152,21 +69,23 @@ void report_acquisition(std::string_view stage,
     CharacterState after = before;
     // The picks belong to the equipped subclass item itself, not the character. So each owned
     // subclass remembers its own selection, instead of sharing one set across all of them.
-    auto& afterSubclass = after.equipment.slots[kSubclassSlot];
+    auto& afterSubclassSlot = after.equipment.slots[kSubclassSlot];
+    if (!afterSubclassSlot.has_value()) {
+        return false;
+    }
+    auto& afterSubclass = *afterSubclassSlot;
     struct Route {
         std::uint8_t bucket;
         std::uint8_t* field;
         std::uint8_t defaultEntry;
     };
     const std::array<Route, 5> routes{{
-        {kMovementAbilityBucket,
-         &afterSubclass->movementAbilityEntry,
-         kDefaultMovementAbilityEntry},
-        {kGrenadeAbilityBucket, &afterSubclass->grenadeAbilityEntry, kDefaultGrenadeAbilityEntry},
-        {kSuperAbilityBucket, &afterSubclass->superAbilityEntry, kDefaultSuperAbilityEntry},
-        {kMeleeAbilityBucket, &afterSubclass->meleeAbilityEntry, kDefaultMeleeAbilityEntry},
+        {kMovementAbilityBucket, &afterSubclass.movementAbilityEntry, kDefaultMovementAbilityEntry},
+        {kGrenadeAbilityBucket, &afterSubclass.grenadeAbilityEntry, kDefaultGrenadeAbilityEntry},
+        {kSuperAbilityBucket, &afterSubclass.superAbilityEntry, kDefaultSuperAbilityEntry},
+        {kMeleeAbilityBucket, &afterSubclass.meleeAbilityEntry, kDefaultMeleeAbilityEntry},
         {class_ability_bucket(after.characterClass),
-         &afterSubclass->classAbilityEntry,
+         &afterSubclass.classAbilityEntry,
          kDefaultClassAbilityEntry},
     }};
     const auto bucket_of = [&](std::uint8_t entryIndex) noexcept {
@@ -266,6 +185,27 @@ bool set_primary_soid(std::uint64_t primarySoid) noexcept {
     return true;
 }
 
+/** Closes the account's one-time profile-setup gate. */
+bool complete_profile_setup() noexcept {
+    AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
+    AccountState& accountState = runtime::storage::g_state.account;
+    if (accountState.primarySoid == 0 || !account::valid(accountState)) {
+        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+        return false;
+    }
+
+    const bool changed = !accountState.profileSetupCompleted;
+    accountState.profileSetupCompleted = true;
+    ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+
+    if (changed) {
+        core::log::write(core::log::Channel::state,
+                         core::log::Level::info,
+                         "ev=profile_setup stage=complete result=ok");
+    }
+    return true;
+}
+
 /** Moves the selection to one authored character. */
 bool set_selected_character(std::uint64_t characterSoid, bool& changed) noexcept {
     changed = false;
@@ -298,6 +238,40 @@ bool set_selected_character(std::uint64_t characterSoid, bool& changed) noexcept
     runtime::storage::g_state.account = candidate;
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
     changed = !alreadySelected;
+    return true;
+}
+
+/** Stores the selected character's equipped native title row. */
+bool set_selected_title(std::uint16_t recordIndex,
+                        std::uint64_t& characterSoid,
+                        bool& changed) noexcept {
+    characterSoid = 0;
+    changed = false;
+    AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
+    AccountState candidate = runtime::storage::g_state.account;
+    std::size_t selectedIndex = candidate.characterCount;
+    for (std::size_t index = 0; index < candidate.characterCount; ++index) {
+        if (candidate.characters[index].selected) {
+            selectedIndex = index;
+            break;
+        }
+    }
+    if (selectedIndex == candidate.characterCount) {
+        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+        return false;
+    }
+    CharacterState& character = candidate.characters[selectedIndex];
+    characterSoid = character.soid;
+    changed = character.equippedTitleRecordIndex != recordIndex;
+    character.equippedTitleRecordIndex = recordIndex;
+    if (!account::valid(candidate)) {
+        characterSoid = 0;
+        changed = false;
+        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+        return false;
+    }
+    runtime::storage::g_state.account = candidate;
+    ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
     return true;
 }
 
@@ -411,7 +385,6 @@ bool prepare_equipment_swap(std::uint64_t requestedInstanceSoid,
     CharacterState after = before;
     auto& equipped = after.equipment.slots[equipmentSlotIndex];
     std::uint64_t previousInstanceSoid = 0;
-    std::uint32_t previousDefinitionHash = 0;
     if (equipped.has_value()) {
         std::uint8_t previousNativeSlot = 0;
         ResolvedPosition previousPosition{};
@@ -423,7 +396,6 @@ bool prepare_equipment_swap(std::uint64_t requestedInstanceSoid,
             return false;
         }
         previousInstanceSoid = equipped->instanceSoid;
-        previousDefinitionHash = equipped->definitionHash;
         std::swap(*equipped, after.inventory.values[inventoryIndex]);
     } else {
         equipped = after.inventory.values[inventoryIndex];
@@ -482,18 +454,6 @@ bool prepare_equipment_swap(std::uint64_t requestedInstanceSoid,
     mutation.nativeEquipmentSlot = requestedNativeSlot;
     mutation.kind = EquipmentMutationKind::equip;
     mutation.prepared = true;
-    report_equipment("prepare",
-                     "ok",
-                     mutation.kind,
-                     mutation.characterSoid,
-                     mutation.previousInstanceSoid,
-                     mutation.requestedInstanceSoid,
-                     mutation.equipmentSlotIndex,
-                     mutation.inventoryIndex,
-                     mutation.nativeEquipmentSlot,
-                     mutation.movedItemCount,
-                     previousDefinitionHash,
-                     requested.definitionHash);
     return true;
 }
 
@@ -599,25 +559,13 @@ bool prepare_equipment_unequip(std::uint64_t requestedInstanceSoid,
     mutation.nativeEquipmentSlot = requestedNativeSlot;
     mutation.kind = EquipmentMutationKind::unequip;
     mutation.prepared = true;
-    report_equipment("prepare",
-                     "ok",
-                     mutation.kind,
-                     mutation.characterSoid,
-                     mutation.previousInstanceSoid,
-                     mutation.requestedInstanceSoid,
-                     mutation.equipmentSlotIndex,
-                     mutation.inventoryIndex,
-                     mutation.nativeEquipmentSlot,
-                     mutation.movedItemCount,
-                     0,
-                     requested.definitionHash);
     return true;
 }
 
 /** Commits one prepared equipment after-image behind an exact character staleness guard. */
 bool commit_equipment_swap(PendingEquipmentSwap& mutation) noexcept {
-    const PendingEquipmentSwap prepared = mutation;
-    mutation = {};
+    const PendingEquipmentSwap& prepared = mutation;
+    const PendingConsumption consume{mutation};
     if (!prepared.prepared || prepared.characterSoid == 0 || prepared.requestedInstanceSoid == 0
         || (prepared.kind != EquipmentMutationKind::equip
             && prepared.kind != EquipmentMutationKind::unequip)
@@ -629,23 +577,6 @@ bool commit_equipment_swap(PendingEquipmentSwap& mutation) noexcept {
         || prepared.afterCharacter.soid != prepared.characterSoid) {
         return false;
     }
-
-    const std::uint32_t previousDefinitionHash =
-        character_item_definition_hash(prepared.afterCharacter, prepared.previousInstanceSoid);
-    const std::uint32_t requestedDefinitionHash =
-        character_item_definition_hash(prepared.afterCharacter, prepared.requestedInstanceSoid);
-    report_equipment("commit_begin",
-                     "ok",
-                     prepared.kind,
-                     prepared.characterSoid,
-                     prepared.previousInstanceSoid,
-                     prepared.requestedInstanceSoid,
-                     prepared.equipmentSlotIndex,
-                     prepared.inventoryIndex,
-                     prepared.nativeEquipmentSlot,
-                     prepared.movedItemCount,
-                     previousDefinitionHash,
-                     requestedDefinitionHash);
 
     AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
     AccountState candidate = runtime::storage::g_state.account;
@@ -681,18 +612,6 @@ bool commit_equipment_swap(PendingEquipmentSwap& mutation) noexcept {
         build_data::invalidate_ability_buckets();
     }
 
-    report_equipment("commit_end",
-                     "ok",
-                     prepared.kind,
-                     prepared.characterSoid,
-                     prepared.previousInstanceSoid,
-                     prepared.requestedInstanceSoid,
-                     prepared.equipmentSlotIndex,
-                     prepared.inventoryIndex,
-                     prepared.nativeEquipmentSlot,
-                     prepared.movedItemCount,
-                     previousDefinitionHash,
-                     requestedDefinitionHash);
     return true;
 }
 

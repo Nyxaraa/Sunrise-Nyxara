@@ -125,6 +125,7 @@ bool resolve_item(const authored_inventory::Item& authored,
                   const state::CharacterState& character,
                   std::size_t itemDefinitionCount,
                   std::size_t socketEntryListCount,
+                  bool requireEquipmentSlot,
                   Candidate& output) noexcept {
     if (!authored_inventory::valid(authored) || itemDefinitionCount == 0
         || itemDefinitionCount > build_items::kDefinitionCapacity || socketEntryListCount == 0
@@ -136,11 +137,20 @@ bool resolve_item(const authored_inventory::Item& authored,
     build_details::Definition itemDetail{};
     build_buckets::Descriptor bucket{};
     build_socket_lists::Definition socketList{};
+    std::uint8_t nativeEquipmentSlot = 0;
     if (!state::build_data::find_item_definition_hash(authored.definitionHash, itemDefinition)
         || !state::build_data::find_configured_item_detail(itemDefinition.definitionIndex,
                                                            itemDetail)
-        || itemDefinition.bucketId != itemDetail.bucketId || !itemDetail.equipmentSlot.has_value()
-        || *itemDetail.equipmentSlot < 0
+        || itemDefinition.bucketId != itemDetail.bucketId
+        // A pursuit - a bounty or a quest step - names no equipment slot, because nothing equips
+        // it. Requiring one refused it here, so it was added to the inventory and then could not
+        // be found in the resolved loadout, and the acquisition failed as `resolve_or_bucket_full`.
+        // Equipped items still must name a slot: they come out of the equipment array, where the
+        // slot is what identifies them.
+        || (!authored_inventory::resolve_native_equipment_slot(
+                authored.definitionHash, itemDetail.equipmentSlot, nativeEquipmentSlot)
+            && (requireEquipmentSlot || itemDetail.equipmentSlot.has_value()))
+        || static_cast<std::size_t>(nativeEquipmentSlot) >= build_details::kEquipmentSlotCount
         || !state::build_data::find_inventory_bucket_descriptor(itemDetail.bucketId, bucket)
         || bucket.arraySelector != build_buckets::ArraySelector::character
         || !state::build_data::find_socket_entry_list(itemDetail.socketEntryListIndex, socketList)
@@ -152,7 +162,9 @@ bool resolve_item(const authored_inventory::Item& authored,
 
     Candidate candidate{};
     candidate.bucket = bucket;
-    candidate.item.equipmentSlot = static_cast<std::uint8_t>(*itemDetail.equipmentSlot);
+    // Slot zero for a slotless item is safe: the encoder reads `equipmentSlot` only when `equipped`
+    // is set, and only items resolved out of the equipment array are ever equipped.
+    candidate.item.equipmentSlot = nativeEquipmentSlot;
     candidate.item.mutationSerial = authored.mutationSerial;
     candidate.item.flags = authored.flags;
     if (!resolve_quantity(authored, itemDetail, candidate.item.quantity)
@@ -161,6 +173,14 @@ bool resolve_item(const authored_inventory::Item& authored,
                                      itemDefinitionCount,
                                      candidate.item.instance.ordinarySockets)) {
         return false;
+    }
+    std::uint32_t completedFlags = candidate.item.flags;
+    auto completedPlugs = candidate.item.instance.ordinarySockets.plugs;
+    if (state::build_data::complete_exotic_catalyst(
+            itemDefinition.definitionIndex, completedFlags, completedPlugs)
+        == state::build_data::items::catalysts::ApplyResult::completed) {
+        candidate.item.flags = completedFlags;
+        candidate.item.instance.ordinarySockets.plugs = completedPlugs;
     }
 
     candidate.item.instance.instanceSoid = authored.instanceSoid;

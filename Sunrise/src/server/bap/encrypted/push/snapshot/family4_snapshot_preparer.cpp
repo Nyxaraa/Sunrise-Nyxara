@@ -54,6 +54,7 @@ bool prepare(Scratch& scratch,
              const middleware::queuez::Subscription& subscription,
              std::uint32_t accountObjectId,
              const Reservation& reservation,
+             std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
              Prepared& prepared) noexcept {
     if (reservation.rawWriteOffset > scratch.plaintext.size()
         || reservation.compressedWriteOffset > scratch.sealed.size()) {
@@ -68,6 +69,10 @@ bool prepare(Scratch& scratch,
     if (!state::ensure_profile_item_identities()) {
         return report_failure("profile_identities");
     }
+    // The emote-collection canonicalization deliberately does not live here. Family zero and
+    // family three build their own images from the same account and neither passes through this
+    // function, so it runs in the shared preflight ahead of the whole dispatch instead
+    // (push::ensure_account_canonical).
     const state::AccountState account = state::account_snapshot();
     if (!state::account::valid(account)) {
         return report_failure("account_state");
@@ -114,6 +119,10 @@ bool prepare(Scratch& scratch,
         if (!family4_datagen::character::encode(
                 selectedCharacter, selected.loadout, selected.lightEvaluation, characterBytes)) {
             return report_failure("character_encode");
+        }
+        if (!apply_acquisition_presentation(
+                characterBytes, selected.loadout, acquisitionPresentationRows)) {
+            return report_failure("character_presentation");
         }
         if (!append_object(scratch,
                            characterBytes,

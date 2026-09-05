@@ -197,7 +197,7 @@ inline Snapshot make_snapshot(const MembershipState& state,
     snapshot.hasCurrentLeg = state.currentReported;
     snapshot.hasPendingLeg = state.pendingReported;
     snapshot.revision = revision;
-    snapshot.epoch = kStableEpoch;
+    snapshot.epoch = state.epoch;
     snapshot.transitionToken =
         state.hasTransitionToken ? state.transitionToken : kInitialTransitionToken;
     return snapshot;

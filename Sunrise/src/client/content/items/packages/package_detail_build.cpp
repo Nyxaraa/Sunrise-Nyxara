@@ -76,6 +76,8 @@ namespace domain = state::build_data::items::details;
 constexpr std::size_t kConstantsPrefix = 8;
 /** Client offset of the stat row the banner's power number is searched by. */
 constexpr std::size_t kLightStatRowOffset = 592;
+/** Build-86657 sub_140553ED0 reads the weapon Power stat row at this client offset. */
+constexpr std::size_t kWeaponPowerStatRowOffset = 606;
 /**
  * Client offsets of the 6 character stat rows, in the two runs the blob stores them in.
  * The client reads these as 6 separate scalars, not as one array, so each is named here.
@@ -240,12 +242,14 @@ bool read_investment_constants(const reader::Source& source,
     }
     output.lightStatRow =
         std::to_integer<std::uint8_t>(blob[kConstantsPrefix + kLightStatRowOffset]);
+    output.weaponPowerStatRow =
+        std::to_integer<std::uint8_t>(blob[kConstantsPrefix + kWeaponPowerStatRowOffset]);
     for (std::size_t row = 0; row < std::size(kCharacterStatRowOffsets); ++row) {
         output.characterStatRows[row] =
             std::to_integer<std::uint8_t>(blob[kConstantsPrefix + kCharacterStatRowOffsets[row]]);
     }
-    output.extracted = true;
-    return true;
+    output.extracted = output.weaponPowerStatRow < state::build_data::constants::kStatRowCount;
+    return output.extracted;
 }
 
 } // namespace sunrise::client::content::items::packages

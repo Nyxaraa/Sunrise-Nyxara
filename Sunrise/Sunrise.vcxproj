@@ -136,6 +136,8 @@
     <ClCompile Include="src\client\hooks\cursor\cursor_hook_lifecycle.cpp" />
     <ClCompile Include="src\client\hooks\graphics\renderer\graphics_renderer_device.cpp" />
     <ClCompile Include="src\middleware\web_service\messages\opcode504_codec.cpp" />
+    <ClCompile Include="src\middleware\web_service\messages\opcode701\opcode701_codec.cpp" />
+    <ClCompile Include="src\middleware\web_service\messages\opcode904\opcode904_codec.cpp" />
     <ClCompile Include="src\middleware\web_service\messages\opcode903_codec.cpp" />
     <ClCompile Include="src\middleware\web_service\messages\opcode1901_codec.cpp" />
     <ClCompile Include="src\middleware\web_service\messages\opcode402_codec.cpp" />
@@ -151,6 +153,7 @@
     <ClCompile Include="src\state\runtime\state_account_identity_runtime.cpp" />
     <ClCompile Include="src\state\runtime\state_account_profile_runtime.cpp" />
     <ClCompile Include="src\state\runtime\state_account_socket_runtime.cpp" />
+    <ClCompile Include="src\state\runtime\state_account_settings_runtime.cpp" />
     <ClCompile Include="src\state\runtime\state_rolled_socket_plugs.cpp" />
     <ClCompile Include="src\state\runtime\state_account_item_action_runtime.cpp" />
     <ClCompile Include="src\core\ui\busy\ui_busy_overlay.cpp" />
@@ -208,6 +211,7 @@
     <ClCompile Include="src\middleware\datagen\family4\loadout\subclass_socket_selection.cpp" />
     <ClCompile Include="src\state\build_data\cache\records\cache_socket_record_codec.cpp" />
     <ClCompile Include="src\state\build_data\cache\records\cache_socket_plug_record_codec.cpp" />
+    <ClCompile Include="src\state\build_data\cache\records\cache_exotic_catalyst_record_codec.cpp" />
     <ClCompile Include="src\client\hooks\graphics\renderer\selection\graphics_swap_chain_selection.cpp" />
     <ClCompile Include="src\client\hooks\graphics\renderer\graphics_renderer_lifecycle.cpp" />
     <ClCompile Include="src\client\hooks\graphics\renderer\graphics_renderer_frame.cpp" />
@@ -244,6 +248,7 @@
     <ClCompile Include="src\client\hooks\infinite_ammo\infinite_ammo.cpp" />
     <ClCompile Include="src\client\input\window_focus.cpp" />
     <ClCompile Include="src\client\hooks\teleport\teleport_lifecycle.cpp" />
+    <ClCompile Include="src\client\hooks\vendor_banner\vendor_banner_retire.cpp" />
     <ClCompile Include="src\client\hooks\teleport\teleport_move.cpp" />
     <ClCompile Include="src\client\hooks\teleport\teleport_action_key.cpp" />
     <ClCompile Include="src\client\hooks\world_objects\world_object_registry.cpp" />
@@ -265,6 +270,7 @@
     <ClCompile Include="src\client\hooks\external_server\external_server_route.cpp" />
     <ClCompile Include="src\client\hooks\external_server\external_server_setopt_guard.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\bootflow_hook_lifecycle.cpp" />
+    <ClCompile Include="src\client\hooks\bootflow\bootflow_texture_override.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\character_select_hold.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\composition_check.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\orbit_handoff.cpp" />
@@ -274,10 +280,10 @@
     <ClCompile Include="src\client\hooks\bootflow\profile_setup_skip.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\world_step.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\spawn_hold.cpp" />
+    <ClCompile Include="src\client\hooks\bootflow\fade_release.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\spawn\spawn_gate_probe.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\spawn\spawn_gate_targets.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\spawn\spawn_gate_record_dump.cpp" />
-    <ClCompile Include="src\client\hooks\bootflow\fade_release.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\activity\activity_arrival.cpp" />
     <ClCompile Include="src\middleware\bap\activity_host_manager\request\selection\activity_manager_selection_bits.cpp" />
     <ClCompile Include="src\middleware\bap\activity_host_manager\request\selection\activity_manager_selection_snapshot.cpp" />
@@ -608,9 +614,12 @@
     <ClCompile Include="src\state\matchmaking\transactions\matchmaking_prepare.cpp" />
     <ClCompile Include="src\state\matchmaking\transactions\matchmaking_commit.cpp" />
     <ClCompile Include="src\state\runtime\equipment\configured_equipment_identity.cpp" />
+    <ClCompile Include="src\state\account\pursuit_hold.cpp" />
+    <ClCompile Include="src\state\vendors\answered_interactions.cpp" />
     <ClCompile Include="src\state\account\account_state.cpp" />
     <ClCompile Include="src\state\account\inventory\inventory_state.cpp" />
     <ClCompile Include="src\state\account\settings\settings_state.cpp" />
+    <ClCompile Include="src\state\account\settings\settings_delta.cpp" />
     <ClCompile Include="src\state\equipment\light\calculation\equipment_light_calculation.cpp" />
     <ClCompile Include="src\state\equipment\light\resolution\configured_equipment_light_resolver.cpp" />
     <ClCompile Include="src\state\content\content_catalog.cpp" />
@@ -682,6 +691,10 @@
     <ClCompile Include="src\state\build_data\items\details\item_detail_catalog.cpp" />
     <ClCompile Include="src\state\build_data\items\socket_plugs\socket_plug_catalog.cpp" />
     <ClCompile Include="src\state\build_data\items\socket_plugs\socket_plug_build_data_runtime.cpp" />
+    <ClCompile Include="src\state\build_data\items\catalysts\exotic_catalyst_builder.cpp" />
+    <ClCompile Include="src\state\build_data\items\catalysts\exotic_catalyst_generated.cpp" />
+    <ClCompile Include="src\state\build_data\items\catalysts\exotic_catalyst_catalog.cpp" />
+    <ClCompile Include="src\state\build_data\items\catalysts\exotic_catalyst_build_data_runtime.cpp" />
     <ClCompile Include="src\state\build_data\constants\investment_constant_catalog.cpp" />
     <ClCompile Include="src\state\build_data\abilities\ability_bucket_catalog.cpp" />
     <ClCompile Include="src\state\build_data\progressions\progression_catalog.cpp" />
@@ -876,6 +889,7 @@
     <ClCompile Include="src\server\bap\encrypted\queuez\queuez_deferred_push.cpp" />
     <ClCompile Include="src\server\bap\encrypted\queuez\queuez_outcome_staging.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_update_frame.cpp" />
+    <ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_account_preflight.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_subscription.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_change_character.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_select_character.cpp" />
@@ -903,6 +917,7 @@
     <ClCompile Include="src\server\bap\encrypted\push\snapshot\initial_snapshot.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\snapshot\banner_snapshot.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\snapshot\roster_snapshot.cpp" />
+    <ClCompile Include="src\server\bap\encrypted\push\snapshot\social_roster_snapshot.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\snapshot\snapshot_storage.cpp" />
     <ClCompile Include="src\server\web_service\opcode_routes.cpp" />
     <ClCompile Include="src\server\web_service\web_service_runtime.cpp" />
@@ -1015,6 +1030,7 @@
     <ClCompile Include="src\client\content\items\packages\package_collectible_build.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_material_requirement_build.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_detail_build.cpp" />
+    <ClCompile Include="src\client\content\items\packages\package_catalyst_condition_reader.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_socket_plug_build.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_ability_build.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_subclass_build.cpp" />
@@ -1057,6 +1073,8 @@
     <ClCompile Include="src\client\content\items\packages\package_build_report.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_root_tables.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_item_rows.cpp" />
+    <ClCompile Include="src\client\diagnostics\entity_create_probe.cpp" />
+    <ClCompile Include="src\client\diagnostics\image_dump.cpp" />
     <ClCompile Include="src\client\diagnostics\module_range.cpp" />
     <ClCompile Include="src\client\process\freeze\client_process_freeze.cpp" />
     <ClCompile Include="src\core\settings\address_text.cpp" />
@@ -1137,6 +1155,22 @@
     <ClCompile Include="src\middleware\gameplay\group\migration_messages.cpp" />
     <ClCompile Include="src\middleware\gameplay\group\notice_messages.cpp" />
     <ClCompile Include="src\server\gameplay\group\group_migration_receipts.cpp" />
+    <ClCompile Include="src\client\content\items\packages\package_node_build.cpp" />
+    <ClCompile Include="src\client\content\items\packages\package_record_build.cpp" />
+    <ClCompile Include="src\middleware\web_service\messages\opcode1801_codec.cpp" />
+    <ClCompile Include="src\middleware\web_service\messages\opcode1821_codec.cpp" />
+    <ClCompile Include="src\middleware\web_service\messages\opcode2400_codec.cpp" />
+    <ClCompile Include="src\state\build_data\nodes\node_build_data_runtime.cpp" />
+    <ClCompile Include="src\state\build_data\nodes\node_catalog.cpp" />
+    <ClCompile Include="src\state\build_data\records\record_build_data_runtime.cpp" />
+    <ClCompile Include="src\state\build_data\records\record_catalog.cpp" />
+    <ClCompile Include="src\state\build_data\records\rewards\reward_build_data_runtime.cpp" />
+    <ClCompile Include="src\state\build_data\records\rewards\reward_catalog.cpp" />
+    <ClCompile Include="src\state\build_data\records\rewards\reward_persistence.cpp" />
+    <ClCompile Include="src\state\record_claims\record_claims.cpp" />
+    <ClCompile Include="src\state\progression\seasonal_experience.cpp" />
+    <ClCompile Include="src\state\build_data\sobjects\sobject_catalog.cpp" />
+    <ClCompile Include="src\state\lore\lore_grant.cpp" />
   </ItemGroup>
   <ItemGroup Condition="'$(SunriseRunClangTidy)'=='true'">
     <ClCompile Remove="vendor\detours\detours.cpp" />
@@ -1182,6 +1216,7 @@
     <ClInclude Include="src\core\logging\snapshot\internal.h" />
     <ClInclude Include="src\core\logging\view\log_snapshot_view.h" />
     <ClInclude Include="src\core\filesystem\path.h" />
+    <ClInclude Include="src\core\settings\rule_text.h" />
     <ClInclude Include="src\core\filesystem\temporary_sibling.h" />
     <ClInclude Include="src\core\settings\settings.h" />
     <ClInclude Include="src\core\settings\parser.h" />
@@ -1201,6 +1236,9 @@
     <ClInclude Include="src\client\hooks\banner\banner_bind.h" />
     <ClInclude Include="src\client\hooks\banner\banner_hook_lifecycle.h" />
     <ClInclude Include="src\middleware\web_service\messages\opcode504.h" />
+    <ClInclude Include="src\middleware\web_service\messages\opcode701\opcode701_codec.h" />
+    <ClInclude Include="src\middleware\web_service\messages\opcode904\opcode904_codec.h" />
+    <ClInclude Include="src\middleware\web_service\messages\biased_field.h" />
     <ClInclude Include="src\middleware\web_service\messages\opcode903.h" />
     <ClInclude Include="src\middleware\web_service\messages\opcode1901.h" />
     <ClInclude Include="src\core\ui\busy\busy.h" />
@@ -1258,6 +1296,7 @@
     <ClInclude Include="src\client\hooks\infinite_ammo\infinite_ammo.h" />
     <ClInclude Include="src\client\input\window_focus.h" />
     <ClInclude Include="src\client\hooks\teleport\internal.h" />
+    <ClInclude Include="src\client\hooks\vendor_banner\vendor_banner_retire.h" />
     <ClInclude Include="src\client\hooks\teleport\runtime.h" />
     <ClInclude Include="src\client\hooks\world_objects\world_object_registry.h" />
     <ClInclude Include="src\client\ui\movement\movement_panel.h" />
@@ -1384,10 +1423,14 @@
     <ClInclude Include="src\state\steam\steam_state.h" />
     <ClInclude Include="src\state\matchmaking\transactions\internal.h" />
     <ClInclude Include="src\state\runtime\equipment\configured_equipment_identity.h" />
+    <ClInclude Include="src\state\account\pursuit_hold.h" />
+    <ClInclude Include="src\state\vendors\answered_interactions.h" />
     <ClInclude Include="src\state\account\account_state.h" />
     <ClInclude Include="src\state\account\inventory\inventory_state.h" />
     <ClInclude Include="src\state\account\settings\settings_state.h" />
+    <ClInclude Include="src\state\account\settings\settings_delta.h" />
     <ClInclude Include="src\state\account\settings\key_bindings.h" />
+    <ClInclude Include="src\state\account\settings\native_key_binding_map.h" />
     <ClInclude Include="src\state\equipment\light\definition.h" />
     <ClInclude Include="src\state\equipment\light\calculation\equipment_light_calculation.h" />
     <ClInclude Include="src\state\equipment\light\resolution\configured_equipment_light_resolver.h" />
@@ -1456,6 +1499,9 @@
     <ClInclude Include="src\state\build_data\items\details\item_detail_catalog.h" />
     <ClInclude Include="src\state\build_data\items\socket_plugs\definition.h" />
     <ClInclude Include="src\state\build_data\items\socket_plugs\socket_plug_catalog.h" />
+    <ClInclude Include="src\state\build_data\items\catalysts\definition.h" />
+    <ClInclude Include="src\state\build_data\items\catalysts\exotic_catalyst_builder.h" />
+    <ClInclude Include="src\state\build_data\items\catalysts\exotic_catalyst_catalog.h" />
     <ClInclude Include="src\client\content\items\packages\package_socket_plug_build.h" />
     <ClInclude Include="src\state\build_data\inventory\buckets\definition.h" />
     <ClInclude Include="src\state\build_data\inventory\buckets\inventory_bucket_catalog.h" />
@@ -1640,7 +1686,6 @@
     <ClInclude Include="src\middleware\datagen\family4\account\account_encoder.h" />
     <ClInclude Include="src\middleware\datagen\family4\account\layout.h" />
     <ClInclude Include="src\middleware\datagen\family4\account\preferences\layout.h" />
-    <ClInclude Include="src\middleware\datagen\family4\account\preferences\native_key_binding_map.h" />
     <ClInclude Include="src\middleware\datagen\family4\account\preferences\preferences_encoder.h" />
     <ClInclude Include="src\middleware\datagen\family4\character\abi.h" />
     <ClInclude Include="src\middleware\datagen\family4\loadout\definition.h" />
@@ -1737,6 +1782,7 @@
     <ClInclude Include="src\client\hooks\net_tick_probe\net_tick_probe.h" />
     <ClInclude Include="src\client\hooks\bootflow\internal.h" />
     <ClInclude Include="src\client\hooks\bootflow\bootflow_hook_lifecycle.h" />
+    <ClInclude Include="src\client\hooks\bootflow\bootflow_texture_override.h" />
     <ClInclude Include="src\client\hooks\bootflow\spawn\spawn_gate_record_dump.h" />
     <ClInclude Include="src\client\hooks\bootflow\spawn\probe.h" />
     <ClInclude Include="src\client\hooks\config_getter\config_getter_answers.h" />
@@ -1866,6 +1912,8 @@
     <ClInclude Include="src\server\transport\internal.h" />
     <ClInclude Include="src\middleware\content\packages\reader\locator_cache.h" />
     <ClInclude Include="src\server\bap\encrypted\push\queuez\queuez_push_reporting.h" />
+    <ClInclude Include="src\client\diagnostics\entity_create_probe.h" />
+    <ClInclude Include="src\client\diagnostics\image_dump.h" />
     <ClInclude Include="src\client\diagnostics\module_range.h" />
     <ClInclude Include="src\client\process\freeze\client_process_freeze.h" />
     <ClInclude Include="src\core\settings\address_text.h" />
@@ -1957,6 +2005,30 @@
     <ClInclude Include="src\middleware\gameplay\group\notice_messages.h" />
     <ClInclude Include="src\server\gameplay\group\group_migration_receipts.h" />
     <ClInclude Include="src\core\runtime\server_clock.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\client\hooks\network\investment\investment_socket_menu_routing.cpp" />
+    <ClInclude Include="src\client\hooks\network\investment\socket_row_relocation.h" />
+    <ClInclude Include="src\middleware\content\packages\tables\unlock_expression.h" />
+    <ClInclude Include="src\middleware\web_service\messages\opcode1801.h" />
+    <ClInclude Include="src\middleware\web_service\messages\opcode1821.h" />
+    <ClInclude Include="src\middleware\web_service\messages\opcode2400.h" />
+    <ClInclude Include="src\state\build_data\nodes\definition.h" />
+    <ClInclude Include="src\state\build_data\nodes\node_catalog.h" />
+    <ClInclude Include="src\state\build_data\records\definition.h" />
+    <ClInclude Include="src\state\build_data\records\record_catalog.h" />
+    <ClInclude Include="src\state\build_data\records\rewards\definition.h" />
+    <ClInclude Include="src\state\build_data\records\rewards\reward_catalog.h" />
+    <ClInclude Include="src\state\build_data\records\rewards\reward_persistence.h" />
+    <ClInclude Include="src\state\build_data\sobjects\sobject_catalog.h" />
+    <ClInclude Include="src\state\lore\lore_grant.h" />
+    <ClInclude Include="src\state\progression\season_pass_reward_catalog.h" />
+    <ClInclude Include="src\state\progression\seasonal_experience.h" />
+    <ClInclude Include="src\state\record_claims\objective_slot_table.h" />
+    <ClInclude Include="src\state\record_claims\parent_bar_table.h" />
+    <ClInclude Include="src\client\hooks\network\investment\lore_visibility_patch.h" />
+    <ClCompile Include="src\client\hooks\network\investment\investment_lore_visibility.cpp" />
+    <ClInclude Include="src\state\record_claims\record_claims.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

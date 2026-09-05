@@ -468,6 +468,16 @@ bool owns_local_player(void* component) noexcept {
            && owns_player(static_cast<std::byte*>(component));
 }
 
+/** Reports whether the native controlled-object accessor has published a local player. */
+bool controlled_player_present() noexcept {
+    if (g_controlledHandle == nullptr) {
+        return false;
+    }
+    std::uint32_t controlled = kInvalidHandle;
+    g_controlledHandle(&controlled);
+    return controlled != kInvalidHandle;
+}
+
 /** Reads the world position of the body a physics component drives. */
 bool read_position(void* component, Vector& position) noexcept {
     if (component == nullptr) {

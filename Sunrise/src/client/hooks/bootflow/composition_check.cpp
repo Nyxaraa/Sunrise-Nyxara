@@ -104,32 +104,38 @@ __declspec(noinline) std::int64_t __fastcall check(void* config, std::byte* prop
 } // namespace
 
 /**
- * Attaches the solo composition fix.
- * @return True when the target is found and the detour attaches.
+ * Stages the solo composition fix.
+ * @param spec Receives the target and replacement.
+ * @return staged when the target is found, unavailable on a miss.
  */
-bool install_composition_check() noexcept {
+StageResult stage_composition_check(hooking::detour::Spec& spec) noexcept {
     if (g_handle.attached) {
-        return true;
+        return StageResult::attached;
     }
     std::byte* const target = scan_main_image_unique(kCheckSignature, "matchmaking_composition");
     if (target == nullptr) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=composition result=fail reason=target");
-        return false;
+        return StageResult::unavailable;
     }
-    const hooking::detour::Spec spec{target, reinterpret_cast<void*>(&check)};
-    if (!hooking::detour::install(spec, g_handle)) {
+    spec = hooking::detour::Spec{target, reinterpret_cast<void*>(&check)};
+    return StageResult::staged;
+}
+
+/** Takes the solo composition fix's attached handle, or a detached one. */
+void publish_composition_check(const hooking::detour::Handle& handle) noexcept {
+    if (!handle.attached) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=composition result=fail reason=attach");
-        return false;
+        return;
     }
+    g_handle = handle;
     g_original.store(reinterpret_cast<Check>(g_handle.original), std::memory_order_release);
     core::log::write(core::log::Channel::client,
                      core::log::Level::info,
                      "ev=bootflow stage=composition result=ok");
-    return true;
 }
 
 /** Detaches the solo composition fix. */

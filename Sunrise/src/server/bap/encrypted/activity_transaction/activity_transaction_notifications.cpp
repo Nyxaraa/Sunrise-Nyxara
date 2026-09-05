@@ -1,6 +1,5 @@
 #include "activity_transaction_notifications.h"
 
-#include "../../../../core/logging/log.h"
 #include "../../../gameplay/gameplay_advertisement.h"
 #include "../push/activity/activity_arrival.h"
 #include "../push/activity/activity_global_state_push.h"
@@ -29,15 +28,13 @@ namespace {
     // Take the delta's region, not the committed one. Staging runs before the commit, so the
     // committed value still names the region the player has left.
     const push::activity::EffectiveRegion region =
-        push::activity::planned_region(activity.membershipMutation, session.activity.source);
+        push::activity::private_planned_region(activity.membershipMutation,
+                                               session.activity.source);
     const server::gameplay::AdvertisementState state =
         push::activity::region_advertisement(session, region.index);
     if (state != server::gameplay::AdvertisementState::pending) {
         return false;
     }
-    core::log::write(core::log::Channel::server,
-                     core::log::Level::debug,
-                     "ev=gameplay stage=membership result=held reason=no_host_session");
     return true;
 }
 
@@ -126,11 +123,29 @@ namespace {
         // must use the prepared move, never the old committed msg-22 region.
         const push::activity::EffectiveRegion region =
             push::activity::planned_region(activity.membershipMutation, session.activity.source);
+        // This response is staged before the authoritative transaction commits. Carry the
+        // incoming current leg into readiness evaluation as well as the selected roster region;
+        // otherwise the body repeats the stale loading lifetime even though this very report says
+        // the slice set is now instantiated. No later edge is guaranteed to republish that field.
+        push::activity::RefreshReport report{};
+        report.currentRegion =
+            activity.membershipMutation.authoritativeInput.currentRegion.index;
+        report.hasCurrentRegion =
+            activity.membershipMutation.authoritativeInput.hasCurrentRegion;
         // The client reports the region it now holds once its slice set is instantiated, and the
         // roster is that report's answer. It is solicited, so it is never skipped as a repeat,
         // including while the slice set is still instantiating.
         staged = push::activity::append_roster_notification(
-                     session, scratch, key, nonce, response, written, nullptr, &region, true)
+                     session,
+                     scratch,
+                     key,
+                     nonce,
+                     response,
+                     written,
+                     nullptr,
+                     &region,
+                     true,
+                     &report)
                  || staged;
     }
     // A delta that owed nothing is not a failure, and a public link never owes the block above.

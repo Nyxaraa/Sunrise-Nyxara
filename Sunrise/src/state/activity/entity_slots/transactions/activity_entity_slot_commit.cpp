@@ -32,6 +32,7 @@ namespace {
         record.memberKey = prepared.memberKey;
         // A new ActivityClient starts with no membership mirror or bubble grant.
         record.membership = {};
+        record.membership.epoch = membership::session_epoch(record.createdRevision);
         record.bubbleAuthority = {};
         record.joined = true;
         return true;

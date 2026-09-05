@@ -62,10 +62,12 @@ constexpr std::size_t kCardFlagOffset = 8;
 }
 
 /** @param light Equipment light. @return The trailing summary block both records carry. */
-[[nodiscard]] layout::Summary build_summary(std::int32_t light) noexcept {
+[[nodiscard]] layout::Summary build_summary(std::int32_t light,
+                                            std::uint16_t titleRecordIndex) noexcept {
     layout::Summary summary{};
     summary.light = light;
     summary.hashA = layout::kNoHash;
+    summary.indexD = titleRecordIndex;
     return summary;
 }
 
@@ -109,8 +111,12 @@ bool encode_family3(const state::CharacterState& character,
         return false;
     }
     const auto record = output.first(kFamily3RecordSize);
-    copy_record(
-        identity, block, build_summary(light), kFamily3ReservedSize, kFamily3TailSize, record);
+    copy_record(identity,
+                block,
+                build_summary(light, character.equippedTitleRecordIndex),
+                kFamily3ReservedSize,
+                kFamily3TailSize,
+                record);
     // Both stamps are the last reset before sign-in. Zero would make the client run a daily and
     // a weekly rollover as soon as it accepts the record.
     layout::PeriodicReset reset{};
@@ -136,7 +142,12 @@ bool encode_family0(const state::CharacterState& character,
         return false;
     }
     const auto record = output.first(kFamily0RecordSize);
-    copy_record(identity, block, build_summary(light), 0, kFamily0TailSize, record);
+    copy_record(identity,
+                block,
+                build_summary(light, character.equippedTitleRecordIndex),
+                0,
+                kFamily0TailSize,
+                record);
     const layout::Family0Tail tail{};
     std::memcpy(record.data() + kFamily0RecordSize - kFamily0TailSize, &tail, sizeof tail);
     return true;

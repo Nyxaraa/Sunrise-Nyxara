@@ -1,18 +1,21 @@
 #include "progression_catalog.h"
 
+#include <shared_mutex>
+
 #include "../table.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::state::build_data::progressions {
 namespace {
 
-Lock g_lock;
+core::threading::SrwLock g_lock;
 Table<Definition, kDefinitionCapacity> g_definitions;
 
 } // namespace
 
 /** Clears every generated progression definition under the catalog lock. */
 void clear() noexcept {
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_definitions.clear();
 }
 
@@ -34,14 +37,14 @@ bool replace(std::span<const Definition> definitions) noexcept {
     if (!valid(definitions)) {
         return false;
     }
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     return g_definitions.replace(definitions);
 }
 
 /** Lists the definition index each slot of one scope's record array carries. */
 bool slots(Scope scope, std::span<std::uint16_t> output, std::size_t& count) noexcept {
     count = 0;
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const Definition> rows = g_definitions.rows();
     bool complete = !rows.empty();
     for (const Definition& row : rows) {
@@ -65,13 +68,13 @@ bool slots(Scope scope, std::span<std::uint16_t> output, std::size_t& count) noe
 
 /** Copies every row in native definition order. */
 bool snapshot(std::span<Definition> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.snapshot(output, count);
 }
 
 /** @return Number of generated progression definitions, read under the lock. */
 std::size_t count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.count();
 }
 

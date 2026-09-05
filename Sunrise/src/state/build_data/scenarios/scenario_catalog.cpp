@@ -1,12 +1,16 @@
 #include "scenario_catalog.h"
 
+#include <mutex>
+#include <shared_mutex>
+
 #include "../table.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::state::build_data::scenarios {
 namespace {
 
 // One lock covers both tables: a reader must never see new layouts against old roster groups.
-Lock g_lock;
+core::threading::SrwLock g_lock;
 Table<Definition, kDefinitionCapacity> g_definitions;
 Table<RosterGroup, kRosterGroupCapacity> g_groups;
 
@@ -83,7 +87,7 @@ Table<RosterGroup, kRosterGroupCapacity> g_groups;
 
 /** Clears every extracted destination layout and roster group under the catalog lock. */
 void clear() noexcept {
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_definitions.clear();
     g_groups.clear();
 }
@@ -121,7 +125,7 @@ bool replace(std::span<const Definition> definitions,
     if (!valid(definitions, groups)) {
         return false;
     }
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     // Both run, with no short-circuit, so the pair cannot be left half replaced. valid() already
     // checked each against its size, which is the only reason either can refuse.
     const bool storedDefinitions = g_definitions.replace(definitions);
@@ -132,7 +136,7 @@ bool replace(std::span<const Definition> definitions,
 /** Copies one roster group by table index. */
 bool group(std::size_t index, RosterGroup& group) noexcept {
     group = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const RosterGroup> rows = g_groups.rows();
     const bool present = index < rows.size();
     if (present) {
@@ -143,13 +147,13 @@ bool group(std::size_t index, RosterGroup& group) noexcept {
 
 /** @return Published roster group count. */
 std::size_t group_count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_groups.count();
 }
 
 /** Copies every roster group in extraction order. */
 bool snapshot_groups(std::span<RosterGroup> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_groups.snapshot(output, count);
 }
 
@@ -159,7 +163,7 @@ bool find(std::string_view name, Definition& definition) noexcept {
     if (name.empty() || name.size() > kNameCapacity) {
         return false;
     }
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     for (const Definition& row : g_definitions.rows()) {
         if (name_of(row) == name) {
             definition = row;
@@ -171,13 +175,13 @@ bool find(std::string_view name, Definition& definition) noexcept {
 
 /** Copies every row in extraction order. */
 bool snapshot(std::span<Definition> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.snapshot(output, count);
 }
 
 /** @return The number of extracted destination layouts, read under the lock. */
 std::size_t count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.count();
 }
 

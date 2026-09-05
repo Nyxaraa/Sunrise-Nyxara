@@ -70,6 +70,27 @@ void observe_unresolved_slice_set(RosterIntersection& state) noexcept;
  * Only 56 installed objects declare any of them, and the key limit above holds only for that
  * filtered set. Feeding every placed object instead overflows most destinations.
  */
+/**
+ * Object keys admitted whatever slot types they declare.
+ *
+ * The slot-type filter below is what decides which placed objects become roster groups, and a
+ * placement trace shows it admitting **68 of 5986** objects overall and **1 of 32** across the
+ * whole raid. Bubble 14 -- the Wall of Wishes room -- has exactly two objects, `0x101DECCF`
+ * (785 slots) and `0x432A36E6` (21 slots), and neither declares an admitted type, so the host
+ * sends no per-object data for that bubble at all while the client builds its twenty panels
+ * locally and never shows them.
+ *
+ * Widening the type list is not the way to test that: only 56 installed objects declare any of the
+ * nine types, the key limit holds only for that filtered set, and admitting common types overflows
+ * `kRosterKeyCapacity` on most destinations, which makes a destination publish ZERO groups. Naming
+ * one key instead adds a single group to one destination -- 3 keys become 4 of 16, and 21 slots sit
+ * well inside `kRosterSlotCapacity` -- so the experiment is bounded and reversible.
+ *
+ * The 785-slot container is deliberately NOT listed: its slots would each carry a header and the
+ * roster body is already 976 bytes, so it risks the message size rather than testing the idea.
+ */
+inline constexpr std::array<std::uint32_t, 1> kForcedRosterKeys = {0x432A36E6U};
+
 inline constexpr std::array<std::uint16_t, 9> kRosterSlotTypes = {
     8, 13, 16, 17, 21, 35, 37, 41, 67};
 

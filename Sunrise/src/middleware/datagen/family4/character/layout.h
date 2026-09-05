@@ -43,7 +43,9 @@ inline constexpr std::size_t kInventoryChangeUnknownSize = 4;
 /** The character object carries at most 16 transient inventory-change records. */
 inline constexpr std::size_t kInventoryChangeRecordCapacity = 16;
 /** 52 reserved bytes separate the equipment summary from its validity gate. */
-inline constexpr std::size_t kSummaryGatePaddingSize = 52;
+inline constexpr std::size_t kSummaryTitlePaddingSize = 36;
+/** Reserved bytes between the equipped-title row and the inventory validity gate. */
+inline constexpr std::size_t kTitleGatePaddingSize = 14;
 /** 14 reserved bytes separate the two inventory validity gate fields. */
 inline constexpr std::size_t kGateStatePaddingSize = 14;
 /** 16 reserved bytes separate the second gate from seen-message storage. */
@@ -86,6 +88,8 @@ inline constexpr std::size_t kSummaryDefinitionWordCount = 2;
 inline constexpr std::size_t kSummaryArrayCount = 2;
 /** Every set bit is the native absent definition index in an equipment-summary slot. */
 inline constexpr std::uint16_t kEmptySummaryDefinitionIndex = 0xFFFF;
+/** The Seals screen compares its record row against this field. */
+inline constexpr std::size_t kEquippedTitleRecordIndexOffset = 11'992;
 
 #pragma pack(push, 1)
 
@@ -167,7 +171,10 @@ struct Object {
     InventoryChangeList inventoryChanges{};
     std::array<std::uint64_t, kEquipmentCapacity> equippedInstanceSoids{};
     EquipmentSummary equipmentSummary{};
-    std::array<std::byte, kSummaryGatePaddingSize> summaryGatePadding{};
+    std::array<std::byte, kSummaryTitlePaddingSize> summaryTitlePadding{};
+    /** Native DestinyRecordDefinition row of the equipped title, or 0xFFFF. */
+    std::uint16_t equippedTitleRecordIndex{kEmptySummaryDefinitionIndex};
+    std::array<std::byte, kTitleGatePaddingSize> titleGatePadding{};
     /** 0 is a valid definition index and keeps the inventory-present gate open. */
     std::uint16_t inventoryGateDefinitionIndex{};
     std::array<std::byte, kGateStatePaddingSize> gateStatePadding{};
@@ -241,6 +248,7 @@ static_assert(sizeof(InventoryChangeList)
 static_assert(offsetof(InventoryChangeList, records) == 2 * sizeof(std::uint16_t));
 static_assert(sizeof(ItemStackRow) == kItemStackRowSize);
 static_assert(sizeof(Object) == kObjectSize);
+static_assert(offsetof(Object, equippedTitleRecordIndex) == kEquippedTitleRecordIndexOffset);
 static_assert(std::is_trivially_copyable_v<Object>);
 
 } // namespace sunrise::middleware::datagen::family4::character::layout

@@ -69,8 +69,8 @@ bool preview_item_dismantle(const PendingItemDismantle& mutation, AccountState& 
 
 /** Commits one prepared dismantle only while its complete account views are unchanged. */
 bool commit_item_dismantle(PendingItemDismantle& mutation) noexcept {
-    const PendingItemDismantle prepared = mutation;
-    mutation = {};
+    const PendingItemDismantle& prepared = mutation;
+    const PendingConsumption consume{mutation};
     const auto fail = [&prepared](std::string_view reason) noexcept {
         report_dismantle("commit",
                          "fail",

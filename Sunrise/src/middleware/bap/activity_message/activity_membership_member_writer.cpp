@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <bit>
-#include <limits>
 
 #include "../../encoding/bit_raw.h"
 #include "replicate_membership.h"
@@ -77,12 +76,7 @@ template <std::size_t Size>
     return true;
 }
 
-/**
- * Writes one 8-element key, low byte first.
- * @param writer Fixed-buffer MSB-first writer.
- * @param key Host-order key to split into byte elements.
- * @return True when all 8 elements fit.
- */
+/** Writes one 8-byte key, low byte first. */
 [[nodiscard]] bool write_member_key(encoding::bits::Writer& writer, std::uint64_t key) noexcept {
     for (std::size_t index = 0; index < kMemberKeyByteCount; ++index) {
         if (!writer.write((key >> (index * 8U)) & 0xFFU, 8)) {
@@ -92,12 +86,7 @@ template <std::size_t Size>
     return true;
 }
 
-/**
- * Writes the nested 18-byte player blob with matching identity values.
- * @param writer Fixed-buffer writer sitting after the 14-bit byte count.
- * @param identity Identity values repeated inside the nested player record.
- * @return True when all 144 blob bits fit.
- */
+/** Writes the nested 18-byte player blob. */
 [[nodiscard]] bool write_player_blob(encoding::bits::Writer& writer,
                                      const client_identity::ClientIdentity& identity) noexcept {
     return writer.write(1, 3) && writer.write(0, 1) && writer.write(0, 10) && writer.write(1, 1)

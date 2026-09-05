@@ -182,6 +182,129 @@ void report_bind_inputs(const std::byte* client) noexcept {
     }
 }
 
+/** Bytes per hex log line. Two characters a byte keeps a line well inside its capacity. */
+constexpr std::size_t kHexBytesPerLine = 64;
+/** Bytes at the membership header to dump, which is where the decoded member table starts. */
+constexpr std::size_t kMemberDumpBytes = 512;
+/** Most of one region record to dump. A record carrying a 128-byte descriptor still fits. */
+constexpr std::size_t kRegionDumpBytes = 320;
+/** The wire numbers regions 0, 8, 16 ... 504, so consecutive terms differ by this. */
+constexpr std::int32_t kRegionIndexStride = 8;
+/** Terms matched before a candidate is accepted as the region table. */
+constexpr std::size_t kRegionMatchTerms = 4;
+/** Largest in-memory stride between two region records that is still worth testing. */
+constexpr std::size_t kMaximumRegionStride = 8'192;
+/** End of the searchable span. The entity-slot mask sits above it and holds no region table. */
+constexpr std::size_t kScanEndOffset = kPendingMaskOffset;
+/** Clients whose region table is dumped. Later messages repeat a table that has already been read.
+ */
+constexpr std::uint32_t kRegionDumpBudget = 3;
+
+std::atomic<std::uint32_t> g_regionDumps{0};
+
+/**
+ * Emits one labelled hex run over as many lines as it needs.
+ * @param stage Log stage name.
+ * @param base Offset the run starts at, so a line names where its bytes came from.
+ * @param data First byte of the run.
+ * @param size Bytes to emit.
+ */
+void report_hex(const char* stage,
+                std::size_t base,
+                const std::byte* data,
+                std::size_t size) noexcept {
+    for (std::size_t offset = 0; offset < size; offset += kHexBytesPerLine) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const std::size_t run =
+            (size - offset) < kHexBytesPerLine ? size - offset : kHexBytesPerLine;
+        int written = std::snprintf(
+            line.data(), line.size(), "ev=probe stage=%s at=%zu raw=", stage, base + offset);
+        for (std::size_t index = 0; written > 0 && index < run; ++index) {
+            const int part =
+                std::snprintf(line.data() + written,
+                              line.size() - static_cast<std::size_t>(written),
+                              "%02X",
+                              std::to_integer<unsigned>(data[offset + index]));
+            if (part <= 0) {
+                break;
+            }
+            written += part;
+        }
+        if (written > 0) {
+            core::log::write(core::log::Channel::client,
+                             core::log::Level::info,
+                             {line.data(), static_cast<std::size_t>(written)});
+        }
+    }
+}
+
+/**
+ * Reports one found region table and the two records that differ by the advertisement.
+ * @param client ActivityClient.
+ * @param offset Offset of the record holding region 8.
+ * @param stride Bytes between two consecutive records.
+ */
+void report_region_table(const std::byte* client, std::size_t offset, std::size_t stride) noexcept {
+    std::array<char, core::log::kLineCapacity> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=probe stage=regions result=found client=0x%llX "
+                                      "at=%zu stride=%zu",
+                                      address_of(client),
+                                      offset,
+                                      stride);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+    // Region 8 is the one the advertisement rides in and region 16 never carries one, so the
+    // bytes that differ between them are exactly what the client kept of the descriptor.
+    const std::size_t dump = stride < kRegionDumpBytes ? stride : kRegionDumpBytes;
+    report_hex("members", kMembershipHeaderOffset, client + kMembershipHeaderOffset, kMemberDumpBytes);
+    report_hex("region8", offset, client + offset, dump);
+    if (offset + stride + dump <= kScanEndOffset) {
+        report_hex("region16", offset + stride, client + offset + stride, dump);
+    }
+}
+
+/**
+ * Finds the client's decoded region table with no signature and dumps two of its records.
+ * Four consecutive terms of the 8-step region sequence at one fixed stride name the table, and
+ * nothing else in the object is expected to hold that run.
+ * @param client ActivityClient the handler has just committed a body into.
+ */
+void report_regions(const std::byte* client) noexcept {
+    if (g_regionDumps.fetch_add(1, std::memory_order_relaxed) >= kRegionDumpBudget) {
+        return;
+    }
+    for (std::size_t offset = kMembershipHeaderOffset; offset + sizeof(std::int32_t) <= kScanEndOffset;
+         offset += sizeof(std::int32_t)) {
+        if (field<std::int32_t>(client, offset) != kRegionIndexStride) {
+            continue;
+        }
+        for (std::size_t stride = sizeof(std::int32_t); stride <= kMaximumRegionStride;
+             stride += sizeof(std::int32_t)) {
+            if (offset + kRegionMatchTerms * stride > kScanEndOffset) {
+                break;
+            }
+            bool matched = true;
+            for (std::size_t term = 1; matched && term < kRegionMatchTerms; ++term) {
+                matched = field<std::int32_t>(client, offset + term * stride)
+                          == kRegionIndexStride * static_cast<std::int32_t>(term + 1);
+            }
+            if (!matched) {
+                continue;
+            }
+            report_region_table(client, offset, stride);
+            return;
+        }
+    }
+    core::log::write(core::log::Channel::client,
+                     core::log::Level::info,
+                     "ev=probe stage=regions result=absent");
+}
+
 /** @param client ActivityClient. @return Entity-slot bits it holds but has not applied. */
 [[nodiscard]] std::size_t pending_slots(const std::byte* client) noexcept {
     const auto* mask = reinterpret_cast<const std::uint8_t*>(client + kPendingMaskOffset);
@@ -226,6 +349,7 @@ char __fastcall receive(const std::byte* client, std::int64_t body, int size) no
     const auto after = field<std::uint16_t>(client, kStatusWordOffset);
     report(client, before, after);
     report_bind_inputs(client);
+    report_regions(client);
     track(client, GetTickCount64());
     return result;
 }

@@ -1,13 +1,6 @@
-/**
- * Incident targets index a 7,763-record table that the Client reads without a bound check, so a
- * bad index is a crash and not a decode error. Rows 795, 4690 and 5375 hold type code -1 and are
- * the same risk. This validator rejects both before anything acts on the body.
- * The compressed target selector carries its own 9-bit byte length, so the fields behind it are
- * located and the whole body is framed.
- */
+/** Validates incident framing and rejects targets unsafe for the Client's unbounded table read. */
 
 #include <algorithm>
-#include <climits>
 
 #include "../../encoding/bit_reader.h"
 #include "../../encoding/byte_order.h"
@@ -78,7 +71,7 @@ Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept 
         if (!reader.read(kTargetWidth, field)) {
             return Verdict::truncated;
         }
-        parsed.extraTargets[index] = static_cast<std::uint32_t>(field);
+        parsed.extraTargets[index] = static_cast<std::uint16_t>(field);
         if (!target_allowed(parsed.extraTargets[index], verdict)) {
             return verdict;
         }
@@ -87,8 +80,7 @@ Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept 
     if (!reader.read(kSelectorPresenceWidth, field)) {
         return Verdict::truncated;
     }
-    parsed.hasCompressedSelector = field != 0;
-    if (parsed.hasCompressedSelector) {
+    if (field != 0) {
         if (!reader.read(kSelectorLengthWidth, field)) {
             return Verdict::truncated;
         }
@@ -96,11 +88,9 @@ Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept 
         if (parsed.selectorLength > kSelectorMaximum) {
             return Verdict::selectorTooLong;
         }
-        for (std::uint32_t index = 0; index < parsed.selectorLength; ++index) {
-            if (!reader.read(CHAR_BIT, field)) {
-                return Verdict::truncated;
-            }
-            parsed.selector[index] = static_cast<std::byte>(field);
+        if (!reader.skip(static_cast<std::size_t>(parsed.selectorLength)
+                         * encoding::kBitsPerByte)) {
+            return Verdict::truncated;
         }
     }
 
@@ -108,13 +98,9 @@ Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept 
         return Verdict::truncated;
     }
     parsed.hasOptionalBlock = field != 0;
-    if (parsed.hasOptionalBlock) {
-        std::uint64_t wordB = 0;
-        if (!reader.read(kOptionalWordWidth, field) || !reader.read(kOptionalWordWidth, wordB)) {
-            return Verdict::truncated;
-        }
-        parsed.optionalWordA = static_cast<std::uint32_t>(field);
-        parsed.optionalWordB = static_cast<std::uint32_t>(wordB);
+    if (parsed.hasOptionalBlock
+        && !reader.skip(static_cast<std::size_t>(kOptionalWordWidth) * 2U)) {
+        return Verdict::truncated;
     }
 
     if (!reader.read(kPayloadLengthWidth, field)) {
@@ -124,13 +110,9 @@ Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept 
     if (parsed.payloadLength > kPayloadMaximum) {
         return Verdict::payloadTooLong;
     }
-    for (std::uint32_t index = 0; index < parsed.payloadLength; ++index) {
-        if (!reader.read(CHAR_BIT, field)) {
-            return Verdict::truncated;
-        }
-        parsed.payload[index] = static_cast<std::byte>(field);
+    if (!reader.skip(static_cast<std::size_t>(parsed.payloadLength) * encoding::kBitsPerByte)) {
+        return Verdict::truncated;
     }
-    parsed.hasPayload = true;
     parsed.consumedBits = static_cast<std::uint32_t>(payload.size() * encoding::kBitsPerByte
                                                      - reader.remaining_bits());
     return Verdict::accepted;

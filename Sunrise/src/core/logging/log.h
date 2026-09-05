@@ -52,6 +52,19 @@ void shutdown() noexcept;
 void write(Channel channel, Level level, std::string_view event) noexcept;
 
 /**
+ * Formats and emits one structured event when allowed by the channel threshold.
+ *
+ * The line is built in `kLineCapacity` storage and truncated to fit, which is what every caller
+ * that spelled out its own array and `snprintf` did by hand. Nothing is formatted for a level the
+ * channel refuses, so a debug line costs nothing when debug is off.
+ *
+ * @param channel Subsystem owning the event.
+ * @param level Severity of the event.
+ * @param format printf-style format; `%s` arguments must be NUL-terminated.
+ */
+void writef(Channel channel, Level level, const char* format, ...) noexcept;
+
+/**
  * Emits one debug event carrying a duration in the ms field.
  * Timing is diagnostic, so it stays off at the levels a normal run uses.
  * @param channel Channel owning the measured boundary.

@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdio>
 #include <limits>
+#include <span>
 
 #include "../../../../../core/logging/log.h"
 #include "../../../../../middleware/datagen/definitions.h"
@@ -192,21 +194,22 @@ bool stage_character_appearance_refresh(const SessionState& before,
     ++refresh.after.family0Version;
     refresh.characterSoid = characterSoid;
     const bool staged = valid(refresh.after);
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count =
-        std::snprintf(line.data(),
-                      line.size(),
-                      "ev=equip stage=family0_version result=%s root=0x%llX before=%d after=%d "
-                      "character=0x%llX",
-                      staged ? "ok" : "fail",
-                      static_cast<unsigned long long>(before.family4RootSoid),
-                      before.family0Version,
-                      refresh.after.family0Version,
-                      static_cast<unsigned long long>(characterSoid));
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         staged ? core::log::Level::debug : core::log::Level::warn,
-                         {line.data(), static_cast<std::size_t>(count)});
+    if (!staged) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=equip stage=family0_version result=fail root=0x%llX before=%d after=%d "
+            "character=0x%llX",
+            static_cast<unsigned long long>(before.family4RootSoid),
+            before.family0Version,
+            refresh.after.family0Version,
+            static_cast<unsigned long long>(characterSoid));
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
     }
     return staged;
 }
@@ -227,22 +230,23 @@ bool stage_roster_appearance_refresh(const SessionState& before,
     refresh.characterSoid = characterSoid;
     refresh.includeRoster = includeRoster;
     const bool staged = valid(refresh.after);
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=appearance stage=family3_version result=%s root=0x%llX before=%d after=%d "
-        "character=0x%llX roster=%u",
-        staged ? "ok" : "fail",
-        static_cast<unsigned long long>(before.family3RootSoid),
-        before.family3Version,
-        refresh.after.family3Version,
-        static_cast<unsigned long long>(characterSoid),
-        includeRoster ? 1U : 0U);
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         staged ? core::log::Level::debug : core::log::Level::warn,
-                         {line.data(), static_cast<std::size_t>(count)});
+    if (!staged) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=appearance stage=family3_version result=fail root=0x%llX before=%d after=%d "
+            "character=0x%llX roster=%u",
+            static_cast<unsigned long long>(before.family3RootSoid),
+            before.family3Version,
+            refresh.after.family3Version,
+            static_cast<unsigned long long>(characterSoid),
+            includeRoster ? 1U : 0U);
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
     }
     return staged;
 }
@@ -298,27 +302,28 @@ bool stage_socket_plug(const SessionState& before,
     socketPlug.targetInstanceSoid = targetInstanceSoid;
     socketPlug.updatesAccount = updatesAccount;
     const bool staged = valid(socketPlug.after);
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=socket_plug stage=queuez_version result=%s root=0x%llX before=%d after=%d "
-        "residents=%u account=0x%llX character=0x%llX instance=0x%llX "
-        "item_definition=%u account_update=%u",
-        staged ? "ok" : "fail",
-        static_cast<unsigned long long>(before.family4RootSoid),
-        before.family4Version,
-        socketPlug.after.family4Version,
-        static_cast<unsigned>(before.family4ResidentCount),
-        static_cast<unsigned long long>(accountSoid),
-        static_cast<unsigned long long>(characterSoid),
-        static_cast<unsigned long long>(targetInstanceSoid),
-        itemInstanceDefinitionId,
-        static_cast<unsigned>(updatesAccount));
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         staged ? core::log::Level::debug : core::log::Level::warn,
-                         {line.data(), static_cast<std::size_t>(count)});
+    if (!staged) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=socket_plug stage=queuez_version result=fail root=0x%llX before=%d after=%d "
+            "residents=%u account=0x%llX character=0x%llX instance=0x%llX "
+            "item_definition=%u account_update=%u",
+            static_cast<unsigned long long>(before.family4RootSoid),
+            before.family4Version,
+            socketPlug.after.family4Version,
+            static_cast<unsigned>(before.family4ResidentCount),
+            static_cast<unsigned long long>(accountSoid),
+            static_cast<unsigned long long>(characterSoid),
+            static_cast<unsigned long long>(targetInstanceSoid),
+            itemInstanceDefinitionId,
+            static_cast<unsigned>(updatesAccount));
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
     }
     return staged;
 }
@@ -371,24 +376,25 @@ bool stage_subclass_selection(const SessionState& before,
     selection.characterSoid = characterSoid;
     selection.subclassInstanceSoid = subclassInstanceSoid;
     const bool staged = valid(selection.after);
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=subclass_select stage=queuez_version result=%s root=0x%llX before=%d after=%d "
-        "residents=%u character=0x%llX instance=0x%llX item_definition=%u",
-        staged ? "ok" : "fail",
-        static_cast<unsigned long long>(before.family4RootSoid),
-        before.family4Version,
-        selection.after.family4Version,
-        static_cast<unsigned>(before.family4ResidentCount),
-        static_cast<unsigned long long>(characterSoid),
-        static_cast<unsigned long long>(subclassInstanceSoid),
-        itemInstanceDefinitionId);
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         staged ? core::log::Level::debug : core::log::Level::warn,
-                         {line.data(), static_cast<std::size_t>(count)});
+    if (!staged) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=subclass_select stage=queuez_version result=fail root=0x%llX before=%d after=%d "
+            "residents=%u character=0x%llX instance=0x%llX item_definition=%u",
+            static_cast<unsigned long long>(before.family4RootSoid),
+            before.family4Version,
+            selection.after.family4Version,
+            static_cast<unsigned>(before.family4ResidentCount),
+            static_cast<unsigned long long>(characterSoid),
+            static_cast<unsigned long long>(subclassInstanceSoid),
+            itemInstanceDefinitionId);
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
     }
     return staged;
 }
@@ -449,31 +455,140 @@ bool stage_item_acquisition(const SessionState& before,
     acquisition.acquiredInstanceSoid = acquiredInstanceSoid;
     acquisition.updatesAccount = updatesAccount;
     const bool staged = valid(acquisition.after);
-
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count =
-        std::snprintf(line.data(),
-                      line.size(),
-                      "ev=acquire stage=queuez_version result=%s root=0x%llX before=%d after=%d "
-                      "residents_before=%u residents_after=%u character=0x%llX instance=0x%llX "
-                      "character_definition=%u item_definition=%u account_update=%u",
-                      staged ? "ok" : "fail",
-                      static_cast<unsigned long long>(before.family4RootSoid),
-                      before.family4Version,
-                      acquisition.after.family4Version,
-                      static_cast<unsigned>(before.family4ResidentCount),
-                      static_cast<unsigned>(acquisition.after.family4ResidentCount),
-                      static_cast<unsigned long long>(characterSoid),
-                      static_cast<unsigned long long>(acquiredInstanceSoid),
-                      characterDefinitionId,
-                      itemInstanceDefinitionId,
-                      static_cast<unsigned>(updatesAccount));
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         staged ? core::log::Level::debug : core::log::Level::warn,
-                         {line.data(), static_cast<std::size_t>(count)});
+    if (!staged) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=acquire stage=queuez_version result=fail root=0x%llX before=%d after=%d "
+            "residents_before=%u residents_after=%u character=0x%llX instance=0x%llX "
+            "character_definition=%u item_definition=%u account_update=%u",
+            static_cast<unsigned long long>(before.family4RootSoid),
+            before.family4Version,
+            acquisition.after.family4Version,
+            static_cast<unsigned>(before.family4ResidentCount),
+            static_cast<unsigned>(acquisition.after.family4ResidentCount),
+            static_cast<unsigned long long>(characterSoid),
+            static_cast<unsigned long long>(acquiredInstanceSoid),
+            characterDefinitionId,
+            itemInstanceDefinitionId,
+            static_cast<unsigned>(updatesAccount));
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
     }
     return staged;
+}
+
+/** Checks that a fixed bundle can append all residents in one Family-4 increment. */
+bool stage_direct_item_bundle(const SessionState& before,
+                              std::uint64_t accountSoid,
+                              std::uint64_t characterSoid,
+                              std::uint64_t firstInstanceSoid,
+                              std::size_t itemCount,
+                              std::int32_t& family4Version) noexcept {
+    family4Version = 0;
+    std::uint32_t accountDefinitionId = 0;
+    std::uint32_t characterDefinitionId = 0;
+    std::uint32_t itemDefinitionId = 0;
+    if (!valid(before) || !before.family4Active || accountSoid == 0 || characterSoid == 0
+        || firstInstanceSoid == 0 || itemCount == 0 || accountSoid != before.family4RootSoid
+        || before.family4ResidentCount == 0
+        || itemCount > before.family4Residents.size() - before.family4ResidentCount
+        || itemCount - 1U > (std::numeric_limits<std::uint64_t>::max)() - firstInstanceSoid
+        || before.family4Version == (std::numeric_limits<std::int32_t>::max)()
+        || !middleware::datagen::object_id(
+            kAccountFamilyType, middleware::datagen::kAccountSlot, accountDefinitionId)
+        || !middleware::datagen::object_id(
+            kAccountFamilyType, middleware::datagen::kCharacterSlot, characterDefinitionId)
+        || !middleware::datagen::object_id(
+            kAccountFamilyType, middleware::datagen::kItemInstanceSlot, itemDefinitionId)) {
+        return false;
+    }
+
+    std::size_t accountMatches = 0;
+    std::size_t characterMatches = 0;
+    for (std::size_t residentIndex = 0; residentIndex < before.family4ResidentCount;
+         ++residentIndex) {
+        const ResidentObject& resident = before.family4Residents[residentIndex];
+        accountMatches += static_cast<std::size_t>(resident.objectSoid == accountSoid
+                                                   && resident.definitionId == accountDefinitionId);
+        characterMatches += static_cast<std::size_t>(
+            resident.objectSoid == characterSoid && resident.definitionId == characterDefinitionId);
+        for (std::size_t itemIndex = 0; itemIndex < itemCount; ++itemIndex) {
+            if (resident.objectSoid == firstInstanceSoid + itemIndex) {
+                return false;
+            }
+        }
+    }
+    if (accountMatches != 1 || characterMatches != 1) {
+        return false;
+    }
+    family4Version = before.family4Version + 1;
+    return true;
+}
+
+/** Stages one atomic record-reward manifest update. */
+bool stage_record_reward_grant(const SessionState& before,
+                               std::uint64_t accountSoid,
+                               std::uint64_t characterSoid,
+                               std::span<const std::uint64_t> appendedResidents,
+                               RecordRewardGrant& grant) noexcept {
+    grant = {};
+    std::uint32_t accountDefinitionId = 0;
+    std::uint32_t characterDefinitionId = 0;
+    std::uint32_t itemDefinitionId = 0;
+    if (!valid(before) || !before.family4Active || accountSoid == 0 || characterSoid == 0
+        || accountSoid != before.family4RootSoid || before.family4ResidentCount == 0
+        || appendedResidents.size() > before.family4Residents.size() - before.family4ResidentCount
+        || before.family4Version == (std::numeric_limits<std::int32_t>::max)()
+        || !middleware::datagen::object_id(
+            kAccountFamilyType, middleware::datagen::kAccountSlot, accountDefinitionId)
+        || !middleware::datagen::object_id(
+            kAccountFamilyType, middleware::datagen::kCharacterSlot, characterDefinitionId)
+        || !middleware::datagen::object_id(
+            kAccountFamilyType, middleware::datagen::kItemInstanceSlot, itemDefinitionId)) {
+        return false;
+    }
+
+    std::size_t accountMatches = 0;
+    std::size_t characterMatches = 0;
+    for (std::size_t index = 0; index < before.family4ResidentCount; ++index) {
+        const ResidentObject& resident = before.family4Residents[index];
+        accountMatches += static_cast<std::size_t>(resident.objectSoid == accountSoid
+                                                   && resident.definitionId == accountDefinitionId);
+        characterMatches += static_cast<std::size_t>(
+            resident.objectSoid == characterSoid && resident.definitionId == characterDefinitionId);
+        if (std::find(appendedResidents.begin(), appendedResidents.end(), resident.objectSoid)
+            != appendedResidents.end()) {
+            return false;
+        }
+    }
+    if (accountMatches != 1 || characterMatches != 1) {
+        return false;
+    }
+    for (std::size_t index = 0; index < appendedResidents.size(); ++index) {
+        const auto prior = appendedResidents.first(index);
+        if (appendedResidents[index] == 0
+            || std::find(prior.begin(), prior.end(), appendedResidents[index]) != prior.end()) {
+            return false;
+        }
+    }
+
+    grant.after = before;
+    ++grant.after.family4Version;
+    for (const std::uint64_t soid : appendedResidents) {
+        grant.after.family4Residents[grant.after.family4ResidentCount++] = {soid, itemDefinitionId};
+    }
+    grant.accountDefinitionId = accountDefinitionId;
+    grant.characterDefinitionId = characterDefinitionId;
+    grant.itemInstanceDefinitionId = itemDefinitionId;
+    grant.accountSoid = accountSoid;
+    grant.characterSoid = characterSoid;
+    grant.appendedResidentCount = appendedResidents.size();
+    return valid(grant.after);
 }
 
 /** Stages an account upsert and, for a newly source-backed profile row, one manifest append. */
@@ -541,30 +656,31 @@ bool stage_profile_item_acquisition(const SessionState& before,
     acquisition.actionSource = actionSource;
     acquisition.appendedResident = appendResident;
     const bool staged = valid(acquisition.after);
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=profile_acquire stage=queuez_version result=%s root=0x%llX before=%d after=%d "
-        "residents_before=%u residents_after=%u account_definition=%u "
-        "instance=0x%llX item_definition=%u action_source=%u appended_row=%u "
-        "appended_resident=%u",
-        staged ? "ok" : "fail",
-        static_cast<unsigned long long>(before.family4RootSoid),
-        before.family4Version,
-        acquisition.after.family4Version,
-        static_cast<unsigned>(before.family4ResidentCount),
-        static_cast<unsigned>(acquisition.after.family4ResidentCount),
-        accountDefinitionId,
-        static_cast<unsigned long long>(acquiredInstanceSoid),
-        itemInstanceDefinitionId,
-        static_cast<unsigned>(actionSource),
-        static_cast<unsigned>(appended),
-        static_cast<unsigned>(appendResident));
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         staged ? core::log::Level::debug : core::log::Level::warn,
-                         {line.data(), static_cast<std::size_t>(count)});
+    if (!staged) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=profile_acquire stage=queuez_version result=fail root=0x%llX before=%d "
+            "after=%d residents_before=%u residents_after=%u account_definition=%u "
+            "instance=0x%llX item_definition=%u action_source=%u appended_row=%u "
+            "appended_resident=%u",
+            static_cast<unsigned long long>(before.family4RootSoid),
+            before.family4Version,
+            acquisition.after.family4Version,
+            static_cast<unsigned>(before.family4ResidentCount),
+            static_cast<unsigned>(acquisition.after.family4ResidentCount),
+            accountDefinitionId,
+            static_cast<unsigned long long>(acquiredInstanceSoid),
+            itemInstanceDefinitionId,
+            static_cast<unsigned>(actionSource),
+            static_cast<unsigned>(appended),
+            static_cast<unsigned>(appendResident));
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
     }
     return staged;
 }
@@ -635,32 +751,32 @@ bool stage_item_dismantle(const SessionState& before,
     dismantle.dismantledInstanceSoid = dismantledInstanceSoid;
     dismantle.updatesAccount = updatesAccount;
     const bool staged = valid(dismantle.after);
-
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count =
-        std::snprintf(line.data(),
-                      line.size(),
-                      "ev=dismantle stage=queuez_version result=%s root=0x%llX before=%d after=%d "
-                      "residents_before=%u residents_after=%u resident_index=%zu character=0x%llX "
-                      "instance=0x%llX account_definition=%u character_definition=%u "
-                      "item_definition=%u account_update=%u",
-                      staged ? "ok" : "fail",
-                      static_cast<unsigned long long>(before.family4RootSoid),
-                      before.family4Version,
-                      dismantle.after.family4Version,
-                      static_cast<unsigned>(before.family4ResidentCount),
-                      static_cast<unsigned>(dismantle.after.family4ResidentCount),
-                      dismantledResidentIndex,
-                      static_cast<unsigned long long>(characterSoid),
-                      static_cast<unsigned long long>(dismantledInstanceSoid),
-                      accountDefinitionId,
-                      characterDefinitionId,
-                      itemInstanceDefinitionId,
-                      static_cast<unsigned>(updatesAccount));
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         staged ? core::log::Level::debug : core::log::Level::warn,
-                         {line.data(), static_cast<std::size_t>(count)});
+    if (!staged) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=dismantle stage=queuez_version result=fail root=0x%llX before=%d after=%d "
+            "residents_before=%u residents_after=%u resident_index=%zu character=0x%llX "
+            "instance=0x%llX account_definition=%u character_definition=%u "
+            "item_definition=%u account_update=%u",
+            static_cast<unsigned long long>(before.family4RootSoid),
+            before.family4Version,
+            dismantle.after.family4Version,
+            static_cast<unsigned>(before.family4ResidentCount),
+            static_cast<unsigned>(dismantle.after.family4ResidentCount),
+            dismantledResidentIndex,
+            static_cast<unsigned long long>(characterSoid),
+            static_cast<unsigned long long>(dismantledInstanceSoid),
+            accountDefinitionId,
+            characterDefinitionId,
+            itemInstanceDefinitionId,
+            static_cast<unsigned>(updatesAccount));
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
     }
     return staged;
 }

@@ -35,14 +35,8 @@ constexpr std::uint8_t kDismantleClassMaskBits =
     if (state.dismantleRewardCount > state.dismantleRewards.size()) {
         return false;
     }
-    for (std::size_t index = 0; index < state.dismantleRewards.size(); ++index) {
+    for (std::size_t index = 0; index < state.dismantleRewardCount; ++index) {
         const DismantleRewardPolicy& reward = state.dismantleRewards[index];
-        if (index >= state.dismantleRewardCount) {
-            if (!empty_dismantle_reward(reward)) {
-                return false;
-            }
-            continue;
-        }
         if (reward.definitionHash == inventory::kNoDefinitionHash || reward.quantity <= 0
             || (reward.tierMask & ~kDismantleTierMaskBits) != 0
             || (reward.classMask & ~kDismantleClassMaskBits) != 0
@@ -55,18 +49,40 @@ constexpr std::uint8_t kDismantleClassMaskBits =
             }
         }
     }
-    return true;
+    const auto tail =
+        state.dismantleRewards.cbegin() + static_cast<std::ptrdiff_t>(state.dismantleRewardCount);
+    return std::all_of(tail, state.dismantleRewards.cend(), empty_dismantle_reward);
 }
 
-/** Adds one nonzero globally unique key to a bounded identity set. */
+[[nodiscard]] bool empty_record_reward(const RecordRewardPolicy& reward) noexcept {
+    return reward.recordIndex == 0 && reward.itemIndex == 0 && reward.quantity == 0;
+}
+
+[[nodiscard]] bool valid_record_rewards(const AccountState& state) noexcept {
+    if (state.recordRewardCount > state.recordRewards.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < state.recordRewardCount; ++index) {
+        const RecordRewardPolicy& reward = state.recordRewards[index];
+        if (reward.quantity <= 0) {
+            return false;
+        }
+        for (std::size_t prior = 0; prior < index; ++prior) {
+            if (same_record_reward_key(state.recordRewards[prior], reward)) {
+                return false;
+            }
+        }
+    }
+    const auto tail =
+        state.recordRewards.cbegin() + static_cast<std::ptrdiff_t>(state.recordRewardCount);
+    return std::all_of(tail, state.recordRewards.cend(), empty_record_reward);
+}
+
+/** Adds one nonzero key to the bounded identity buffer. */
 [[nodiscard]] bool append_identity(std::array<std::uint64_t, kIdentityCapacity>& identities,
                                    std::size_t& count,
                                    std::uint64_t soid) noexcept {
     if (soid == 0 || count >= identities.size()) {
-        return false;
-    }
-    const auto end = identities.cbegin() + static_cast<std::ptrdiff_t>(count);
-    if (std::find(identities.cbegin(), end, soid) != end) {
         return false;
     }
     identities[count++] = soid;
@@ -81,17 +97,20 @@ constexpr std::uint8_t kDismantleClassMaskBits =
     }
     if (state.primarySoid == 0) {
         if (state.profileItemCount != 0 || state.characterCount != 0
-            || state.dismantleRewardCount != 0 || state.settings.configured
-            || state.settings.keyBindings.configured) {
+            || state.dismantleRewardCount != 0 || state.recordRewardCount != 0
+            || state.settings.configured || state.settings.keyBindings.configured) {
             return false;
         }
         return std::all_of(
                    state.profileItems.cbegin(), state.profileItems.cend(), empty_profile_item)
                && std::all_of(state.dismantleRewards.cbegin(),
                               state.dismantleRewards.cend(),
-                              empty_dismantle_reward);
+                              empty_dismantle_reward)
+               && std::all_of(
+                   state.recordRewards.cbegin(), state.recordRewards.cend(), empty_record_reward);
     }
-    if (!settings::valid(state.settings) || !valid_dismantle_rewards(state)) {
+    if (!settings::valid(state.settings) || !valid_dismantle_rewards(state)
+        || !valid_record_rewards(state)) {
         return false;
     }
 
@@ -100,20 +119,19 @@ constexpr std::uint8_t kDismantleClassMaskBits =
     if (!append_identity(identities, identityCount, state.primarySoid)) {
         return false;
     }
-    for (std::size_t index = 0; index < state.profileItems.size(); ++index) {
+    for (std::size_t index = 0; index < state.profileItemCount; ++index) {
         const inventory::ProfileItem& item = state.profileItems[index];
-        if (index >= state.profileItemCount) {
-            if (!empty_profile_item(item)) {
-                return false;
-            }
-            continue;
-        }
         if (item.definitionHash == inventory::kNoDefinitionHash || item.quantity <= 0
             || item.mutationSerial < 0
             || (item.instanceSoid != 0
                 && !append_identity(identities, identityCount, item.instanceSoid))) {
             return false;
         }
+    }
+    const auto profileTail =
+        state.profileItems.cbegin() + static_cast<std::ptrdiff_t>(state.profileItemCount);
+    if (!std::all_of(profileTail, state.profileItems.cend(), empty_profile_item)) {
+        return false;
     }
 
     bool selected = false;
@@ -124,7 +142,7 @@ constexpr std::uint8_t kDismantleClassMaskBits =
             || character.gender > CharacterGender::female
             || character.characterClass > CharacterClass::warlock
             || !std::isfinite(character.appearanceValue) || !inventory::valid(character.equipment)
-            || !inventory::valid(character.inventory)) {
+            || !inventory::valid(character.inventory) || !inventory::valid(character.stacks)) {
             return false;
         }
         selected = selected || character.selected;
@@ -142,7 +160,9 @@ constexpr std::uint8_t kDismantleClassMaskBits =
             }
         }
     }
-    return true;
+    auto end = identities.begin() + static_cast<std::ptrdiff_t>(identityCount);
+    std::sort(identities.begin(), end);
+    return std::adjacent_find(identities.begin(), end) == end;
 }
 
 } // namespace
@@ -188,6 +208,19 @@ std::uint64_t banner_character_soid(const AccountState& state) noexcept {
         return selected;
     }
     return state.characterCount == 0 ? 0 : state.characters[0].soid;
+}
+
+bool find_record_reward(const AccountState& state,
+                        std::uint16_t recordIndex,
+                        RecordRewardPolicy& reward) noexcept {
+    const std::size_t count = (std::min)(state.recordRewardCount, state.recordRewards.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        if (state.recordRewards[index].recordIndex == recordIndex) {
+            reward = state.recordRewards[index];
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace sunrise::state::account

@@ -161,7 +161,7 @@ read_index(const reader::Source& source, reader::Scratch& scratch, Storage& stor
         value.rowIndex = static_cast<std::uint16_t>(row);
         if (!read(blob, at + kSaleItemIndexOffset, value.itemIndex)
             || !read(blob, at + kSaleSecondaryItemOffset, value.secondaryItemIndex)
-            || !read(blob, at + kSaleInstalledIndexOffset, value.installedIndex)
+            || !read(blob, at + kSaleCategoryIndexOffset, value.categoryIndex)
             || !read(blob, at + kSaleRaw104Offset, value.raw104)
             || !read(blob, at + kSaleRaw108Offset, value.raw108)
             || !read(blob, at + kSaleRaw172Offset, value.raw172)
@@ -251,15 +251,74 @@ read_index(const reader::Source& source, reader::Scratch& scratch, Storage& stor
     definition.thirdCount = third.count;
     definition.saleRowOffset = static_cast<std::uint32_t>(storage.saleRowCount);
     definition.installedRowOffset = static_cast<std::uint32_t>(storage.installedRowCount);
+    // Each row reader advances its bank before the other runs, so a definition whose sale rows fit
+    // but whose installed rows do not would leave orphan sale rows behind; the next definition's
+    // offset then carries the gap and `valid()` rejects the whole set. A skipped definition has to
+    // leave both banks exactly as it found them.
+    const std::size_t saleRowsBefore = storage.saleRowCount;
+    const std::size_t installedRowsBefore = storage.installedRowCount;
     if (!read(blob, kResetIntervalOffset, definition.resetIntervalRaw)
         || !read(blob, kResetPhaseOffset, definition.resetPhaseRaw)
         || !read_sale_rows(blob, definition, storage)
         || !read_installed_rows(blob, definition, storage)) {
+        storage.saleRowCount = saleRowsBefore;
+        storage.installedRowCount = installedRowsBefore;
         return false;
     }
     storage.definitions[storage.definitionCount] = definition;
     ++storage.definitionCount;
     return true;
+}
+
+/**
+ * Chooses which definitions this pass reads.
+ *
+ * The named hashes come first, each checked against the index just read: a hash the index does
+ * not carry is a mistyped rule, and dropping it silently reads exactly like the vendor resolving
+ * - until a request against it fails with no line to say the catalog never held it. A hash named
+ * twice would spend two of the few definition slots on one vendor. Whatever room is left is
+ * filled from the head of the index.
+ *
+ * @param storage Pass storage holding the index.
+ * @param namedHashes Hashes named by the rule file, in priority order.
+ * @param hashes Receives the definitions to read.
+ * @return How many were chosen.
+ */
+[[nodiscard]] std::size_t select_definitions(const Storage& storage,
+                                             std::span<const std::uint32_t> namedHashes,
+                                             std::span<std::uint32_t> hashes) noexcept {
+    std::size_t wanted = 0;
+    for (std::size_t at = 0; at < namedHashes.size() && wanted < hashes.size(); ++at) {
+        bool present = false;
+        for (std::size_t held = 0; held < wanted && !present; ++held) {
+            present = hashes[held] == namedHashes[at];
+        }
+        if (present) {
+            continue;
+        }
+        bool installed = false;
+        for (std::size_t row = 0; row < storage.indexCount && !installed; ++row) {
+            installed = storage.index[row].definitionHash == namedHashes[at];
+        }
+        if (installed) {
+            hashes[wanted++] = namedHashes[at];
+            continue;
+        }
+        core::log::writef(core::log::Channel::state,
+                          core::log::Level::warn,
+                          "ev=vendor stage=catalog result=skip reason=unknown_hash hash=0x%08X",
+                          namedHashes[at]);
+    }
+    for (std::size_t row = 0; row < storage.indexCount && wanted < hashes.size(); ++row) {
+        bool present = false;
+        for (std::size_t at = 0; at < wanted && !present; ++at) {
+            present = hashes[at] == storage.index[row].definitionHash;
+        }
+        if (!present) {
+            hashes[wanted++] = storage.index[row].definitionHash;
+        }
+    }
+    return wanted;
 }
 
 /** @param hashes Requested hashes. @param hash Index row hash. @return True when requested. */
@@ -275,22 +334,25 @@ read_index(const reader::Source& source, reader::Scratch& scratch, Storage& stor
 /**
  * Reports the pass so a boot with no vendor catalog says which step lost the rows.
  * @param storage Pass storage holding every count.
+ * @param skipped Requested definitions that could not be read or could not fit.
  * @param result Outcome text for the log line.
  */
-void report(const Storage& storage, const char* result) noexcept {
+void report(const Storage& storage, std::size_t skipped, const char* result) noexcept {
     std::array<char, core::log::kLineCapacity> line{};
     const int written = std::snprintf(line.data(),
                                       line.size(),
                                       "ev=build_data stage=vendors index=%zu definitions=%zu "
-                                      "sale=%zu installed=%zu result=%s",
+                                      "sale=%zu installed=%zu skipped=%zu result=%s",
                                       storage.indexCount,
                                       storage.definitionCount,
                                       storage.saleRowCount,
                                       storage.installedRowCount,
+                                      skipped,
                                       result);
     if (written > 0) {
         core::log::write(core::log::Channel::state,
-                         storage.indexCount != 0 ? core::log::Level::info : core::log::Level::warn,
+                         storage.indexCount != 0 && skipped == 0 ? core::log::Level::info
+                                                                 : core::log::Level::warn,
                          {line.data(), static_cast<std::size_t>(written)});
     }
 }
@@ -300,31 +362,57 @@ void report(const Storage& storage, const char* result) noexcept {
 /** Extracts and publishes the vendor catalog from the installed packages. */
 bool build(const reader::Source& source,
            reader::Scratch& scratch,
-           std::span<const std::uint32_t> definitionHashes) noexcept {
+           std::span<const std::uint32_t> namedHashes) noexcept {
     if (state::build_data::vendor_catalog_ready()) {
         return true;
     }
     static Storage storage{};
     storage = {};
     if (!read_index(source, scratch, storage)) {
-        report(storage, "index");
+        report(storage, 0, "index");
         return false;
     }
+    static std::array<std::uint32_t, domain::kDefinitionCapacity> chosen{};
+    const std::span<const std::uint32_t> definitionHashes =
+        std::span(chosen).first(select_definitions(storage, namedHashes, chosen));
     // Walking the index in order gives the ascending definition order the catalog requires.
+    //
+    // A definition that cannot be read - or cannot fit the definition or row banks - costs that
+    // vendor alone, not the pass. Failing whole here is what a full bank used to do, and it was
+    // the worst failure this domain had: the empty catalog was cached, every later boot restored
+    // it, and every vendor stayed unresolvable with one boot-time line to say why.
+    std::size_t skipped = 0;
     for (std::size_t row = 0; row < storage.indexCount; ++row) {
         const domain::IndexEntry entry = storage.index[row];
-        if (requested(definitionHashes, entry.definitionHash)
-            && !read_definition(source, scratch, entry, storage)) {
-            report(storage, "definition");
-            return false;
+        if (!requested(definitionHashes, entry.definitionHash)) {
+            continue;
         }
+        if (read_definition(source, scratch, entry, storage)) {
+            continue;
+        }
+        ++skipped;
+        core::log::writef(core::log::Channel::state,
+                          core::log::Level::warn,
+                          "ev=build_data stage=vendors result=skip hash=0x%08X row=%zu "
+                          "definitions=%zu sale=%zu",
+                          entry.definitionHash,
+                          row,
+                          storage.definitionCount,
+                          storage.saleRowCount);
     }
     const bool published = state::build_data::publish_vendor_catalog(
         std::span(storage.index).first(storage.indexCount),
         std::span(storage.definitions).first(storage.definitionCount),
         std::span(storage.saleRows).first(storage.saleRowCount),
         std::span(storage.installedRows).first(storage.installedRowCount));
-    report(storage, published ? "ok" : "publish");
+    report(storage, skipped, published ? "ok" : "publish");
+    core::log::writef(core::log::Channel::state,
+                      published ? core::log::Level::info : core::log::Level::warn,
+                      "ev=vendor stage=catalog result=%s named=%zu requested=%zu index_rows=%zu",
+                      published ? "ok" : "fail",
+                      namedHashes.size(),
+                      definitionHashes.size(),
+                      storage.indexCount);
     return published;
 }
 

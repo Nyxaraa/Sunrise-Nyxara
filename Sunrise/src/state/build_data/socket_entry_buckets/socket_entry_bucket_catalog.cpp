@@ -1,18 +1,22 @@
 #include "socket_entry_bucket_catalog.h"
 
+#include <mutex>
+#include <shared_mutex>
+
 #include "../table.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::state::build_data::socket_entry_buckets {
 namespace {
 
-Lock g_lock;
+core::threading::SrwLock g_lock;
 Table<Definition, kDefinitionCapacity> g_definitions;
 
 } // namespace
 
 /** Clears every resolved entry-bucket row under the catalog lock. */
 void clear() noexcept {
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_definitions.clear();
 }
 
@@ -36,14 +40,14 @@ bool replace(std::span<const Definition> definitions) noexcept {
     if (!valid(definitions)) {
         return false;
     }
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     return g_definitions.replace(definitions);
 }
 
 /** Finds one socket-entry list's resolved per-entry ability-bucket destinations. */
 bool find(std::uint16_t socketEntryListIndex, Definition& definition) noexcept {
     definition = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     for (const Definition& row : g_definitions.rows()) {
         if (row.socketEntryListIndex == socketEntryListIndex) {
             definition = row;
@@ -55,7 +59,7 @@ bool find(std::uint16_t socketEntryListIndex, Definition& definition) noexcept {
 
 /** @return Number of resolved entry-bucket rows, read under the lock. */
 std::size_t count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.count();
 }
 

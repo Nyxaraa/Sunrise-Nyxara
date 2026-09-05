@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 
 #include "../../../../middleware/queuez/queuez_update.h"
 #include "../../../../middleware/queuez/subscription.h"
@@ -169,6 +170,14 @@ namespace sunrise::server::bap::encrypted::queuez {
                                           bool updatesAccount,
                                           ItemAcquisition& acquisition) noexcept;
 
+/** Validates one same-version bundle append and returns the revision its response may promise. */
+[[nodiscard]] bool stage_direct_item_bundle(const SessionState& before,
+                                            std::uint64_t accountSoid,
+                                            std::uint64_t characterSoid,
+                                            std::uint64_t firstInstanceSoid,
+                                            std::size_t itemCount,
+                                            std::int32_t& family4Version) noexcept;
+
 /**
  * Stages one Family-4 version increment for a full resident account-object upsert.
  * A profile row with a nonzero action-source SOID must already be resident when its stack grows,
@@ -187,6 +196,13 @@ namespace sunrise::server::bap::encrypted::queuez {
                                                   bool actionSource,
                                                   bool appended,
                                                   ProfileItemAcquisition& acquisition) noexcept;
+
+/** Stages one version containing a complete multi-row record reward and claim. */
+[[nodiscard]] bool stage_record_reward_grant(const SessionState& before,
+                                             std::uint64_t accountSoid,
+                                             std::uint64_t characterSoid,
+                                             std::span<const std::uint64_t> appendedResidents,
+                                             RecordRewardGrant& grant) noexcept;
 
 /**
  * Stages one Family-4 increment that removes an item resident and updates its character.

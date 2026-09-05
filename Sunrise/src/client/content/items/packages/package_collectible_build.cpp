@@ -2,6 +2,7 @@
 #include <limits>
 
 #include "../../../../state/build_data/runtime.h"
+#include "../../../../state/build_data/sobjects/sobject_catalog.h"
 #include "internal.h"
 
 namespace sunrise::client::content::items::packages {
@@ -12,6 +13,39 @@ bool build_collectibles(const reader::Source& source,
                         std::span<const std::byte> root,
                         std::uint64_t itemDefinitionCount) noexcept {
     namespace domain = state::build_data::collectibles;
+
+    // The definition table an incident target names. Read here because this pass already holds an
+    // open source, and because a collectible picked up in the world arrives as an incident: without
+    // this table its target is a bare number.
+    if (state::build_data::sobjects::count() == 0) {
+        namespace sobjects = state::build_data::sobjects;
+        // Count at +112; 40-byte rows at +128 hold the name hash, packed lane, and type.
+        constexpr std::size_t kCountOffset = 112;
+        constexpr std::size_t kRowBase = 128;
+        constexpr std::size_t kRowStride = 40;
+        for (const std::uint32_t tag : {0x81327CD4U, 0x80B9E5BFU}) {
+            std::vector<std::byte> blob{};
+            if (!reader::read_tag(source, storage.scratch, tag, blob) || blob.size() < kRowBase) {
+                continue;
+            }
+            std::uint64_t rowCount = 0;
+            std::memcpy(&rowCount, blob.data() + kCountOffset, sizeof rowCount);
+            if (rowCount == 0 || rowCount > sobjects::kDefinitionCapacity
+                || kRowBase + static_cast<std::size_t>(rowCount) * kRowStride > blob.size()) {
+                continue;
+            }
+            std::vector<sobjects::Definition> rows(static_cast<std::size_t>(rowCount));
+            for (std::size_t row = 0; row < rows.size(); ++row) {
+                const std::size_t at = kRowBase + row * kRowStride;
+                std::memcpy(&rows[row].nameHash, blob.data() + at, sizeof rows[row].nameHash);
+                std::memcpy(&rows[row].lane4, blob.data() + at + 16, sizeof rows[row].lane4);
+                std::memcpy(&rows[row].typeCode, blob.data() + at + 36, sizeof rows[row].typeCode);
+            }
+            (void)sobjects::replace(std::span<const sobjects::Definition>{rows});
+            break;
+        }
+    }
+
     if (state::build_data::collectible_definitions_ready()) {
         return true;
     }

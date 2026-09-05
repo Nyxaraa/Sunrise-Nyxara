@@ -11,8 +11,19 @@ namespace sunrise::state::build_data::collectibles {
 inline constexpr std::size_t kDefinitionCapacity = 1U << 15U;
 /** Some collectible rows deliberately do not resolve to an inventory item. */
 inline constexpr std::uint16_t kUnavailableItemDefinitionIndex = 0xFFFFU;
+
+/**
+ * Collectible row meaning "this item has no collectible".
+ *
+ * Vendor sale rows name an item, never a collectible, and bounties, quests and tokens have none at
+ * all. An acquisition carrying this index skips every collectible step - validation, the material
+ * charge, and the cost bookkeeping - and both prepare and commit must agree on it, so the
+ * consistency guard still holds rather than being bypassed.
+ */
+inline constexpr std::uint16_t kNoCollectibleIndex = 0xFFFEU;
 /** A collectible with no acquisition charge carries this native requirement-set sentinel. */
 inline constexpr std::uint16_t kUnavailableMaterialRequirementSetIndex = 0xFFFFU;
+
 /** Installed requirement sets contain at most six material rows. */
 inline constexpr std::size_t kMaterialRequirementCapacity = 6;
 
@@ -53,6 +64,21 @@ void clear() noexcept;
  * @return True when Collections can grant that item, so an account can come to own it.
  */
 [[nodiscard]] bool grants_item(std::uint16_t itemDefinitionIndex) noexcept;
+
+/**
+ * Finds the collectible that grants one installed item row.
+ *
+ * The reverse of `find`. A vendor sale row names an item and never a collectible, while the
+ * acquisition state is keyed by collectible, so a purchase has to ask this. Walking the table under
+ * its own lock is what stops a caller copying all 32,768 rows to read one.
+ *
+ * @param itemDefinitionIndex Installed item-definition row.
+ * @param collectibleIndex Receives the first collectible naming that item, in native index order.
+ *        Left untouched when none does, so a caller's sentinel survives.
+ * @return True when a collectible grants that item.
+ */
+[[nodiscard]] bool find_granting(std::uint16_t itemDefinitionIndex,
+                                 std::uint16_t& collectibleIndex) noexcept;
 
 /** Copies every row in native collectible-index order. */
 [[nodiscard]] bool snapshot(std::span<Definition> output, std::size_t& count) noexcept;

@@ -31,6 +31,7 @@ constexpr std::array<SlotName, kEquipmentSlotCount> kSlotNames{{
     {"emblem", EquipmentSlot::emblem},
     {"emote", EquipmentSlot::emote},
     {"finisher", EquipmentSlot::finisher},
+    {"artifact", EquipmentSlot::artifact},
 }};
 
 } // namespace
@@ -43,6 +44,24 @@ std::optional<EquipmentSlot> slot_from_name(std::string_view name) noexcept {
         }
     }
     return std::nullopt;
+}
+
+/** Resolves the native equipment slot a configured item detail occupies. */
+bool resolve_native_equipment_slot(std::uint32_t definitionHash,
+                                   const std::optional<std::int8_t>& detailEquipmentSlot,
+                                   std::uint8_t& nativeSlot) noexcept {
+    if (detailEquipmentSlot.has_value()) {
+        if (*detailEquipmentSlot < 0) {
+            return false;
+        }
+        nativeSlot = static_cast<std::uint8_t>(*detailEquipmentSlot);
+        return true;
+    }
+    if (definitionHash != kEmoteCollectionDefinitionHash) {
+        return false;
+    }
+    nativeSlot = kEmoteCollectionNativeEquipmentSlot;
+    return true;
 }
 
 /** Checks the canonical socket policy and every authored plug hash. */
@@ -99,6 +118,32 @@ bool valid(const CharacterItems& items) noexcept {
             }
         } else if (items.values[index].instanceSoid != 0) {
             return false;
+        }
+    }
+    return true;
+}
+
+/** Checks a dense, definition-unique character stack list. */
+bool valid(const CharacterStacks& items) noexcept {
+    if (items.count > items.values.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < items.values.size(); ++index) {
+        const CharacterStack& item = items.values[index];
+        if (index >= items.count) {
+            if (item.definitionHash != 0 || item.quantity != 0 || item.mutationSerial != 0) {
+                return false;
+            }
+            continue;
+        }
+        if (item.definitionHash == kNoDefinitionHash || item.quantity <= 0
+            || item.mutationSerial < 0) {
+            return false;
+        }
+        for (std::size_t prior = 0; prior < index; ++prior) {
+            if (items.values[prior].definitionHash == item.definitionHash) {
+                return false;
+            }
         }
     }
     return true;

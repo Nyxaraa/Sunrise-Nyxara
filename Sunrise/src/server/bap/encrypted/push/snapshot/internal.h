@@ -1,5 +1,8 @@
 #pragma once
 
+#include <optional>
+#include <span>
+
 #include "../../../../../middleware/datagen/family4/loadout/definition.h"
 #include "../../../../../middleware/datagen/family4/loadout/loadout_resolver.h"
 #include "../../../../../state/account/account_state.h"
@@ -12,6 +15,8 @@ namespace sunrise::server::bap::encrypted::push::snapshot {
 
 /** Initial family snapshots start at version zero. */
 inline constexpr std::int32_t kInitialFamilyVersion = 0;
+/** Family two carries the social roster the Roster and Fireteam panels draw. */
+inline constexpr std::uint32_t kSocialRosterFamilyType = 2;
 /** Family three carries the account roster selected by Web Service subscription. */
 inline constexpr std::uint32_t kRosterFamilyType = 3;
 /** Family four carries account and selected-character investment state. */
@@ -24,8 +29,6 @@ inline constexpr std::uint32_t kAccountDefinitionSlotIndex = 0;
 inline constexpr std::uint32_t kCharacterDefinitionSlotIndex = 1;
 /** Descriptor slot three supplies the schema shared by every family-four item instance. */
 inline constexpr std::uint32_t kItemDefinitionSlotIndex = 3;
-/** Prepared descriptor zero carries the family-three roster object. */
-inline constexpr std::size_t kRosterObjectIndex = 0;
 /** Prepared descriptor zero carries the family-four account object. */
 inline constexpr std::size_t kAccountObjectIndex = 0;
 /** Prepared descriptor one carries the selected family-four character object. */
@@ -38,8 +41,12 @@ inline constexpr std::size_t kFirstItemObjectIndex = kFamily4IdentityObjectCount
  * The account object is then the only descriptor ahead of them.
  */
 inline constexpr std::size_t kFirstItemObjectIndexUnselected = kAccountObjectIndex + 1;
-/** Roster and account-only snapshots each contain one object. */
-inline constexpr std::size_t kSingleObjectCount = 1;
+
+/** Pins feed-referenced item identities to their published character rows. */
+[[nodiscard]] bool apply_acquisition_presentation(
+    std::span<std::byte> characterBytes,
+    const middleware::datagen::family4::loadout::ResolvedLoadout& loadout,
+    std::span<const queuez::AcquisitionPresentationRow> presentationRows) noexcept;
 
 /**
  * Builds the family-three account roster snapshot.
@@ -55,6 +62,24 @@ inline constexpr std::size_t kSingleObjectCount = 1;
                                   std::uint32_t objectId,
                                   const Reservation& reservation,
                                   Prepared& prepared) noexcept;
+
+/**
+ * Builds the family-two social roster snapshot.
+ *
+ * Both slots go out together: the row resolves the emblem by reading the link at directory +8
+ * and looking the member record up by it, and a full snapshot prunes whatever it does not name.
+ * @param scratch Object storage owned by the lock.
+ * @param subscription Family id the Client picked.
+ * @param objectId Unused. Both slot ids are resolved by the builder.
+ * @param reservation Prior payload prefixes that staging must keep.
+ * @param prepared Gets both descriptors and the scratch clear extents.
+ * @return True when an account is signed in and both objects fit.
+ */
+[[nodiscard]] bool prepare_social_roster(Scratch& scratch,
+                                         const middleware::queuez::Subscription& subscription,
+                                         std::uint32_t objectId,
+                                         const Reservation& reservation,
+                                         Prepared& prepared) noexcept;
 
 /**
  * Compresses one encoded family-four object into the next sealed scratch segment.
@@ -84,11 +109,13 @@ inline constexpr std::size_t kSingleObjectCount = 1;
  * @param prepared Gets the compressed object descriptors and scratch clear extents.
  * @return True when State, mappings, layouts and the installed compression all fit.
  */
-[[nodiscard]] bool prepare(Scratch& scratch,
-                           const middleware::queuez::Subscription& subscription,
-                           std::uint32_t accountObjectId,
-                           const Reservation& reservation,
-                           Prepared& prepared) noexcept;
+[[nodiscard]] bool
+prepare(Scratch& scratch,
+        const middleware::queuez::Subscription& subscription,
+        std::uint32_t accountObjectId,
+        const Reservation& reservation,
+        std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+        Prepared& prepared) noexcept;
 
 /**
  * Builds the Family-4 increment that moves the character object to the picked character.
@@ -106,13 +133,16 @@ inline constexpr std::size_t kSingleObjectCount = 1;
  * @param scratch Object and compression storage owned by the lock.
  * @param swap Checked queuez version after-image and resident character definition.
  * @param mutation Checked State after-image that is not committed yet.
+ * @param acquisitionPresentationRows Item identities pinned to feed-referenced rows.
  * @param prepared Gets the single character upsert descriptor.
  * @return True when the after-image encodes and the complete object fits.
  */
-[[nodiscard]] bool prepare_equipment_swap(Scratch& scratch,
-                                          const queuez::EquipmentSwap& swap,
-                                          const state::PendingEquipmentSwap& mutation,
-                                          Prepared& prepared) noexcept;
+[[nodiscard]] bool prepare_equipment_swap(
+    Scratch& scratch,
+    const queuez::EquipmentSwap& swap,
+    const state::PendingEquipmentSwap& mutation,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    Prepared& prepared) noexcept;
 
 /**
  * Builds the Family-4 character upsert carrying one prepared current-activity change.
@@ -128,10 +158,31 @@ inline constexpr std::size_t kSingleObjectCount = 1;
                                                       Prepared& prepared) noexcept;
 
 /** Builds the Family-4 character upsert carrying one accumulated item-state change. */
-[[nodiscard]] bool prepare_item_state(Scratch& scratch,
-                                      const queuez::EquipmentSwap& update,
-                                      const state::PendingItemState& mutation,
-                                      Prepared& prepared) noexcept;
+[[nodiscard]] bool
+prepare_item_state(Scratch& scratch,
+                   const queuez::EquipmentSwap& update,
+                   const state::PendingItemState& mutation,
+                   std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+                   Prepared& prepared) noexcept;
+
+/** Builds the selected-character upsert for one uncommitted artifact purchase. */
+[[nodiscard]] bool prepare_artifact_purchase(
+    Scratch& scratch,
+    const queuez::EquipmentSwap& update,
+    const state::PendingArtifactPurchase& mutation,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    Prepared& prepared) noexcept;
+
+/** Builds only the current account and selected-character objects after an artifact reset. */
+[[nodiscard]] bool prepare_artifact_reset(Scratch& scratch,
+                                          const queuez::EquipmentSwap& update,
+                                          Prepared& prepared) noexcept;
+
+/** Builds one current item-resident upsert after an artifact reset cleared its socket. */
+[[nodiscard]] bool prepare_artifact_item_refresh(Scratch& scratch,
+                                                 const queuez::EquipmentSwap& update,
+                                                 std::uint64_t instanceSoid,
+                                                 Prepared& prepared) noexcept;
 
 /**
  * Builds the Family-4 item-instance upsert for one prepared ordinary-socket selection.
@@ -158,10 +209,13 @@ inline constexpr std::size_t kSingleObjectCount = 1;
  * @param prepared Gets the two upsert descriptors in item-then-character dependency order.
  * @return True when both after-image objects encode and fit atomically.
  */
-[[nodiscard]] bool prepare_item_acquisition(Scratch& scratch,
-                                            const queuez::ItemAcquisition& acquisition,
-                                            const state::PendingItemAcquisition& mutation,
-                                            Prepared& prepared) noexcept;
+[[nodiscard]] bool prepare_item_acquisition(
+    Scratch& scratch,
+    const queuez::ItemAcquisition& acquisition,
+    const state::PendingItemAcquisition& mutation,
+    std::optional<std::uint16_t> pendingSeasonReward,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    Prepared& prepared) noexcept;
 
 /**
  * Builds one Family-4 increment containing the full account after-image for a profile stack.
@@ -172,7 +226,36 @@ inline constexpr std::size_t kSingleObjectCount = 1;
 prepare_profile_item_acquisition(Scratch& scratch,
                                  const queuez::ProfileItemAcquisition& acquisition,
                                  const state::PendingProfileItemAcquisition& mutation,
+                                 std::optional<std::uint16_t> pendingSeasonReward,
                                  Prepared& prepared) noexcept;
+
+/** Builds a transient XP inventory-row acquisition and the account progression after-image. */
+[[nodiscard]] bool prepare_seasonal_experience_presentation(
+    Scratch& scratch,
+    const queuez::SessionState& before,
+    std::int32_t amount,
+    std::int32_t mutationSerial,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    Prepared& prepared) noexcept;
+
+/** Builds one package increment containing its new instances, character, and account objects. */
+[[nodiscard]] bool prepare_season_pass_package(
+    Scratch& scratch,
+    const queuez::SessionState& before,
+    const state::PendingDirectItemBundle& mutation,
+    std::uint16_t rewardIndex,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    Prepared& prepared) noexcept;
+
+/** Builds one atomic record-reward batch in resident, character, account order. */
+[[nodiscard]] bool prepare_record_reward_grant(
+    Scratch& scratch,
+    const queuez::SessionState& before,
+    const queuez::RecordRewardGrant& update,
+    const state::PendingRecordRewardGrant& mutation,
+    std::optional<std::uint16_t> pendingSeasonReward,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    Prepared& prepared) noexcept;
 
 /**
  * Builds one Family-4 increment containing the changed character and released item instance.

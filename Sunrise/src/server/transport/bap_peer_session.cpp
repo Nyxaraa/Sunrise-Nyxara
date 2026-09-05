@@ -27,15 +27,12 @@ namespace {
 } // namespace
 
 /** Offers one event to the Server and stages whatever it produces. */
-bool offer(std::size_t slot,
-           client::network::BapEvent event,
-           std::span<const std::byte> frame) noexcept {
-    Peer& peer = g_listener.peers[slot];
+bool offer(Peer& peer, client::network::BapEvent event, std::span<const std::byte> frame) noexcept {
     if (peer.outputSize != 0) {
         return false;
     }
     client::network::BapResponse response{};
-    const client::network::BapRequest request{event, connection_id(slot), frame, peer.output};
+    const client::network::BapRequest request{event, peer.connectionId, frame, peer.output};
     if (!bap::consume(request, response) || response.size == 0) {
         return true;
     }
@@ -48,8 +45,7 @@ bool offer(std::size_t slot,
 }
 
 /** Removes and offers at most one complete frame from one peer's stream. */
-bool drain_stream(std::size_t slot) noexcept {
-    Peer& peer = g_listener.peers[slot];
+bool drain_stream(Peer& peer) noexcept {
     if (peer.outputSize != 0) {
         return true;
     }
@@ -66,7 +62,7 @@ bool drain_stream(std::size_t slot) noexcept {
     const int count = std::snprintf(line.data(),
                                     line.size(),
                                     "ev=transport stage=frame conn=%u type=%u bytes=%zu",
-                                    connection_id(slot),
+                                    peer.connectionId,
                                     static_cast<unsigned>(pending[1]),
                                     total);
     if (count > 0) {
@@ -76,7 +72,7 @@ bool drain_stream(std::size_t slot) noexcept {
         core::log::write(
             core::log::Channel::server, core::log::Level::debug, {line.data(), length});
     }
-    if (!offer(slot, client::network::BapEvent::frame, pending.first(total))) {
+    if (!offer(peer, client::network::BapEvent::frame, pending.first(total))) {
         return false;
     }
     peer.streamSize -= total;
@@ -101,17 +97,17 @@ bool advance_output(Peer& peer, std::size_t sent) noexcept {
 }
 
 /** Closes one peer and reports its session end to the Server. */
-void close_peer(std::size_t slot) noexcept {
-    Peer& peer = g_listener.peers[slot];
+void close_peer(Peer& peer) noexcept {
     if (peer.socket == INVALID_SOCKET) {
         return;
     }
     client::network::BapResponse response{};
     const client::network::BapRequest request{
-        client::network::BapEvent::close, connection_id(slot), {}, {}};
+        client::network::BapEvent::close, peer.connectionId, {}, {}};
     (void)bap::consume(request, response);
     closesocket(peer.socket);
     peer.socket = INVALID_SOCKET;
+    peer.connectionId = 0;
     peer.streamSize = 0;
     peer.outputOffset = 0;
     peer.outputSize = 0;

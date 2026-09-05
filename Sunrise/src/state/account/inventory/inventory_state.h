@@ -6,9 +6,11 @@
 #include <optional>
 #include <string_view>
 
+#include "item_state.h"
+
 namespace sunrise::state::account::inventory {
 
-/** Authored equipment exposes the 16 named slots the first State supports. */
+/** Authored equipment exposes every named slot currently represented by State. */
 enum class EquipmentSlot : std::uint8_t {
     kinetic,
     energy,
@@ -26,6 +28,7 @@ enum class EquipmentSlot : std::uint8_t {
     emblem,
     emote,
     finisher,
+    artifact,
     count,
 };
 
@@ -56,16 +59,42 @@ inline constexpr std::size_t kProfileActionSourceCapacity = 100;
 /** Runtime-owned SOIDs for profile stacks use a namespace separate from created item instances. */
 inline constexpr std::uint64_t kFirstProfileItemInstanceSoid = 0x5000000000000001ULL;
 /**
- * Native item-state bit the Client sets to lock one item against destruction.
- * Confirmed against the installed build by three observed lock and unlock transitions.
- */
-inline constexpr std::uint32_t kLockedItemFlag = 0x1;
-/**
- * The 16 supported character equipment buckets reserve 151 native rows in this build. One row
-
- * * per semantic slot can be equipped, leaving at most 135 simultaneously unequipped instances.
+ * 151 native rows minus the 16 equipped rows leaves 135 unequipped item rows.
  */
 inline constexpr std::size_t kCharacterItemCapacity = 135;
+/** Runtime-owned non-instanced character stacks. */
+inline constexpr std::size_t kCharacterStackCapacity = 32;
+
+/**
+ * Definition hash of the real, non-equippable "Emotes" collection item. The Client opens its own
+ * wheel-configuration screen for this exact item once it is equipped with valid socket data.
+ */
+inline constexpr std::uint32_t kEmoteCollectionDefinitionHash = 3183180185U;
+/** Ordinary socket lane count the "Emotes" collection item's real content declares. */
+inline constexpr std::size_t kEmoteCollectionSocketLaneCount = 4;
+/**
+ * Native equipment slot the "Emotes" collection item is equipped under, in place of the individual
+ * emote it replaces. Its own real content carries no native equipment-slot mapping at all, unlike
+ * every other character-scoped item, so callers that need one for this item specifically fall back
+ * to this constant through resolve_native_equipment_slot() below.
+ */
+inline constexpr std::uint8_t kEmoteCollectionNativeEquipmentSlot =
+    static_cast<std::uint8_t>(EquipmentSlot::emote);
+
+/**
+ * Resolves the native equipment slot a configured item detail occupies.
+ * Every character-scoped item declares its own native slot except the "Emotes" collection item
+ * (kEmoteCollectionDefinitionHash), the one item whose real content has none. Any other item
+ * missing a native slot is rejected instead of silently aliasing this fallback.
+ * @param definitionHash Authored item definition hash being resolved.
+ * @param detailEquipmentSlot The installed item detail's own native slot, if it declares one.
+ * @param nativeSlot Receives the resolved native slot on success.
+ * @return True when the item declares its own non-negative slot, or is the Emotes collection item.
+ */
+[[nodiscard]] bool
+resolve_native_equipment_slot(std::uint32_t definitionHash,
+                              const std::optional<std::int8_t>& detailEquipmentSlot,
+                              std::uint8_t& nativeSlot) noexcept;
 
 /** One authored account-wide item, placed by the inventory bucket its definition names. */
 struct ProfileItem {
@@ -110,6 +139,17 @@ struct CharacterItems {
     std::size_t count{};
 };
 
+struct CharacterStack {
+    std::uint32_t definitionHash{};
+    std::int32_t quantity{};
+    std::int32_t mutationSerial{};
+};
+
+struct CharacterStacks {
+    std::array<CharacterStack, kCharacterStackCapacity> values{};
+    std::size_t count{};
+};
+
 /** One optional authored item for every semantic equipment slot. */
 struct Equipment {
     std::array<std::optional<Item>, kEquipmentSlotCount> slots{};
@@ -142,5 +182,7 @@ struct Equipment {
 
 /** Checks the used prefix and empty tail of one character's unequipped item array. */
 [[nodiscard]] bool valid(const CharacterItems& items) noexcept;
+
+[[nodiscard]] bool valid(const CharacterStacks& items) noexcept;
 
 } // namespace sunrise::state::account::inventory

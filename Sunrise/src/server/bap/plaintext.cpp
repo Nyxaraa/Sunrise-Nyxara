@@ -141,7 +141,6 @@ void arm_encryption(Session& session, const state::BapState& bap) noexcept {
     encrypted::ServiceRoute route;
     (void)encrypted::routing::resolve(request.serviceId, route);
     if (route.responseMode != encrypted::ResponseMode::reply) {
-        core::log::write(core::log::Channel::server, core::log::Level::info, route.successEvent);
         return true;
     }
     encrypted::ServiceOutcome outcome{};
@@ -167,12 +166,11 @@ void arm_encryption(Session& session, const state::BapState& bap) noexcept {
                                          response,
                                          written);
     SecureZeroMemory(scratch.responseBody.data(), bodySize);
-    SecureZeroMemory(&outcome, sizeof outcome);
+    outcome = {};
     if (!encoded) {
         report_refusal(session, request.serviceId, "encode");
         return false;
     }
-    core::log::write(core::log::Channel::server, core::log::Level::info, route.successEvent);
     return true;
 }
 
@@ -207,11 +205,6 @@ bool consume(Session& session,
                                              frame.body,
                                              response,
                                              written);
-        if (encoded) {
-            core::log::write(core::log::Channel::server,
-                             core::log::Level::info,
-                             "ev=bap svc=30 rsp=31 result=ok");
-        }
         return encoded;
     }
     if (frame.serviceId
@@ -271,8 +264,6 @@ bool consume(Session& session,
     // was not free publishes as invalid instead of costing the reply.
     session.matchmakingContext = matchmakingContext;
     arm_encryption(session, bapState);
-    core::log::write(
-        core::log::Channel::server, core::log::Level::info, "ev=bap svc=25 rsp=26 result=ok");
     return true;
 }
 

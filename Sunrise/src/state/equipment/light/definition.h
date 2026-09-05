@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 #include "../../build_data/items/details/definition.h"
@@ -25,6 +26,16 @@ using SlotScores =
 inline constexpr std::int32_t kPowerPerLevel = 10;
 /** A powered item never scores below this floor whatever its level. */
 inline constexpr std::int32_t kMinimumItemPower = 750;
+
+/** Converts an authored item level to displayed Power without overflowing the wire integer. */
+[[nodiscard]] constexpr bool item_power(std::int32_t level, std::int32_t& output) noexcept {
+    if (level < 0 || level > (std::numeric_limits<std::int32_t>::max)() / kPowerPerLevel) {
+        return false;
+    }
+    const std::int32_t power = kPowerPerLevel * level;
+    output = level == 0 ? 0 : (power < kMinimumItemPower ? kMinimumItemPower : power);
+    return true;
+}
 
 /** A slot at or below this score adds nothing and is not counted by the divisor. */
 inline constexpr std::int32_t kUnpoweredScore = 0;

@@ -12,6 +12,8 @@ inline constexpr std::size_t kGlobalsRootTagOffset = 16;
 inline constexpr std::size_t kInventoryBucketTableTagOffset = 280;
 /** The dense item-table handle sits at byte 776 of the investment root. */
 inline constexpr std::size_t kItemTableTagOffset = 776;
+/** The reusable/randomized plug-set table handle sits at byte 824 of the investment root. */
+inline constexpr std::size_t kPlugSetTableTagOffset = 824;
 /** The socket-entry-list table handle sits at byte 1,560 of the investment root. */
 inline constexpr std::size_t kSocketEntryListTableTagOffset = 1560;
 

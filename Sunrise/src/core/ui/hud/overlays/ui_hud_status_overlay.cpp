@@ -17,7 +17,10 @@
 #include "../../../../middleware/content/packages/tables/region_reader.h"
 #include "../../../../middleware/content/packages/tables/spawn_reader.h"
 #include "../../../../server/bap/runtime.h"
+#include "../../../../state/activity/membership/activity_membership_query.h"
+#include "../../../../state/activity/runtime.h"
 #include "../../../../state/build_data/runtime.h"
+#include "../../../logging/log.h"
 #include "../overlay.h"
 
 namespace sunrise::core::ui::hud::overlays::status {
@@ -180,8 +183,58 @@ void build_spawn(std::string_view stem, Value& output) noexcept {
     const client::hooks::bootflow::CurrentSliceSet localSliceSet =
         client::hooks::bootflow::current_slice_set();
     server::bap::CurrentActivityLinkView link{};
-    const bool hasLink = server::bap::current_activity_link_view(
+    bool hasLink = server::bap::current_activity_link_view(
         localSliceSet.present ? localSliceSet.index : -1, link);
+    // Public ActivityClients are replaced during every citizen-host handoff. The destination and
+    // region are also committed in Activity State, so use the newest session that has actually
+    // reported a region when no connection-scoped link survives the handoff.
+    if (!hasLink) {
+        const std::uint64_t sessionId = activity::membership::live_region_session(
+            activity::kAbsentSessionId);
+        activity::SessionBinding binding{};
+        if (sessionId != activity::kAbsentSessionId
+            && activity::snapshot_binding(sessionId, binding)) {
+            link.binding = binding;
+            link.effectiveRegion = activity::membership::player_region(sessionId);
+            hasLink = true;
+        }
+    }
+    // Keep one transition-level diagnostic. These values otherwise exist only inside the HUD, so
+    // an `unknown` report cannot distinguish a missing local slice from invalid activity links.
+    static std::int32_t lastSlice = -3;
+    static std::size_t lastActive = static_cast<std::size_t>(-1);
+    static std::size_t lastMatching = static_cast<std::size_t>(-1);
+    static bool lastHasLink = false;
+    const std::int32_t diagnosticSlice = localSliceSet.present
+                                             ? localSliceSet.index
+                                             : localSliceSet.available ? -1 : -2;
+    if (diagnosticSlice != lastSlice || link.activeLinks != lastActive
+        || link.matchingRegions != lastMatching || hasLink != lastHasLink) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int written = std::snprintf(line.data(),
+                                          line.size(),
+                                          "ev=hud stage=activity_link result=%s slice=%d active=%zu "
+                                          "matching=%zu selected=%d public=%u package=%.*s",
+                                          hasLink ? "ok" : "missing",
+                                          diagnosticSlice,
+                                          link.activeLinks,
+                                          link.matchingRegions,
+                                          link.effectiveRegion,
+                                          link.publicTarget ? 1U : 0U,
+                                          static_cast<int>(link.binding.destination.packageNameLength),
+                                          reinterpret_cast<const char*>(
+                                              link.binding.destination.packageName.data()));
+        if (written > 0) {
+            core::log::write(core::log::Channel::client,
+                             core::log::Level::info,
+                             {line.data(),
+                              (std::min)(static_cast<std::size_t>(written), line.size() - 1U)});
+        }
+        lastSlice = diagnosticSlice;
+        lastActive = link.activeLinks;
+        lastMatching = link.matchingRegions;
+        lastHasLink = hasLink;
+    }
     // The client's own step, published every frame. The world phase only moves on the spawn gate,
     // which stops being polled once the player is in, so it stays `arrived` in orbit.
     status.inWorld = client::hooks::bootflow::in_world();

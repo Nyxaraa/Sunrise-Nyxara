@@ -101,3 +101,13 @@ refusal, free/coalescing and three release/reopen cycles under Wine. Regression 
 `tests/mission_arena_test.cpp` (run with Release optimization; checks do not rely on assert).
 The corrected DLL is installed; backup: `build/dll-before-arena-fix-20260904-230158.dll`.
 A fresh in-game launch is still required to verify the next mission startup stage.
+
+## Upstream sync — 2026-09-05
+
+Merged official Sunrise master at `a57dc9a` into `mission-ember`, preserving the mission
+scripts, arrival override, scenario-scoped squad linker and Windows arena allocation fix.
+Upstream now supplies the equivalent Lua CMake integration, so its CMake version replaces
+our overlapping build edits. The native SDK format and mission APIs are unchanged; the
+existing generated SDK is retained. Release build, Ember Lua checks, SDK inspector tests
+and upstream portable tests pass. This sync does not expand mission coverage or resolve
+remaining bridge-interaction, encounter-timing or missing-definition work.

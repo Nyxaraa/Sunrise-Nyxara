@@ -21,7 +21,15 @@ constexpr auto kStatusPairOpcodes = std::to_array<std::uint16_t>({
     1617, 1618, 1701, 1702, 1801, 1802, 1803, 1820, 1821, 1901, 2002, 2200, 2300, 2400,
 });
 
-/** Opcodes whose status pair has one required trailing boolean field. */
+/**
+ * Opcodes whose status pair has one required trailing boolean field.
+ *
+ * 901 is listed from its refusal form. A purchase that prepares a mutation is answered elsewhere:
+ * `bap_service_body.cpp` re-encodes it as a plain status pair, one bit short of this shape, and
+ * that is the reply verified working in game. The two disagree and nothing reconciles them. Only a
+ * captured retail reply to a successful 901 can say which is right, so until one exists neither
+ * side is changed - the working form is the one the game has already accepted.
+ */
 constexpr auto kStatusPairBoolOpcodes = std::to_array<std::uint16_t>({104, 901});
 
 /** Opcodes whose response definition hands its status value to the Client's Family-4 wait. */

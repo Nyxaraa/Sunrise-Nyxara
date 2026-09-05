@@ -172,6 +172,23 @@ struct Snapshot final {
     /** Register the groups and seed no object. Separates no components from no auth state. */
     bool phaseOneOnly{};
     /**
+     * Fill the type-35 mission-director and type-18 script-runtime bodies.
+     * These two are what an encounter bubble's script objects are authored from, and they shipped
+     * bodyless until their layouts were recovered from the client's own field tables. Gated
+     * because a wrong width does not fail this host's width check: it shifts every block after it
+     * in the same phase-2 stream, which costs the player their spawn rather than just the
+     * encounter. Off restores the previous bodyless behaviour with no rebuild.
+     */
+    bool authorDirectorBodies{};
+    /**
+     * Fill the type-37 body, the last published slot that still ships bodyless.
+     * A measured run showed every other published slot carrying a body (13:224, 16:7, 17:520,
+     * 18:386, 35:359) and 37 carrying zero. Same gate rationale as the director bodies: a wrong
+     * width shifts every block after it in the same phase-2 stream, so off restores the bodyless
+     * behaviour with no rebuild.
+     */
+    bool authorWideRecordBodies{};
+    /**
      * Fill the participation body on every type-13 slot, not only the group's first.
      * The gate reads the record of the object the player datum names. Only one type-13 slot
      * gets the body, so filling the first slot alone can miss that object.

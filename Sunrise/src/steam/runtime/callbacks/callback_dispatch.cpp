@@ -11,6 +11,7 @@
 #include "../../../client/hooks/feature_flags/feature_flags.h"
 #include "../../../client/hooks/membership_probe/membership_probe.h"
 #include "../../../client/hooks/net_tick_probe/net_tick_probe.h"
+#include "../../../client/hooks/network/investment/internal.h"
 #include "../../../core/logging/log.h"
 #include "../../../core/ui/busy/busy.h"
 #include "../../../server/runtime/server_runtime.h"
@@ -207,6 +208,7 @@ void run_slice() noexcept {
         // Everything below must run on the game's thread; the server gets its own from here on.
         runtime::callbacks::start_server_thread_once();
         client::content::investment::worker::service(now);
+        client::hooks::network::investment::apply_socket_menu_routing();
         client::content::activity::sdk_generation::service();
         client::content::activity::scriptables::service();
         // Read-only, and out of line: the container bind lands a tick after its message.

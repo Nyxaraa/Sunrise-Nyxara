@@ -96,6 +96,8 @@ private:
     [[nodiscard]] bool profile_items(state::AccountState& output) noexcept;
     /** Parses the definition-driven ordinary-gear dismantle payout. */
     [[nodiscard]] bool dismantle_rewards(state::AccountState& output) noexcept;
+    /** Parses Triumph reward overrides keyed by record index. */
+    [[nodiscard]] bool record_rewards(state::AccountState& output) noexcept;
     /** Parses one character identity. The object must contain one nonzero SOID. */
     [[nodiscard]] bool character(state::CharacterState& output) noexcept;
 

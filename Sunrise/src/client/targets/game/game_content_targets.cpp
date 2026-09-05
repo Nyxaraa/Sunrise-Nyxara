@@ -62,6 +62,7 @@ bool derive(std::span<const patterns::ImageRange> image,
         || !relative::contains(image, resolved.queuezObjectStoreGetter)) {
         return false;
     }
+    resolved.queuezObjectResolver = objectResolver;
     std::memcpy(&resolved.queuezDescriptorFamilyBias,
                 objectResolver + kDescriptorFamilyBiasOffset,
                 sizeof resolved.queuezDescriptorFamilyBias);

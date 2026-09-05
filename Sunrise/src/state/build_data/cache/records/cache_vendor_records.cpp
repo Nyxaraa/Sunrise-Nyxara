@@ -81,7 +81,7 @@ bool encode(const vendors::SaleRow& value, VendorSaleRowRecord& record) noexcept
     record.rowIndex = value.rowIndex;
     record.itemIndex = value.itemIndex;
     record.secondaryItemIndex = value.secondaryItemIndex;
-    record.installedIndex = value.installedIndex;
+    record.categoryIndex = value.categoryIndex;
     record.raw104 = value.raw104;
     record.raw108 = value.raw108;
     record.raw172 = value.raw172;
@@ -104,7 +104,7 @@ bool decode(const VendorSaleRowRecord& record, vendors::SaleRow& value) noexcept
     value.rowIndex = record.rowIndex;
     value.itemIndex = record.itemIndex;
     value.secondaryItemIndex = record.secondaryItemIndex;
-    value.installedIndex = record.installedIndex;
+    value.categoryIndex = record.categoryIndex;
     value.raw104 = record.raw104;
     value.raw108 = record.raw108;
     value.raw172 = record.raw172;

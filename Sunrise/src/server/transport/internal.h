@@ -22,6 +22,7 @@ inline constexpr std::size_t kStreamCapacity = client::network::kBapFrameCapacit
 /** One accepted connection with bounded ingress and committed egress storage. */
 struct Peer {
     SOCKET socket{INVALID_SOCKET};
+    std::uint32_t connectionId{};
     std::size_t streamSize{};
     std::array<std::byte, kStreamCapacity> stream{};
     std::size_t outputOffset{};
@@ -40,8 +41,6 @@ struct Listener {
     std::array<Peer, client::network::kBapConnectionCount> peers{};
 };
 
-extern Listener g_listener;
-
 /** A peer slot answers on the connection id the Server indexes its sessions by. */
 [[nodiscard]] constexpr std::uint32_t connection_id(std::size_t slot) noexcept {
     return static_cast<std::uint32_t>(slot + 1);
@@ -53,13 +52,13 @@ extern Listener g_listener;
  * @return True when the response metadata fits the peer buffer.
  */
 [[nodiscard]] bool
-offer(std::size_t slot, client::network::BapEvent event, std::span<const std::byte> frame) noexcept;
+offer(Peer& peer, client::network::BapEvent event, std::span<const std::byte> frame) noexcept;
 
 /**
  * Removes and offers at most one whole frame from one peer's stream.
  * @return True while the buffered prefix is valid.
  */
-[[nodiscard]] bool drain_stream(std::size_t slot) noexcept;
+[[nodiscard]] bool drain_stream(Peer& peer) noexcept;
 
 /**
  * Advances one committed output by an accepted send count.
@@ -70,9 +69,6 @@ offer(std::size_t slot, client::network::BapEvent event, std::span<const std::by
 [[nodiscard]] bool advance_output(Peer& peer, std::size_t sent) noexcept;
 
 /** Closes one peer and reports its session end to the Server. */
-void close_peer(std::size_t slot) noexcept;
-
-/** @param port Host-order loopback port. Zero picks an ephemeral port. */
-[[nodiscard]] bool initialize_on_port(std::uint16_t port) noexcept;
+void close_peer(Peer& peer) noexcept;
 
 } // namespace sunrise::server::transport

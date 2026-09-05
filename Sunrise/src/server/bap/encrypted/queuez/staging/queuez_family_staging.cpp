@@ -108,6 +108,9 @@ bool stage_family0_subscription(const SessionState& before,
     if (before.family0Character == selectedCharacter) {
         return true;
     }
+    if (before.family0Version == (std::numeric_limits<std::int32_t>::max)()) {
+        return false;
+    }
     publish = true;
     incremental = true;
     after.family0Character = selectedCharacter;

@@ -15,7 +15,7 @@
 #include "../../state/activity/definition.h"
 #include "../../state/activity_sdk/runtime.h"
 #include "../../state/build_data/scenarios/definition.h"
-#include "../../state/runtime/state.h"
+#include "../../state/runtime/runtime.h"
 #include "../activity/host_runtime.h"
 #include "activity_authority_query_owner.h"
 #include "activity_authority_reset_owner.h"
@@ -284,10 +284,43 @@ struct ReplicationEpochPublication {
     bool staged{};
 };
 
+/** Compact world reward retained until an active Family-4 peer can publish it. */
+enum class WorldRewardKind : std::uint8_t {
+    item,
+    profileItem,
+};
+
+struct WorldRewardRequest {
+    std::int32_t quantity{};
+    std::uint16_t itemDefinitionIndex{};
+    WorldRewardKind kind{};
+    std::uint8_t failures{};
+};
+static_assert(sizeof(WorldRewardRequest) == 8);
+
+inline constexpr std::size_t kWorldRewardQueueCapacity = 64;
+
 /** Mutable transport state owned by one BAP connection. */
 struct Session {
+    // PR-specific publication state retained around upstream's newer activity session model.
+    std::uint64_t activityAdvertisementHostGeneration{};
+    std::uint64_t acquisitionPresentationUntilTick{};
+    std::array<encrypted::queuez::AcquisitionPresentationRow,
+               encrypted::queuez::kAcquisitionPresentationRowCapacity>
+        acquisitionPresentationRows{};
     std::uint32_t id{};
+    std::uint32_t activityRosterGroups{};
+    std::int32_t pendingSeasonalExperienceAmount{};
+    std::uint32_t pendingSeasonalExperienceMutationSerial{};
+    std::uint8_t pendingSeasonalExperienceFailures{};
     bool authenticated{};
+    /** Publishes changed artifact overrides after its Web Service reply has left this call. */
+    bool artifactRefreshArmed{};
+    bool artifactFamily4RefreshArmed{};
+    std::uint64_t artifactFamily4RefreshDueTick{};
+    state::ArtifactResetResult artifactResetRefresh{};
+    std::size_t artifactResetRefreshCursor{};
+    std::uint8_t acquisitionPresentationRowCount{};
     std::array<std::byte, state::kBapNonceSize> sendNonce{};
     std::array<std::byte, state::kBapNonceSize> receiveNonce{};
     /** This connection's own AES-GCM key. Sharing one across links reuses key and nonce pairs. */
@@ -399,6 +432,12 @@ struct Session {
     std::uint64_t bannerRepushRoot{};
     /** True while one banner re-push is still owed to this peer. */
     bool bannerRepushArmed{};
+    /** Tick count after which the owed social-roster re-push may go out. */
+    std::uint64_t socialRosterRepushDueTick{};
+    /** Root the last family-two subscribe was answered against, and the re-push must reuse. */
+    std::uint64_t socialRosterRepushRoot{};
+    /** True while one family-two re-push is still owed to this peer. */
+    bool socialRosterRepushArmed{};
     /** Latest shared-account generation this peer has received. */
     std::uint64_t accountGeneration{};
     /** Newest shared-account generation owed as a full cross-peer refresh. */
@@ -422,6 +461,34 @@ struct Session {
      */
     bool cinematicHeld{};
 };
+
+/** Arms every other Family-4 peer after the origin publishes a complete account mutation. */
+void arm_account_resync_elsewhere(Session& origin) noexcept;
+
+/** Arms every Family-4 peer, including the origin, for a full account resync. */
+void arm_account_resync_everywhere() noexcept;
+
+/** Holds this peer's full Family-4 refreshes until its acquisition flyout has finished. */
+void arm_acquisition_presentation_hold(Session& session) noexcept;
+
+/** Queues one character item for normal acquisition feedback. */
+[[nodiscard]] bool arm_world_item_acquisition(std::uint16_t itemDefinitionIndex) noexcept;
+
+/** Queues one profile material for normal acquisition feedback. */
+[[nodiscard]] bool arm_world_profile_item_acquisition(std::uint16_t itemDefinitionIndex,
+                                                      std::int32_t quantity) noexcept;
+
+/** Reads the oldest queued world reward without removing it. */
+[[nodiscard]] bool current_world_reward(WorldRewardRequest& request) noexcept;
+
+/** Removes the world reward returned by current_world_reward. */
+void complete_world_reward() noexcept;
+
+/** Records one failed publication and settles a repeatedly failing reward. */
+void fail_world_reward_attempt() noexcept;
+
+/** Queues one transient XP item update so the native HUD presents a seasonal XP gain. */
+[[nodiscard]] bool arm_seasonal_experience_presentation(std::int32_t amount) noexcept;
 
 /**
  * Finds one unambiguous registry identity in a committed connection-local roster map.

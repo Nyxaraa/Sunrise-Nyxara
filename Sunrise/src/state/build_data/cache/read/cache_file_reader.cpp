@@ -28,11 +28,14 @@ namespace {
            && counts.socketPlugRules <= output.socketPlugRules.size()
            && counts.socketPlugPools <= output.socketPlugPools.size()
            && counts.socketPlugMembers <= output.socketPlugMembers.size()
+           && counts.exoticCatalysts <= output.exoticCatalysts.size()
            && counts.inventoryBuckets <= output.inventoryBuckets.size()
            && counts.socketEntryLists <= output.socketEntryLists.size()
            && counts.socketEntryTables <= output.socketEntryTables.size()
            && counts.abilityBuckets <= output.abilityBuckets.size()
            && counts.progressions <= output.progressions.size()
+           && counts.records <= output.records.size() && counts.nodes <= output.nodes.size()
+           && counts.sobjects <= output.sobjects.size()
            && counts.scenarios <= output.scenarios.size()
            && counts.rosterGroups <= output.rosterGroups.size()
            && counts.spawnStems <= output.spawnStems.size()
@@ -56,11 +59,15 @@ namespace {
         header.socketPlugRuleCount,
         header.socketPlugPoolCount,
         header.socketPlugMemberCount,
+        header.exoticCatalystCount,
         header.inventoryBucketCount,
         header.socketEntryListCount,
         header.socketEntryTableCount,
         header.abilityBucketCount,
         header.progressionCount,
+        header.recordCount,
+        header.nodeCount,
+        header.sobjectCount,
         header.scenarioCount,
         header.rosterGroupCount,
         header.spawnStemCount,
@@ -176,7 +183,8 @@ LoadStatus load(const wchar_t* path,
     bool valid = required_domains_present(pendingCounts) && counts_fit(pendingCounts, output)
                  && read::expected_size(pendingCounts, expectedSize)
                  && static_cast<std::uint64_t>(actualSize.QuadPart) == expectedSize
-                 && read::read_payload(file, header.constants, pendingCounts, output, checksum)
+                 && read::read_payload(
+                     file, expectedBuild, header.constants, pendingCounts, output, checksum)
                  && checksum == header.payloadChecksum;
     const LoadStatus status = close_with(file, valid ? LoadStatus::loaded : LoadStatus::invalid);
     if (status != LoadStatus::loaded) {

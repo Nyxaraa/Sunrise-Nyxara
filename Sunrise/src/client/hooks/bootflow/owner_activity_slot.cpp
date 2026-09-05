@@ -95,30 +95,35 @@ __declspec(noinline) std::uint8_t __fastcall check(void* container,
 
 } // namespace
 
-/** Attaches the owner activity slot force. */
-bool install_owner_activity_slot() noexcept {
+/** Stages the owner activity slot force. */
+StageResult stage_owner_activity_slot(hooking::detour::Spec& spec) noexcept {
     if (g_handle.attached) {
-        return true;
+        return StageResult::attached;
     }
     std::byte* const target = scan_main_image_unique(kCheckSignature, "check_activity_bubbles");
     if (target == nullptr) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=owner_slot result=fail reason=target");
-        return false;
+        return StageResult::unavailable;
     }
-    const hooking::detour::Spec spec{target, reinterpret_cast<void*>(&check)};
-    if (!hooking::detour::install(spec, g_handle)) {
+    spec = hooking::detour::Spec{target, reinterpret_cast<void*>(&check)};
+    return StageResult::staged;
+}
+
+/** Takes the owner activity slot force's attached handle, or a detached one. */
+void publish_owner_activity_slot(const hooking::detour::Handle& handle) noexcept {
+    if (!handle.attached) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=owner_slot result=fail reason=attach");
-        return false;
+        return;
     }
+    g_handle = handle;
     g_original.store(reinterpret_cast<CheckBubbles>(g_handle.original), std::memory_order_release);
     core::log::write(core::log::Channel::client,
                      core::log::Level::info,
                      "ev=bootflow stage=owner_slot result=ok");
-    return true;
 }
 
 /** Detaches the owner activity slot force. */

@@ -1,9 +1,6 @@
 #include <algorithm>
-#include <array>
-#include <cstdio>
 #include <span>
 
-#include "../../../../../core/logging/log.h"
 #include "../../../../../middleware/datagen/character_record/character_record_encoder.h"
 #include "../../../../../middleware/datagen/definitions.h"
 #include "../../../../../middleware/datagen/family4/loadout/loadout_resolver.h"
@@ -231,31 +228,6 @@ bool prepare_character_appearance_refresh(Scratch& scratch,
     if (!commit(staged, prepared)) {
         clear_after(scratch, reservation);
         return report_failure("equip_appearance_commit");
-    }
-
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=equip stage=family0_object result=ok family_version=%d root=0x%llX "
-        "definition=%u character=0x%llX native_slot=%u items=%zu light=%d flags=0 objects=%zu "
-        "anchor=%u replace=%u order=%s",
-        refresh.after.family0Version,
-        static_cast<unsigned long long>(refresh.after.family4RootSoid),
-        middleware::datagen::kBannerCharacterObjectId,
-        static_cast<unsigned long long>(refresh.characterSoid),
-        static_cast<unsigned>(nativeEquipmentSlot),
-        instances.itemCount,
-        light,
-        objectCount,
-        refreshAnchor ? 1U : 0U,
-        replaceCharacterRecord ? 1U : 0U,
-        replaceCharacterRecord ? (refreshAnchor ? "release_character_anchor" : "release_character")
-                               : (refreshAnchor ? "character_anchor" : "character"));
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::debug,
-                         {line.data(), static_cast<std::size_t>(count)});
     }
     return true;
 }

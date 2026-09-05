@@ -9,9 +9,9 @@ namespace sunrise::state::build_data::vendors {
 /** Rows of the installed vendor index. The live table has 511. */
 inline constexpr std::size_t kIndexCapacity = 512;
 /** Vendor definitions this catalog holds rows for. A definition is read only when asked for. */
-inline constexpr std::size_t kDefinitionCapacity = 32;
+inline constexpr std::size_t kDefinitionCapacity = 48;
 /** Sale rows across every held definition. One installed definition declares 277. */
-inline constexpr std::size_t kSaleRowCapacity = 4096;
+inline constexpr std::size_t kSaleRowCapacity = 8192;
 /** Installed rows across every held definition. One installed definition declares 43. */
 inline constexpr std::size_t kInstalledRowCapacity = 2048;
 
@@ -37,8 +37,8 @@ inline constexpr std::uint32_t kSaleRowClass = 0x80807861U;
 
 /** Sale row +176 carries this when the row names no secondary item. */
 inline constexpr std::uint16_t kAbsentSecondaryItem = 0xFFFFU;
-/** Sale row +100 carries this when it selects no installed row. The client tests for it. */
-inline constexpr std::int32_t kAbsentInstalledIndex = -1;
+/** Sale row +100 carries this when the row belongs to no category. The client tests for it. */
+inline constexpr std::int32_t kAbsentCategoryIndex = -1;
 
 /** One row of the installed vendor index, which maps a vendor hash to its definition tag. */
 struct IndexEntry {
@@ -93,9 +93,11 @@ struct SaleRow {
     std::uint16_t itemIndex{};
     /** Row +176. `kAbsentSecondaryItem` when the row names none. */
     std::uint16_t secondaryItemIndex{};
-    /** Row +100. Row of the owning definition's installed array, and of a parallel runtime table.
+    /**
+     * Row +100. The row's vendor category, established by correlating 3,304 rows against the
+     * manifest. The catalog bounds it by the installed count, as it always has.
      */
-    std::int32_t installedIndex{};
+    std::int32_t categoryIndex{};
     /** Row +104, raw f32 bits. Role open. */
     std::uint32_t raw104{};
     /** Row +108. Role open. */

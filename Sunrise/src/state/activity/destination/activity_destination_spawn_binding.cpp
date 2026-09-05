@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "../../../core/logging/log.h"
+#include "../../../middleware/content/packages/tables/region_reader.h"
 #include "../../build_data/runtime.h"
 
 namespace sunrise::state::activity::destination {
@@ -68,7 +69,74 @@ void report_dropped(std::string_view name, std::uint32_t hash) noexcept {
     }
 }
 
+/**
+ * Tests whether one bubble of a destination is named by a spawn row's bubble mask.
+ * The mask is keyed by map-global bubble index, so the destination's own ordinal has to be
+ * translated through its map-index table first.
+ * @param layout Destination row carrying the map-index table.
+ * @param row Spawn-set row carrying the mask.
+ * @param bubble Destination bubble ordinal.
+ * @return True when the row declares that bubble.
+ */
+[[nodiscard]] bool bubble_declares_set(const build_data::scenarios::Definition& layout,
+                                       const build_data::spawn_sets::NameHash& row,
+                                       std::size_t bubble) noexcept {
+    if (bubble >= layout.bubbleCount || bubble >= layout.bubbleMapIndices.size()) {
+        return false;
+    }
+    const std::size_t mapIndex = layout.bubbleMapIndices[bubble];
+    const std::size_t byteIndex = mapIndex / 8;
+    if (byteIndex >= row.bubbleMask.size()) {
+        return false;
+    }
+    return (row.bubbleMask[byteIndex] >> (mapIndex % 8) & 1U) != 0;
+}
+
 } // namespace
+
+/** Finds the slice set whose bubble actually declares one spawn set. */
+std::uint16_t spawn_set_slice_set(const DestinationSelection& selection,
+                                  std::uint32_t spawnSetHash,
+                                  std::uint16_t arrivalSliceSet) noexcept {
+    namespace tables = middleware::content::packages::tables;
+    if (spawnSetHash == 0 || spawnSetHash == kAbsentSpawnSetHash) {
+        return arrivalSliceSet;
+    }
+    const std::string_view name = name_of(selection);
+    build_data::scenarios::Definition layout{};
+    if (name.empty() || !build_data::find_scenario_layout(name, layout)) {
+        return arrivalSliceSet;
+    }
+    const std::string_view stem(layout.spawnStem.data(), layout.spawnStemLength);
+    static std::array<build_data::spawn_sets::NameHash, kSpawnRowCapacity> rows{};
+    std::size_t count = 0;
+    if (stem.empty() || !build_data::find_spawn_sets(stem, rows, count)) {
+        return arrivalSliceSet;
+    }
+    for (std::size_t index = 0; index < count; ++index) {
+        if (rows[index].value != spawnSetHash) {
+            continue;
+        }
+        // The arrival wins whenever it is valid, so every configuration that already places a
+        // player keeps the exact slice set it publishes today.
+        const std::size_t arrivalBubble = arrivalSliceSet / tables::kSliceSetIndexFactor;
+        if (bubble_declares_set(layout, rows[index], arrivalBubble)) {
+            return arrivalSliceSet;
+        }
+        const std::size_t declared = layout.bubbleCount < layout.bubbleMapIndices.size()
+                                         ? layout.bubbleCount
+                                         : layout.bubbleMapIndices.size();
+        for (std::size_t bubble = 0; bubble < declared; ++bubble) {
+            if (bubble_declares_set(layout, rows[index], bubble)) {
+                return static_cast<std::uint16_t>(
+                    tables::region_index(static_cast<std::uint32_t>(bubble)));
+            }
+        }
+        return arrivalSliceSet;
+    }
+    // A hash no row carries is not proof of a miss: the row set can be capped.
+    return arrivalSliceSet;
+}
 
 /** Drops a spawn set the destination cannot load. Only a proved miss is dropped. */
 std::uint32_t attachable_spawn_set_hash(const DestinationSelection& selection,

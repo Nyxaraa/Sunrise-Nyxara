@@ -1,8 +1,10 @@
 #include "package_socket_plug_build.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 
+#include "../../../../middleware/content/packages/tables/definition_index_table.h"
 #include "../../../../state/build_data/runtime.h"
 
 namespace sunrise::client::content::items::packages {
@@ -20,11 +22,36 @@ constexpr std::array<std::uint32_t, 3> kTrackerPlugHashes{
     2'302'094'943U,
     38'912'240U,
 };
+/** Enhanced Sword Scavenger already carries the correct Arrivals leg-armour socket relation. */
+constexpr std::uint32_t kArrivalsLegReferenceHash = 3'213'968'579U;
+/** Plug category declared by Enhanced Sword Scavenger and required by leg-armour sockets. */
+constexpr std::uint32_t kArrivalsLegCategoryHash = 0x7DDE0206U;
+/** Arrivals artifact records whose leg-armour label conflicts with their shipped general pool. */
+constexpr std::array<std::uint32_t, 4> kArrivalsLegModHashes{
+    3'465'659'109U, // Flourishing Blade
+    3'465'659'111U, // Automatic Prize
+    3'465'659'104U, // Dimensional Tithes
+    3'465'659'105U, // Ascendant Bounty
+};
 /** Native ordinary socket type whose choices are the synthetic tracker set. */
 constexpr std::uint16_t kTrackerSocketType = 518;
 /** FNV-1a constants make pool fingerprints stable and cheap. */
 constexpr std::uint64_t kHashOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kHashPrime = 1099511628211ULL;
+/** One acquired-state rule starts with kind 1 and then its item-definition index. */
+constexpr std::uint32_t kAcquisitionRuleKind = 1;
+constexpr std::size_t kAcquisitionRuleSize = 8;
+
+/** Reads one trivially copied scalar from a bounded package blob. */
+template <typename Value>
+[[nodiscard]] bool
+read(std::span<const std::byte> blob, std::size_t offset, Value& value) noexcept {
+    if (offset > blob.size() || blob.size() - offset < sizeof value) {
+        return false;
+    }
+    std::memcpy(&value, blob.data() + offset, sizeof value);
+    return true;
+}
 
 /** Visitor adapter that appends one list member to a bounded lane candidate. */
 struct VisitorContext {
@@ -32,7 +59,11 @@ struct VisitorContext {
     std::size_t itemDefinitionCount{};
 };
 
-/** @return Whether the package-provided member was accepted into bounded scratch. */
+/**
+ * @param opaque Visitor context supplied by the socket build.
+ * @param itemDefinitionIndex Package-provided plug index.
+ * @return True when the plug was accepted into bounded scratch.
+ */
 [[nodiscard]] bool visit_member(void* opaque, std::uint32_t itemDefinitionIndex) noexcept {
     auto& context = *static_cast<VisitorContext*>(opaque);
     return context.build != nullptr
@@ -40,6 +71,92 @@ struct VisitorContext {
 }
 
 } // namespace
+
+bool read_catalyst_acquisition_gates(const reader::Source& source,
+                                     reader::Scratch& scratch,
+                                     std::span<const std::byte> root,
+                                     std::vector<std::byte>& blob,
+                                     std::vector<catalysts::AcquisitionGate>& output) noexcept {
+    output.clear();
+    std::uint32_t tableTag = 0;
+    tables::Array table{};
+    if (!tables::slot_tag(root, tables::kSocketTypeTableSlot, tableTag) || tableTag == 0
+        || !reader::read_tag(source, scratch, tableTag, blob)
+        || !tables::find_array_at(blob, tables::kTableArrayDescriptor, table)
+        || table.elementClass != tables::kSocketTypeTableClass || table.count == 0
+        || table.count > (std::numeric_limits<std::uint16_t>::max)()) {
+        return false;
+    }
+    const std::uint64_t tableSize = table.count * tables::kSocketTypeRowStride;
+    if (tableSize > blob.size() || table.dataOffset > blob.size() - tableSize) {
+        return false;
+    }
+
+    output.resize(static_cast<std::size_t>(table.count));
+    const std::span<const std::byte> bytes{blob};
+    for (std::size_t index = 0; index < output.size(); ++index) {
+        catalysts::AcquisitionGate& gate = output[index];
+        gate.socketType = static_cast<std::uint16_t>(index);
+        const std::size_t row = table.dataOffset + index * tables::kSocketTypeRowStride;
+        tables::Array rules{};
+        if (!tables::find_array_at(bytes, row + tables::kSocketTypeAcquisitionDescriptor, rules)) {
+            continue;
+        }
+        if (rules.count != 1 || rules.elementClass != tables::kInvestmentExpressionRowClass
+            || rules.dataOffset > bytes.size()
+            || bytes.size() - rules.dataOffset < kAcquisitionRuleSize) {
+            gate.state = catalysts::AcquisitionState::ambiguous;
+            continue;
+        }
+        std::uint32_t kind = 0;
+        std::uint32_t definitionIndex = 0;
+        if (!read(bytes, rules.dataOffset, kind)
+            || !read(bytes, rules.dataOffset + sizeof kind, definitionIndex)
+            || kind != kAcquisitionRuleKind
+            || definitionIndex >= state::build_data::items::kDefinitionCapacity) {
+            gate.state = catalysts::AcquisitionState::ambiguous;
+            continue;
+        }
+        gate.definitionIndex = static_cast<std::uint16_t>(definitionIndex);
+        gate.state = catalysts::AcquisitionState::present;
+    }
+    return true;
+}
+
+bool read_catalyst_objective_values(const reader::Source& source,
+                                    reader::Scratch& scratch,
+                                    std::span<const std::byte> root,
+                                    std::vector<std::byte>& blob,
+                                    std::vector<std::int32_t>& output) noexcept {
+    output.clear();
+    std::uint32_t tableTag = 0;
+    std::uint32_t tableClass = 0;
+    tables::Array table{};
+    if (!tables::slot_tag(root, tables::kObjectiveTableSlot, tableTag) || tableTag == 0
+        || !reader::read_tag(source, scratch, tableTag, blob, tableClass)
+        || tableClass != tables::kObjectiveTableClass
+        || !tables::find_array_at(blob, tables::kTableArrayDescriptor, table)
+        || table.elementClass != tables::kObjectiveRowClass || table.count == 0
+        || table.count > catalysts::kUnavailableObjectiveIndex) {
+        return false;
+    }
+    const std::uint64_t tableSize = table.count * tables::kObjectiveRowStride;
+    if (tableSize > blob.size() || table.dataOffset > blob.size() - tableSize) {
+        return false;
+    }
+
+    output.resize(static_cast<std::size_t>(table.count));
+    const std::span<const std::byte> bytes{blob};
+    for (std::size_t index = 0; index < output.size(); ++index) {
+        const std::size_t offset = table.dataOffset + index * tables::kObjectiveRowStride
+                                   + tables::kObjectiveCompletionValueOffset;
+        if (!read(bytes, offset, output[index])) {
+            output.clear();
+            return false;
+        }
+    }
+    return true;
+}
 
 /** Returns the compact 1-based code of one native category-expansion family. */
 std::uint8_t special_plug_category(std::uint32_t categoryHash) noexcept {
@@ -49,6 +166,15 @@ std::uint8_t special_plug_category(std::uint32_t categoryHash) noexcept {
         }
     }
     return 0;
+}
+
+/** Makes the four mislabeled artifact definitions agree with their leg-armour presentation. */
+std::uint32_t corrected_plug_category(std::uint32_t definitionHash,
+                                      std::uint32_t categoryHash) noexcept {
+    return std::find(kArrivalsLegModHashes.begin(), kArrivalsLegModHashes.end(), definitionHash)
+                   != kArrivalsLegModHashes.end()
+               ? kArrivalsLegCategoryHash
+               : categoryHash;
 }
 
 /** Allocates the bounded build state and indexes expansion/tracker plug definitions. */
@@ -85,6 +211,20 @@ bool SocketPlugBuild::prepare(
             }
             trackerMembers_[trackerCount_++] = static_cast<std::uint16_t>(item);
         }
+        if (itemDefinitions[item].definitionHash == kArrivalsLegReferenceHash) {
+            arrivalsLegReference_ = static_cast<std::uint16_t>(item);
+        }
+        for (std::size_t mod = 0; mod < kArrivalsLegModHashes.size(); ++mod) {
+            if (itemDefinitions[item].definitionHash == kArrivalsLegModHashes[mod]) {
+                arrivalsLegMembers_[mod] = static_cast<std::uint16_t>(item);
+            }
+        }
+    }
+    if (arrivalsLegReference_ == UINT16_MAX
+        || std::find(arrivalsLegMembers_.begin(), arrivalsLegMembers_.end(), UINT16_MAX)
+               != arrivalsLegMembers_.end()) {
+        release();
+        return false;
     }
     return true;
 }
@@ -98,6 +238,33 @@ bool SocketPlugBuild::add(std::uint32_t itemDefinitionIndex,
         return false;
     }
     candidates_[candidateCount_++] = static_cast<std::uint16_t>(itemDefinitionIndex);
+    return true;
+}
+
+/** Mirrors Enhanced Sword Scavenger's exact lane admission onto the four reclassified mods. */
+bool SocketPlugBuild::route_arrivals_leg_mods() noexcept {
+    const bool legLane = std::find(candidates_.data(),
+                                   candidates_.data() + candidateCount_,
+                                   arrivalsLegReference_)
+                         != candidates_.data() + candidateCount_;
+    const auto isReclassified = [this](socket_plugs::Member member) noexcept {
+        return std::find(arrivalsLegMembers_.begin(), arrivalsLegMembers_.end(), member)
+               != arrivalsLegMembers_.end();
+    };
+    candidateCount_ = static_cast<std::size_t>(
+        std::remove_if(candidates_.data(),
+                       candidates_.data() + candidateCount_,
+                       isReclassified)
+        - candidates_.data());
+    if (!legLane) {
+        return true;
+    }
+    for (const socket_plugs::Member member : arrivalsLegMembers_) {
+        if (candidateCount_ >= candidates_.size()) {
+            return false;
+        }
+        candidates_[candidateCount_++] = member;
+    }
     return true;
 }
 
@@ -132,6 +299,9 @@ bool SocketPlugBuild::intern(std::uint32_t& poolIndex) noexcept {
             categoryMembers_.data() + family * state::build_data::items::kDefinitionCapacity;
         std::copy_n(first, categoryCounts_[family], candidates_.data() + candidateCount_);
         candidateCount_ += categoryCounts_[family];
+    }
+    if (!route_arrivals_leg_mods()) {
+        return false;
     }
     std::sort(candidates_.data(), candidates_.data() + candidateCount_);
     candidateCount_ = static_cast<std::size_t>(
@@ -218,15 +388,13 @@ bool SocketPlugBuild::append(const tables::items::Row& item,
     return complete;
 }
 
-/** Publishes the bounded relation and releases all transient interning memory. */
+/** Publishes the bounded relation and retains its rows for dependent package builders. */
 bool SocketPlugBuild::publish() noexcept {
-    const bool published =
-        !rules_.empty() && !pools_.empty() && !members_.empty()
-        && state::build_data::publish_socket_plug_rules(std::span(rules_.data(), ruleCount_),
-                                                        std::span(pools_.data(), poolCount_),
-                                                        std::span(members_.data(), memberCount_));
-    release();
-    return published;
+    return !rules_.empty() && !pools_.empty() && !members_.empty()
+           && state::build_data::publish_socket_plug_rules(
+               std::span(rules_.data(), ruleCount_),
+               std::span(pools_.data(), poolCount_),
+               std::span(members_.data(), memberCount_));
 }
 
 /** Reports how many lanes failed closed during extraction. */
@@ -246,6 +414,18 @@ std::size_t SocketPlugBuild::member_count() const noexcept {
     return memberCount_;
 }
 
+std::span<const socket_plugs::Rule> SocketPlugBuild::rules() const noexcept {
+    return std::span(rules_).first(ruleCount_);
+}
+
+std::span<const socket_plugs::Pool> SocketPlugBuild::pools() const noexcept {
+    return std::span(pools_).first(poolCount_);
+}
+
+std::span<const socket_plugs::Member> SocketPlugBuild::members() const noexcept {
+    return std::span(members_).first(memberCount_);
+}
+
 /** Drops all heap-backed extraction scratch and resets every count. */
 void SocketPlugBuild::release() noexcept {
     rules_.clear();
@@ -262,6 +442,8 @@ void SocketPlugBuild::release() noexcept {
     lookup_.shrink_to_fit();
     categoryCounts_ = {};
     trackerMembers_ = {};
+    arrivalsLegReference_ = UINT16_MAX;
+    arrivalsLegMembers_.fill(UINT16_MAX);
     trackerCount_ = 0;
     ruleCount_ = 0;
     poolCount_ = 0;

@@ -14,6 +14,8 @@
 
 # CMake build files
 /build/
+/build-merge/
+/build-resolved/
 /out/
 
 # Local Python inspection tools and tests

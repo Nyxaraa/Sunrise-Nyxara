@@ -2,6 +2,9 @@
 
 namespace sunrise::client::content::items::packages {
 
+/** @return True when every package-owned domain is published. */
+[[nodiscard]] bool ready() noexcept;
+
 /**
  * Publishes the dense item table from the installed packages, once.
  * @return True when State already holds the table or a full pass publishes it.

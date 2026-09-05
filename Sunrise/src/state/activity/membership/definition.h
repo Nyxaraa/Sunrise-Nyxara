@@ -14,6 +14,10 @@ inline constexpr std::uint32_t kMaximumMembershipRevision =
     (std::numeric_limits<std::uint32_t>::max)();
 /** A steady zero epoch keeps the client peer table across unchanged refreshes. */
 inline constexpr std::uint32_t kStableEpoch = 0;
+/** Derives the membership epoch of one activity record generation. */
+[[nodiscard]] inline std::uint32_t session_epoch(std::uint64_t createdRevision) noexcept {
+    return static_cast<std::uint32_t>(createdRevision);
+}
 /** The first local transition uses token 1. */
 inline constexpr std::uint8_t kInitialTransitionToken = 1;
 /** The mirrored 3-bit state field decodes down to -1. */
@@ -149,6 +153,8 @@ struct MembershipState final {
     /** The character write-back (ws 702) reports the in-world state while a region is held. */
     bool entered{};
     std::uint32_t revision{};
+    /** Stable within one session; changes on world replacement to clear the reused client table. */
+    std::uint32_t epoch{kStableEpoch};
     std::uint32_t acknowledgedRevision{};
     std::uint8_t transitionToken{};
     /** Tells an explicit zero token apart from the initial fallback token. */

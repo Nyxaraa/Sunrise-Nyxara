@@ -58,6 +58,35 @@ struct RosterStorage {
     std::size_t cursor{};
     /** Tag reads spent in the current call, which is what bounds how long it blocks. */
     std::size_t reads{};
+    /**
+     * Destination whose scenario is being walked, for diagnostics only.
+     * Several scenarios share one map and walk the same bubbles, so a per-object trace without
+     * this cannot say which destination reached an object and is easy to misread.
+     */
+    std::uint32_t destinationTag{};
+    /**
+     * Why the descriptor walk of the object being resolved fell short, counted per exit.
+     * A group is refused when its found slots miss its declared ones, and the summary says only
+     * how many were refused. These say which step lost them, which is what picks the fix.
+     * Cleared with the slot list, so every count belongs to one object.
+     */
+    struct WalkExits {
+        /** Handles enumerated across the object's per-bubble sub-blocks. */
+        std::size_t handles{};
+        /** Descriptor blobs reached, which is where a slot can still be recorded. */
+        std::size_t blobs{};
+        /** A bubble entry did not decode, which abandons every bubble after it. */
+        std::size_t bubbleAborts{};
+        /** A placed handle did not decode, which abandons the rest of the walk. */
+        std::size_t handleAborts{};
+        /** One handle's chain reached a tag that would not read. */
+        std::size_t readFailures{};
+        /** One handle's chain reached a class with no next tag. */
+        std::size_t chainEnds{};
+        /** One handle's chain was still unresolved at the depth limit. */
+        std::size_t depthExhausted{};
+    };
+    WalkExits exits{};
 };
 
 /** Tag-read budget bounds one process-freeze interval and keeps worker shutdown responsive. */
@@ -246,6 +275,7 @@ void publish_groups(Walk& walk, layouts::Definition& row) noexcept;
                                   reader::Scratch& scratch,
                                   RosterStorage& storage,
                                   std::uint32_t objectTag,
+                                  std::uint32_t sliceSetIndex,
                                   std::uint16_t& group) noexcept;
 
 /**

@@ -6,6 +6,10 @@
 #include "../../../../state/equipment/light/definition.h"
 #include "../loadout/definition.h"
 
+namespace sunrise::state::record_claims {
+struct PendingClaim;
+}
+
 namespace sunrise::middleware::datagen::family4::character {
 
 /**
@@ -16,9 +20,11 @@ namespace sunrise::middleware::datagen::family4::character {
  * @param output Exact runtime-mapped character-object storage.
  * @return True when State, mappings, and the mapped object span fit the native layout.
  */
-[[nodiscard]] bool encode(const state::CharacterState& state,
-                          const loadout::ResolvedLoadout& resolvedLoadout,
-                          const state::equipment::light::Evaluation& lightEvaluation,
-                          std::span<std::byte> output) noexcept;
+[[nodiscard]] bool
+encode(const state::CharacterState& state,
+       const loadout::ResolvedLoadout& resolvedLoadout,
+       const state::equipment::light::Evaluation& lightEvaluation,
+       std::span<std::byte> output,
+       const state::record_claims::PendingClaim* pendingClaim = nullptr) noexcept;
 
 } // namespace sunrise::middleware::datagen::family4::character
