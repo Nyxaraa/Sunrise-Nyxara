@@ -30,9 +30,14 @@ the scenario catalogue itself and rebuilt the old cache successfully into `build
 newly recovered eleventh landing squad. The runtime logs typed Ghost-link Sense fields for
 the next console playtest without interpreting them as an interaction yet.
 
-Installation is pending: Destiny 2 was running, so the installer exited before changing any
-game file. Prepared installer: `/tmp/install-ember-corrected.py`. It backs up the previous
-runtime, SDK, scripts and settings, then verifies installed file hashes.
+Installation completed after the game closed. The previous runtime, SDK, scripts and settings
+are backed up in `build/video-audit-backup-20260905-074152`. All installed file hashes matched
+the prepared files. Settings now select bubble 6/state 49 for cinematic arrival. A follow-up
+Lua gate additionally rejects early playable-region reports before cinematic completion.
+
+Millie supplied a separate 21-second arrival cutscene reference and specified ordinary fly-in,
+then the cutscene, then player spawn. The reference document records that evidence. The selected
+bookend asset still needs visual confirmation during play.
 
 Workspace recovery: the parent checkout was moved to Trash during the audit. The mission
 folder now has its own recovered `.git` directory, retaining branch `mission-ember` and all

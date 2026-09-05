@@ -35,3 +35,17 @@ identities and data; those alone do not establish every authored script conditio
 Live log evidence from the previous build: bridge Auth requests were staged at service ticks
 97082–97268, before mission world entry at 102262 and held region 64 at 104814. Ten squad
 requests were staged at 104915–107153. Transport staging does not establish visible state or AI.
+
+## Arrival cutscene reference
+
+Additional reference supplied by Millie: https://www.youtube.com/watch?v=IUmUYHELJAY
+(21 seconds, inspected locally at two-second intervals on 2026-09-05).
+The clip shows the player's ship approaching the Almighty, a view along its exterior weapon
+structure, and a fade to black. Millie specifies the sequence as ordinary fly-in, then this
+cinematic, then player spawn. The clip itself ends before the player spawn.
+
+The controller selects authored cinematic state 49 and its type-6 bookend slot, then selects
+playable state 64 only on that slot's termination event. Early region-64 reports cannot start
+landing combat or guidance before that handoff. No 21-second timer is used: completion/skip
+comes from the cinematic event. The selected package asset and the absence of a premature
+player spawn still need visual confirmation in the running game.

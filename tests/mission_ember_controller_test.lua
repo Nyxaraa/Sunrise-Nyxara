@@ -93,6 +93,9 @@ end
 assert(#closed == 0 and resets == 0 and placements == 0)
 program.on_event_client_state_changed(context, state, {region_index = 49})
 assert(#movies == 0, "a requested region is not a held cinematic")
+region(64)
+assert(placements == 0 and #closed == 0 and #cues == 0,
+       "playable-region reports cannot start the landing before cinematic completion")
 region(49); region(49)
 assert(#movies == 1 and movies[1] == true and placements == 0)
 program.on_event_cinematic_terminated(context, state, {registry_key = 8, slot_type = 6, slot_index = 0})

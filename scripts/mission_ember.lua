@@ -13,7 +13,7 @@ return {
         -- A settle-only delta omits region fields; it does not mean that the player left.
         if region ~= nil then context:set_variable("ember.region", region) end
         region = state:variable("ember.region")
-        if region == landing.region then
+        if region == landing.region and opening.playable(state) then
             landing.enter(context, state)
             landing.client_state(context, state, event)
         end

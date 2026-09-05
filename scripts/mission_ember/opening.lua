@@ -12,6 +12,7 @@ return function(mission, landing)
     end
     return {
         initial_state = entry,
+        playable = function(state) return phase(state) == 2 end,
         client_state = function(context, state, event)
             local held = event.held_region_index or event.current_region_index
             -- Only a held-region report starts the movie; a requested destination is insufficient.
