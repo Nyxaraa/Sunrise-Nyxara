@@ -26,8 +26,10 @@
 #include "../../../state/activity_sdk/generation/internal.h"
 #include "../../../state/activity_sdk/identity.h"
 #include "../../../state/activity_sdk/runtime.h"
+#include "../../../state/build_data/runtime.h"
 #include "../../../state/content_manifest/content_manifest_state_runtime.h"
 #include "../items/packages/internal.h"
+#include "../scenarios/scenario_build.h"
 #include "activity_sdk_activity_inventory.h"
 #include "activity_sdk_generation_report.h"
 #include "activity_sdk_generation_worker_internal.h"
@@ -678,6 +680,18 @@ void publish_parallel_progress(ScenarioBuildBatch& batch, const Scenario& scenar
     ReleaseSRWLockExclusive(&batch.progressLock);
 }
 
+/** A cache made before the layout catalogue was ready omitted whole placement domains. */
+[[nodiscard]] bool placement_context_ready(const Scenario& scenario,
+                                           const catalog::Snapshot& snapshot) noexcept {
+    state::build_data::scenarios::Definition layout{};
+    const std::string_view name(scenario.name.data(), scenario.nameLength);
+    if (!state::build_data::find_scenario_layout(name, layout) || layout.spawnStemLength == 0) {
+        return true;
+    }
+    return snapshot.containerPlacementDiagnostics.contextResolved
+           && snapshot.staticSpatialContextResolved;
+}
+
 /** Builds one worker's contiguous chunks with private package and analysis caches. */
 void run_scenario_worker(ScenarioBuildBatch& batch) noexcept {
     std::unique_ptr<package_reader::Scratch> scratch(new (std::nothrow) package_reader::Scratch());
@@ -710,6 +724,9 @@ void run_scenario_worker(ScenarioBuildBatch& batch) noexcept {
                                                 scenario,
                                                 *existing,
                                                 result.snapshot);
+                if (kept && !placement_context_ready(scenario, *result.snapshot)) {
+                    kept = false;
+                }
                 if (kept
                     && !materialize_cached_record(
                         *batch.work, scenario, *existing, result.snapshot, result.snapshot)) {
@@ -837,9 +854,21 @@ DWORD WINAPI thread_main(void* opaque) noexcept {
                              middleware::content::packages::tables::kActivityDefinitionCount),
                          0,
                          "building installed activity inventory");
-        bool inventoried = build_inventory(*work, source);
+        // The game normally publishes these layouts during boot. An isolated generation
+        // process has no boot worker, but container and spatial extraction still need them.
+        bool layoutsReady = state::build_data::scenario_layouts_ready();
+        if (work->offline && !layoutsReady) {
+            auto scratch = std::make_unique<package_reader::Scratch>();
+            constexpr std::size_t kMaximumLayoutSteps = 10'000;
+            for (std::size_t step = 0; step < kMaximumLayoutSteps && !cancelled() && !layoutsReady;
+                 ++step) {
+                layoutsReady = scenarios::build(source, *scratch);
+            }
+            package_reader::close_files(*scratch);
+        }
+        bool inventoried = layoutsReady && build_inventory(*work, source);
         if (!inventoried) {
-            failureDetail = "inventory_incomplete";
+            failureDetail = layoutsReady ? "inventory_incomplete" : "scenario_layouts_unavailable";
         }
 
         const std::uint32_t total = static_cast<std::uint32_t>(work->scenarios.size());
@@ -1219,9 +1248,10 @@ void service() noexcept {
         return;
     }
     core::path::Buffer packageDirectory;
-    const bool ready =
-        work->module != nullptr && !work->sdkDirectory.empty() && !work->packPath.empty()
-        && items::packages::package_directory(packageDirectory) && prepare_work(*work);
+    const bool ready = work->module != nullptr && !work->sdkDirectory.empty()
+                       && !work->packPath.empty() && state::build_data::scenario_layouts_ready()
+                       && items::packages::package_directory(packageDirectory)
+                       && prepare_work(*work);
     if (ready) {
         try {
             work->packageDirectory.assign(packageDirectory.chars.data(), packageDirectory.length);

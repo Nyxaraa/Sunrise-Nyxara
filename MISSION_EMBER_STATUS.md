@@ -1,5 +1,46 @@
 # Ember implementation status
 
+## Current work — 2026-09-05
+
+The sections below this update record earlier playtest builds. Current investigation found
+that the offline SDK generator omitted the scenario-layout catalogue needed by container
+and spatial extraction. Initializing it and rebuilding the Ember shard recovered 83 additional
+squad definitions: 160 definitions, 138 runnable, across 162 squad sensors. Thirteen sensors
+still have no definition, and eleven processing sensors each have two refused alternatives.
+See [the complete squad census](MISSION_EMBER_SQUADS.md) and
+[the timestamped video comparison](MISSION_EMBER_REFERENCE.md).
+
+The production generator now prepares the missing catalogue in offline mode, waits for it
+in game mode, and rejects cached shards that lack placement context for a known map stem.
+
+The controller draft uses the separate arrival-cinematic state (49), waits for its exact
+termination event, then selects playable state 64. Bridge reset is delayed until region 64
+is held. Region-less client deltas preserve encounter ownership. Arrival dialogue waits
+for spawn settlement; the console-guidance cue follows combat clear. Regression tests pass,
+but these changes have not yet been validated visually in game.
+
+The Ghost console interaction, later encounter activation, later dialogue and full mission
+completion are still unfinished. The reference video begins after arrival and cannot verify
+the identity of the arrival movie. No claim of complete 1AU parity is made.
+
+Validation: Release build, both Lua controller/encounter suites, six Python SDK checks and
+eight sanitized production-linker regressions pass. A fresh native offline process loaded
+the scenario catalogue itself and rebuilt the old cache successfully into `build/sdk-corrected`
+(138 runnable Ember definitions). The script binds successfully to that SDK, including the
+newly recovered eleventh landing squad. The runtime logs typed Ghost-link Sense fields for
+the next console playtest without interpreting them as an interaction yet.
+
+Installation is pending: Destiny 2 was running, so the installer exited before changing any
+game file. Prepared installer: `/tmp/install-ember-corrected.py`. It backs up the previous
+runtime, SDK, scripts and settings, then verifies installed file hashes.
+
+Workspace recovery: the parent checkout was moved to Trash during the audit. The mission
+folder now has its own recovered `.git` directory, retaining branch `mission-ember` and all
+prior commits. Compiler dependencies were copied into `build/recovered-dependencies/xwin`;
+the local `.xwin-cache` points there. The trashed checkout was not modified.
+
+
+
 ## First test build
 
 The opening landing controller is implemented and loads with the regenerated SDK. It publishes

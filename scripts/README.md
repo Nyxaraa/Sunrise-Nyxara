@@ -1,35 +1,32 @@
 # Ember development scripts
 
-`mission_ember.lua` currently implements only the opening landing combat slice. It is not a
-complete mission controller. The initial six-squad selection needs an in-game playtest. Bridge
-interaction, later encounters, authored checkpoints, dialogue and mission completion remain to
-be implemented.
+This controller is a development playtest slice, not complete 1AU. It selects the authored
+arrival-cinematic state (49), activates its bookend when held, and hands off to powerhouse
+state 64 on the matching termination event. The supplied reference video starts in gameplay;
+it cannot establish the arrival movie’s identity.
 
-The original installed SDK inspected on 2026-09-04 lacks the opening squad definitions. This controller
-intentionally reports the missing binding before publishing any gameplay state. Build this branch
-and regenerate the SDK first; the scenario-scoping fix in the squad linker addresses object-key
-collisions between campaign and arcade content. Generation must still verify runnable member
-counts, actor bindings and anchors. The isolated SDK generated in `build/sdk-generated` now passes
-these checks for the initial six opening squads. Do not remove checks or supply replacement enemies.
+The landing encounter uses eleven authored Mercury squads with their default counts.
+Bridge devices reset only when the playable region is held. Arrival dialogue waits for spawn
+settlement; combat clear sets the console directive and plays the console-guidance cue.
+Actual Ghost-console activation/bridge extension, later encounters, later dialogue, wipes and
+mission completion still need implementation and in-game verification. See
+[the full squad audit](../MISSION_EMBER_SQUADS.md) and
+[video observations](../MISSION_EMBER_REFERENCE.md).
 
-After regeneration, copy this directory's contents to `Sunrise/scripts` beside the generated
-`Sunrise/sdk/lua` directory in the game artifact tree. The runtime selects `mission_ember.lua`
-by the activity name. Enable the existing `server.activation.mission_scripting` setting.
+Build this branch and regenerate the SDK before installing these scripts. The corrected
+native generator initializes the scenario catalogue before offline extraction and rejects
+cached shards missing container/spatial context. `build/sdk-corrected` has 138 statically
+runnable Ember definitions; 13 sensors have no definition and 11 processing sensors have
+refused alternate spawn-rule bindings. Never substitute arbitrary enemies or coordinates.
 
-The controller declares region 64 at startup and waits for the client to hold it before spawning enemies. Enemy clear
-requires evidence that every watched squad existed and now has no live members. Duplicate clear
-events do not advance twice, and removed squads must be observed alive again. Region transit and
-script reload do not reset the encounter. `Encounter:reset` is available for a future confirmed
-checkpoint callback; this version does not infer a wipe from region transit.
+Copy these scripts to `Sunrise/scripts` beside `Sunrise/sdk/lua`. Enable
+`server.activation.mission_scripting`. For cinematic arrival, the settings override for
+`mission_ember` must use `bubble: 6` and `slice_set: 49`; gameplay is selected by the script
+after the cinematic. Restart after updating arrival settings.
 
-Fresh launches declare the opening powerhouse state through `initial_state`. The installed
-`state.activity.arrival_overrides` must also include `mission_ember` with `bubble: 8` and
-`slice_set: 64`; the arrival router otherwise chooses the first live bubble (the reactor area).
-The branch's bundled defaults include this override. Existing settings need the row added
-explicitly. Restart the game after changing arrival settings.
-
-The combat-clear callback displays the authored bridge-control directive. It does not move the
-bridge, complete the activity or silently proceed through unimplemented encounters.
+Region-less client deltas preserve encounter ownership. Duplicate events and script reload
+do not repeat the movie, spawn requests, dialogue or bridge reset. Mock-context tests verify
+those conditions; they do not establish visible AI, dialogue or cinematic playback.
 
 Run local checks from the repository root:
 
@@ -54,11 +51,3 @@ python tools/inspect_mission_sdk.py /path/to/Sunrise/activity_sdk.pack \
     --shard /path/to/Sunrise/sdk/scenarios/80B3C09E-HASH.pack \
     --output /tmp/mission-ember-inventory.json
 ```
-
-The current landing test places ten SDK squads (the original six and the four available
-bonus-support squads), using their authored default counts. Bonus-wave timing remains unverified;
-the missing bonus-anchor and far-side definitions are not substituted. Startup snaps the six
-bridge devices closed and resets the bridge objective after the initial state is published.
-The region callback no longer redundantly selects that state. Bridge interaction and extension
-still need scripting; this test checks its initial state only. Server/client info logging is
-installed to expose refused spawn and device requests on the next fresh launch.

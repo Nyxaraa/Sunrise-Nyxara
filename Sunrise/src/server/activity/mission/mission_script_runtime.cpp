@@ -1381,6 +1381,45 @@ void service_pending_starts(std::uint64_t now) noexcept {
     return false;
 }
 
+/** Records the typed Ghost-link fields while its interaction semantics are being verified. */
+void log_ghost_link_sense(const RuntimeInstance& instance,
+                          const host::SenseObservationSnapshot& sense) noexcept {
+    for (std::size_t index = 0; index < sense.observationCount; ++index) {
+        const auto& observation = sense.observations[index];
+        if (observation.key.slotType != 65 || observation.key.senseSchema != 0x80804D3EU
+            || observation.firstValue > sense.valueCount
+            || observation.valueCount > sense.valueCount - observation.firstValue) {
+            continue;
+        }
+        for (std::size_t offset = 0; offset < observation.valueCount; ++offset) {
+            const auto& value = sense.values[observation.firstValue + offset];
+            if (!value.present || value.schemaRow != observation.key.schemaRow) {
+                continue;
+            }
+            std::array<char, 192> fields{};
+            const int written = std::snprintf(
+                fields.data(),
+                fields.size(),
+                "registry=%08x object=%08x slot=%u ordinal=%u bits=%u value=%llu sequence=%llu",
+                observation.key.registryKey,
+                observation.key.objectTag,
+                static_cast<unsigned>(observation.key.slotIndex),
+                static_cast<unsigned>(value.fieldOrdinal),
+                static_cast<unsigned>(value.width),
+                static_cast<unsigned long long>(value.unsignedValue),
+                static_cast<unsigned long long>(observation.sequence));
+            if (written > 0) {
+                log_line(core::log::Level::info,
+                         &instance,
+                         "ghost_link_sense",
+                         "observed",
+                         {fields.data(),
+                          (std::min)(static_cast<std::size_t>(written), fields.size() - 1)});
+            }
+        }
+    }
+}
+
 /** Runs one event through the VM, commits what it changed, and faults on a script failure. */
 [[nodiscard]] lua_vm::CallStatus dispatch_event(RuntimeInstance& instance,
                                                 const host::Event& event,
@@ -1429,6 +1468,9 @@ void service_pending_starts(std::uint64_t now) noexcept {
         push_cinematic(instance, event);
     }
     if (event.kind == host::EventKind::senseUpdate && sense != nullptr) {
+        if (firstAttempt) {
+            log_ghost_link_sense(instance, *sense);
+        }
         push_trigger_edges(instance, *sense);
         push_squad_edges(instance, *sense);
         push_scene_edges(instance, *sense);

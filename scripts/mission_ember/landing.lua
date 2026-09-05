@@ -3,6 +3,7 @@ local Encounter = require("mission_ember.encounter")
 
 local NAMES = {
     "LANDING_MERCURY_ANCHOR_SQUAD",
+    "LANDING_MERCURY_BONUS_ANCHOR_A_SQUAD",
     "LANDING_MERCURY_SUPPORT_A_SQUAD",
     "LANDING_MERCURY_SUPPORT_B_SQUAD",
     "LANDING_MERCURY_SUPPORT_C_SQUAD",
@@ -52,28 +53,42 @@ return function(mission)
                               "bridge controls directive")
     local encounter = Encounter.new("ember.landing", squads, function(context)
         context:slot(directive):set_directive{directive = controls}
+        context:slot(mission.Slot.M_DIALOG_SENSOR_80B3C90A):play_dialogue_cue{
+            cue = mission.DialogueCue.M_DIALOG_SENSOR_80B3C90A.CUE_3,
+        }
+        context:set_phase(3)
         -- The bridge must wait for its authored interaction. Combat clear does not open it.
     end)
+
+    local function initialize(context)
+        for _, device in ipairs(bridge) do
+            context:slot(device):transition{transition = context.sdk.device_transitions.close, snap = true}
+        end
+        context:slot(bridge_objective):reset_objectives{}
+    end
 
     return {
         initial_state = entry,
         region = entry.region_index,
-        initialize = function(context)
-            -- on_start runs after the initial-state roster has reached the transport.
-            -- Do not repeat this on region transit or on_load: those are not mission resets.
-            for _, device in ipairs(bridge) do
-                context:slot(device):transition{
-                    transition = context.sdk.device_transitions.close, snap = true,
-                }
-            end
-            context:slot(bridge_objective):reset_objectives{}
-        end,
         enter = function(context, state)
             if encounter:phase(state) ~= 0 then
                 return
             end
+            initialize(context)
+            context:set_phase(2)
             encounter:enter(context, state)
             context:slot(directive):set_directive{directive = clear}
+        end,
+        client_state = function(context, state, event)
+            if event.teleport_state == 0 then context:set_variable("ember.spawned", true) end
+            if state:variable("ember.spawned") and not state:variable("ember.guidance")
+                and event.region_index == nil and event.current_region_index == nil
+                and event.spawn_state == nil and event.teleport_state == nil then
+                context:set_variable("ember.guidance", true)
+                context:slot(mission.Slot.M_DIALOG_SENSOR_80B3C90A):play_dialogue_cue{
+                    cue = mission.DialogueCue.M_DIALOG_SENSOR_80B3C90A.CUE_0,
+                }
+            end
         end,
         on_squad_state = function(context, state, event)
             encounter:on_squad_state(context, state, event)
