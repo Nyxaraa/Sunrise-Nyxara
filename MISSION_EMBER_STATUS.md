@@ -1,5 +1,28 @@
 # Ember implementation status
 
+## Cinematic handoff fix — 2026-09-05
+
+Playtest confirmed the arrival movie plays, but the player remained black after fade-out.
+Both native notifications arrived (targets 5239 and 1685); the mission runtime rejected each
+as `cinematic absent`. Inspection of the retained records showed zero-filled payloads and
+ClientRefs decoded as registry 0, type -1, slot -32768.
+
+Root cause: `incident::validate` advanced past selector, optional words and payload without
+retaining their contents. It now reads and stores those fields through the bit reader,
+including unaligned payloads. This restores the source identity needed to deliver the exact
+cinematic-termination event to Lua and select landing state 64. Player-trigger events used
+the same discarded payload path. Cinematic resolution now logs the source identity and
+successful start/termination for the next playtest.
+
+Validation: the new regression fails against the original parser and passes with the fix.
+It covers every payload alignment, maximum selector/payload lengths, truncated frames,
+optional fields, cinematic encode/parse/decode/catalogue resolution and player-trigger decode.
+All three portable CTest tests and the Lua handoff test pass; Release build passed.
+
+Installed and SHA-256 verified the rebuilt root DLL. Previous DLL is in
+`build/cinematic-handoff-backup-20260905-075750`. No SDK or settings regeneration was needed.
+The restored notification path still needs the next in-game spawn test.
+
 ## Current work — 2026-09-05
 
 The sections below this update record earlier playtest builds. Current investigation found

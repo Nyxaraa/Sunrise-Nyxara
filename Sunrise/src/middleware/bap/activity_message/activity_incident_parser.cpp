@@ -9,6 +9,19 @@
 namespace sunrise::middleware::bap::activity_message::incident {
 namespace {
 
+/** Retains byte fields even when their wire start is not byte-aligned. */
+[[nodiscard]] bool read_bytes(encoding::bits::Reader& reader,
+                              std::span<std::byte> output) noexcept {
+    for (std::byte& value : output) {
+        std::uint64_t field = 0;
+        if (!reader.read(encoding::kBitsPerByte, field)) {
+            return false;
+        }
+        value = static_cast<std::byte>(field);
+    }
+    return true;
+}
+
 /** @return True when one target index is safe to hand to the Client's table lookup. */
 [[nodiscard]] bool target_allowed(std::uint32_t target, Verdict& verdict) noexcept {
     if (target > kTargetMaximum) {
@@ -80,7 +93,8 @@ Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept 
     if (!reader.read(kSelectorPresenceWidth, field)) {
         return Verdict::truncated;
     }
-    if (field != 0) {
+    parsed.hasCompressedSelector = field != 0;
+    if (parsed.hasCompressedSelector) {
         if (!reader.read(kSelectorLengthWidth, field)) {
             return Verdict::truncated;
         }
@@ -88,8 +102,7 @@ Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept 
         if (parsed.selectorLength > kSelectorMaximum) {
             return Verdict::selectorTooLong;
         }
-        if (!reader.skip(static_cast<std::size_t>(parsed.selectorLength)
-                         * encoding::kBitsPerByte)) {
+        if (!read_bytes(reader, std::span(parsed.selector).first(parsed.selectorLength))) {
             return Verdict::truncated;
         }
     }
@@ -98,9 +111,15 @@ Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept 
         return Verdict::truncated;
     }
     parsed.hasOptionalBlock = field != 0;
-    if (parsed.hasOptionalBlock
-        && !reader.skip(static_cast<std::size_t>(kOptionalWordWidth) * 2U)) {
-        return Verdict::truncated;
+    if (parsed.hasOptionalBlock) {
+        if (!reader.read(kOptionalWordWidth, field)) {
+            return Verdict::truncated;
+        }
+        parsed.optionalWordA = static_cast<std::uint32_t>(field);
+        if (!reader.read(kOptionalWordWidth, field)) {
+            return Verdict::truncated;
+        }
+        parsed.optionalWordB = static_cast<std::uint32_t>(field);
     }
 
     if (!reader.read(kPayloadLengthWidth, field)) {
@@ -110,9 +129,10 @@ Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept 
     if (parsed.payloadLength > kPayloadMaximum) {
         return Verdict::payloadTooLong;
     }
-    if (!reader.skip(static_cast<std::size_t>(parsed.payloadLength) * encoding::kBitsPerByte)) {
+    if (!read_bytes(reader, std::span(parsed.payload).first(parsed.payloadLength))) {
         return Verdict::truncated;
     }
+    parsed.hasPayload = parsed.payloadLength != 0;
     parsed.consumedBits = static_cast<std::uint32_t>(payload.size() * encoding::kBitsPerByte
                                                      - reader.remaining_bits());
     return Verdict::accepted;

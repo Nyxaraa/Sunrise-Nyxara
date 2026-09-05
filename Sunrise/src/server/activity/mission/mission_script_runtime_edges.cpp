@@ -2,6 +2,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <span>
 
 #include "../../../state/activity/transactions/internal.h"
@@ -301,15 +302,37 @@ void push_cinematic(RuntimeInstance& instance, const host::Event& incident) noex
     target.eventValue = incident.cinematicEventValue;
     cinematic::Source source{};
     const cinematic::ResolveStatus status = cinematic::resolve(*world, target, source);
+    std::array<char, 128> fields{};
+    const int written = std::snprintf(fields.data(),
+                                      fields.size(),
+                                      "registry=%08x slot_type=%d slot_index=%d target=%u",
+                                      target.registryKey,
+                                      static_cast<int>(target.slotType),
+                                      static_cast<int>(target.slotIndex),
+                                      incident.incidentTarget);
+    const std::string_view detail =
+        written > 0
+            ? std::string_view(fields.data(),
+                               (std::min)(static_cast<std::size_t>(written), fields.size() - 1))
+            : std::string_view{};
     if (status != cinematic::ResolveStatus::ready) {
         log_line(core::log::Level::warn,
                  &instance,
                  "cinematic",
                  status == cinematic::ResolveStatus::ambiguous        ? "ambiguous"
                  : status == cinematic::ResolveStatus::invalidCatalog ? "invalid_catalog"
-                                                                      : "absent");
+                                                                      : "absent",
+                 detail);
         return;
     }
+    log_line(core::log::Level::info,
+             &instance,
+             "cinematic",
+             incident.cinematicSignal
+                     == middleware::bap::activity_message::cinematic_incident::Signal::started
+                 ? "started"
+                 : "terminated",
+             detail);
     host::Event event = incident;
     event.kind = incident.cinematicSignal
                          == middleware::bap::activity_message::cinematic_incident::Signal::started
