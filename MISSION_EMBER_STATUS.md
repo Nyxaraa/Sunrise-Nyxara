@@ -1,5 +1,28 @@
 # Ember implementation status
 
+## Landing spawn selection — 2026-09-05
+
+The next playtest confirmed the movie completes and the player spawns, but in the wrong place
+under the map. Logs now resolve both cinematic notifications and arm the transition to state 64.
+The installed arrival override selected the cinematic region without an explicit spawn set.
+
+The native build-data catalogue contains a three-point landing set whose hash matches
+`powerhouse_landing_mercury` (`0x9C58857A`). Its points align with the SDK landing anchors and
+the opening area in the reference video. Settings now explicitly select that set while retaining
+bubble 6/state 49 for the movie; Lua still selects playable state 64 after termination.
+
+The spawn-binding filter previously discarded explicit sets when their activity package was
+absent from the scenario's direct package list. That list does not inventory transitive
+references. Explicit overrides now retain their documented precedence; inferred spawn sets
+keep the existing package filter. Both roster and global-state publishers use this helper.
+
+Validation: all four portable CTest tests passed, including explicit override precedence,
+absent/zero overrides and the existing inferred-set filtering behavior. The Release DLL built
+successfully and the native settings probe accepted the updated configuration with SDK and
+mission scripting enabled. Installed and verified the root DLL and arrival setting, preserving
+other preferences. Backup: `build/landing-spawn-backup-20260905-081125`.
+The selected landing position still requires a fresh in-game test after the cinematic.
+
 ## Cinematic handoff fix — 2026-09-05
 
 Playtest confirmed the arrival movie plays, but the player remained black after fade-out.

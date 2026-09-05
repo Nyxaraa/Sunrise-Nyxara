@@ -138,11 +138,13 @@ std::uint16_t spawn_set_slice_set(const DestinationSelection& selection,
     return arrivalSliceSet;
 }
 
-/** Drops a spawn set the destination cannot load. Only a proved miss is dropped. */
+/** Filters inferred spawn sets while preserving explicit authored/operator overrides. */
 std::uint32_t attachable_spawn_set_hash(const DestinationSelection& selection,
                                         std::uint32_t fallback) noexcept {
     const std::uint32_t hash = resolve_spawn_set_hash(selection, fallback);
-    if (hash == 0 || hash == kAbsentSpawnSetHash) {
+    // The direct scenario package list is not a transitive dependency inventory. An explicit
+    // override may name a set in a referenced activity package, so it must win over this filter.
+    if (selection.hasSpawnSetOverride || hash == 0 || hash == kAbsentSpawnSetHash) {
         return hash;
     }
     const std::string_view name = name_of(selection);

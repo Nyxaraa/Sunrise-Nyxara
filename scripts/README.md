@@ -2,8 +2,8 @@
 
 This controller is a development playtest slice, not complete 1AU. It selects the authored
 arrival-cinematic state (49), activates its bookend when held, and hands off to powerhouse
-state 64 on the matching termination event. The supplied reference video starts in gameplay;
-it cannot establish the arrival movie’s identity.
+state 64 on the matching termination event. The separate arrival reference establishes the
+movie sequence, and the latest playtest confirmed playback and the termination handoff.
 
 The landing encounter uses eleven authored Mercury squads with their default counts.
 Bridge devices reset only when the playable region is held. Arrival dialogue waits for spawn
@@ -21,8 +21,11 @@ refused alternate spawn-rule bindings. Never substitute arbitrary enemies or coo
 
 Copy these scripts to `Sunrise/scripts` beside `Sunrise/sdk/lua`. Enable
 `server.activation.mission_scripting`. For cinematic arrival, the settings override for
-`mission_ember` must use `bubble: 6` and `slice_set: 49`; gameplay is selected by the script
-after the cinematic. Restart after updating arrival settings.
+`mission_ember` must use `bubble: 6`, `slice_set: 49` and
+`spawn_set_hash: "0x9C58857A"` (the authored Mercury landing set). Gameplay is selected by
+the script after the cinematic. Use the current native build so the explicit spawn override
+is preserved even when its package is absent from the direct scenario package list.
+Restart after updating arrival settings.
 
 Region-less client deltas preserve encounter ownership. Duplicate events and script reload
 do not repeat the movie, spawn requests, dialogue or bridge reset. Mock-context tests verify
