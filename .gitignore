@@ -2,7 +2,7 @@
 /.idea/
 /.vscode/
 /.direnv/
-/.xwin-cache/
+/.xwin-cache
 /.cache/
 *.user
 *.suo
@@ -15,3 +15,6 @@
 # CMake build files
 /build/
 /out/
+
+# Local Python inspection tools and tests
+__pycache__/

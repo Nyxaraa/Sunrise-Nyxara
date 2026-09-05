@@ -110,6 +110,11 @@
       },
       "arrival_overrides": [
         {
+          "package_name": "mission_ember",
+          "bubble": 8,
+          "slice_set": 64
+        },
+        {
           "package_name": "raid_envy_v310",
           "bubble": 7
         },

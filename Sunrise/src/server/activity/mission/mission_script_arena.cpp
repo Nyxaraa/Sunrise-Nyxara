@@ -161,7 +161,11 @@ bool arena_initialize(Arena& arena) noexcept {
     arena.highWater = 0;
     arena.initialized = false;
     if (arena.bytes == nullptr) {
-        std::byte* const block = new (std::nothrow) std::byte[kArenaByteCapacity];
+        // Call the allocation function directly: Clang's optimized Windows build folds the
+        // nothrow byte-array new-expression into null, preventing every mission from opening.
+        // The matching byte-array deleter still releases this storage through operator delete[].
+        auto* const block =
+            static_cast<std::byte*>(::operator new[](kArenaByteCapacity, std::nothrow));
         if (block == nullptr) {
             arena.capacity = 0;
             return false;

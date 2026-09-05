@@ -278,6 +278,7 @@ template <typename Index> void canonicalize_scenarios(Index& index) {
     std::uint64_t rawReference,
     const std::unordered_map<TargetKey, std::vector<std::uint32_t>, TargetKeyHash>& byTarget,
     const std::unordered_map<std::uint32_t, std::uint32_t>& rulesByConfig,
+    const std::vector<std::vector<std::uint32_t>>& scenariosByObject,
     std::map<TargetGroup, ExactTarget>& exactTargets,
     ReferenceResolutionStatus& status) {
     const ObjectReference decoded = decode_reference(rawReference);
@@ -305,8 +306,24 @@ template <typename Index> void canonicalize_scenarios(Index& index) {
     const std::vector<std::uint32_t>& candidates = found == byTarget.end() ? empty : found->second;
     std::map<TargetGroup, std::vector<std::uint32_t>> groups{};
     std::size_t authoritativeCount = 0;
+    const GraphSpawner& spawner = graph.spawners[spawnerRow];
     for (const std::uint32_t descriptorRow : candidates) {
         const GraphDescriptor& descriptor = graph.descriptors[descriptorRow];
+        // Object keys are reused by campaign and arcade scenarios. A reference can only
+        // name a target that occurs in a scenario containing its source object.
+        if (spawner.sourceDescriptorStatus == SourceDescriptorStatus::exact) {
+            const GraphDescriptor& source = graph.descriptors[spawner.sourceDescriptorRow];
+            const auto& sourceScenarios = scenariosByObject[source.objectIndex];
+            const auto& targetScenarios = scenariosByObject[descriptor.objectIndex];
+            const bool sharesScenario =
+                std::any_of(sourceScenarios.begin(), sourceScenarios.end(), [&](auto scenario) {
+                    return std::binary_search(
+                        targetScenarios.begin(), targetScenarios.end(), scenario);
+                });
+            if (!sharesScenario) {
+                continue;
+            }
+        }
         const topology::Slot& slot = topology.slots[descriptor.slotIndex];
         const auto rule = rulesByConfig.find(descriptor.configTag);
         const bool authoritative =
@@ -319,16 +336,17 @@ template <typename Index> void canonicalize_scenarios(Index& index) {
         }
         graph.referenceDescriptors.push_back({referenceRow, descriptorRow, authoritative, false});
     }
-    reference.candidateDescriptors.count = static_cast<std::uint32_t>(candidates.size());
+    reference.candidateDescriptors.count =
+        static_cast<std::uint32_t>(graph.referenceDescriptors.size())
+        - reference.candidateDescriptors.first;
 
-    const GraphSpawner& spawner = graph.spawners[spawnerRow];
     if (spawner.sourceDescriptorStatus == SourceDescriptorStatus::missing) {
         status = ReferenceResolutionStatus::sourceDescriptorMissing;
     } else if (spawner.sourceDescriptorStatus == SourceDescriptorStatus::ambiguous) {
         status = ReferenceResolutionStatus::sourceDescriptorAmbiguous;
-    } else if (candidates.empty()) {
+    } else if (reference.candidateDescriptors.count == 0) {
         status = ReferenceResolutionStatus::targetMissing;
-    } else if (authoritativeCount != candidates.size()) {
+    } else if (authoritativeCount != reference.candidateDescriptors.count) {
         status = ReferenceResolutionStatus::targetDescriptorMismatch;
     } else if (groups.size() != 1) {
         status = ReferenceResolutionStatus::targetAmbiguous;
@@ -433,6 +451,7 @@ template <typename Index> void canonicalize_scenarios(Index& index) {
                                    raw[ordinal],
                                    descriptorsByTarget,
                                    rulesByConfig,
+                                   scenariosByObject,
                                    exactTargets,
                                    statuses[ordinal])) {
                 return false;
