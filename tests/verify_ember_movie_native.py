@@ -62,7 +62,7 @@ assert data[0x12045BF:0x12045C6] == bytes.fromhex('48 2b c1 4c 89 40 08')
 assert data[0x4A6340:0x4A6345] == bytes.fromhex('48 8b 41 08 c3')
 ui = signature('Sunrise/src/client/hooks/bootflow/ember_movie_ui.cpp', 'sig')
 assert ui == 0xE1CD60
-# Native cinematic selection: active entry + movie's false D8 callback => state 22h.
+# Native selector's false D8 branch is cinematic LOADING, not ready playback.
 target(0xE2EB75,0,0xC4B760)
 target(0xE2EB8E,0,0xC4C070)
 assert data[0xE2EB97:0xE2EB9C] == bytes.fromhex('bb 22 00 00 00')
@@ -71,7 +71,7 @@ assert data[0x1871FAB:0x1871FB3] == bytes.fromhex('48 8b 94 02 d8 00 00 00')
 assert struct.unpack_from('<Q',data,0x1CDB4E0)[0] == 0x140DDB0F0
 assert struct.unpack_from('<Q',data,0x1CDB4E0-0x48+0xD8)[0] == 0x140DD1D10
 assert data[0xDD1D1C:0xDD1D23] == bytes.fromhex('32 c0 48 83 c4 28 c3')
-# Both authored cinematic UI choices map to category 4; E1CD60 applies it natively.
+# Both cinematic choices map to category 4; that alone did not identify playback.
 for state in (0x21,0x22):
     case=data[0xE2EA70+state+1]
     assert struct.unpack_from('<I',data,0xE2EA48+4*case)[0] == 0xE2EA2A
@@ -82,7 +82,25 @@ target(0xE1CE0F,0,0x1340F00)
 target(0x132B890, 0x353, 0x1278FF0)  # native movie command is queued before either UI layer
 target(0x132B890, 0x3DF, 0x132BD80)
 target(0x132B890, 0x40C, 0x132BD80)
-print('Native pre-rendered cinematic UI state 22h / category 4 verified; no draw suppression.')
+# Follow the actual state -> window enum -> authored window name mapping.
+def fnv1(name):
+    value=0x811C9DC5
+    for byte in name.encode(): value=((value*0x1000193)&0xFFFFFFFF)^byte
+    return value
+for state, enum, branch, name in [(0x21,26,0x13125D0,'cinematic_overlay'),
+                                  (0x22,29,0x131258E,'loading')]:
+    assert struct.unpack_from('<I',data,0x131260C+4*(state+1))[0] == branch
+    assert data[branch] == 0xB8 and struct.unpack_from('<I',data,branch+1)[0] == enum
+    window=struct.unpack_from('<I',data,0x131284C+4*enum)[0]
+    assert data[window:window+2] == bytes.fromhex('8b 05')
+    name_at=window+6+struct.unpack_from('<i',data,window+2)[0]
+    assert struct.unpack_from('<I',data,name_at)[0] == fnv1(name)
+target(0x1317031,0,0x1312540)
+target(0x1317366,0,0x13126E0)
+# The UI explicitly excludes loading state 22h from its cinematic-overlay branch.
+assert data[0x1317094:0x131709A] == bytes.fromhex('41 83 fc 22 74 05')
+assert fnv1('subtitle_overlay') == 0x7737E414
+print('Native UI 21h -> cinematic_overlay; 22h -> loading verified; no draw suppression.')
 for offset, expected in [(0x96, 0x4294D0), (0xD1, 0x423EF0), (0x14C, 0x4312D0), (0x157, 0x435AA0)]:
     target(load, offset, expected)
 for offset, expected in [(0x85, 0x42C650), (0x9F, 0x425310)]:

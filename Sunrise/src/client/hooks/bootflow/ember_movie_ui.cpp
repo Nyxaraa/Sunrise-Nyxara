@@ -7,9 +7,10 @@ namespace {
 hooking::detour::Handle handle{};
 using SelectState=bool(__fastcall*)(void*,int);
 bool __fastcall select_state(void* ui,int requested) noexcept {
-    // E2EAE0 selects 22h when a cinematic is active and C4C070 is false.
-    // The movie component's D8 callback is DD1D10 (false), so this is its
-    // native presentation state. E1CD60 owns window/category transitions.
+    // Use the playback window, not the loading branch of E2EAE0.
+    // 1312540/13126E0 map 21h to cinematic_overlay and 22h to loading.
+    // The direct player has no type-6 controller to advance that branch.
+    // E1CD60 owns window/category transitions; all drawing stays native.
     // Preserve loading/error/menu requests; substitute only normal gameplay.
     const int selected=ember_movies::movie_ui_state(requested,ember_movies::presenting());
     auto original=reinterpret_cast<SelectState>(handle.original);

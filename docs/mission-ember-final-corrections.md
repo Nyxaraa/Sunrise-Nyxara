@@ -1,5 +1,23 @@
 # 1AU: movie loader, surge audio and escape explosions
 
+## Correct the cinematic loading state to the playback overlay
+
+The `41e2728` test exposed a specific presentation regression: `presentation_state requested=43 selected=34 applied=34 category=6` at t=281212, followed by valid movie playback. A read-only UI capture found window `80B46D88`, name hash `D505DEBB` = FNV-1(`loading`), above the video, alongside `80BC6681`, name hash `7737E414` = FNV-1(`subtitle_overlay`). Valid 1920x800 surfaces were captured for both movies. The previous verification established category membership, but misidentified state `0x22` as playback.
+
+The complete native mapping is now verified:
+
+| UI state | `1312540` window enum | `13126E0` name | Meaning |
+| --- | --- | --- | --- |
+| `0x21` | 26 | `17A73819` = `cinematic_overlay` | Cinematic presentation |
+| `0x22` | 29 | `D505DEBB` = `loading` | Loading overlay |
+
+Native window manager `1316FC0` reads the UI state, calls those two mappings, and explicitly excludes `0x22` from its cinematic-overlay branch at `1317094`. Selecting `0x22` was therefore instructing it to draw a loading screen. This was not a missing video frame or stalled resource request.
+
+The bridge now substitutes `0x21` for normal gameplay while it owns ending playback. Existing loading/error/menu selections remain native. There is no drawing-layer mask or subtitle/inventory/settings allowlist; the normal UI window manager handles the transition. The native verifier now checks both complete mappings and their authored name hashes, rather than only category 4.
+
+This same live run confirms the handoff repair: STM completed after Escape at t=443950; CNN reached playing at t=444277 and natural EOF at t=649483. Completion was accepted and orbit selection queued at t=649544; native `orbit_setup` arrived at t=653295. Those receipts establish both native movie lifecycles and orbit setup, not unobscured presentation. The new overlay selection still needs visual validation. Evidence is under `build/first-encounter-audit/41e2728-live-20260906-205738/` and `41e2728-ui-windows/`.
+
+
 ## Visible first movie confirmed; second-movie handoff and native presentation
 
 The user confirmed visible STM playback with `15e507e`. Its decoder reached state 5 at t=281733, with all six selected Y/U/V definitions backed by non-null buffers. Native EOF arrived at t=481606. The bridge then stopped at `surfaces_retiring`: no completion was exposed to Lua, so CNN was never requested. This is the second-movie regression, not missing CNN media.

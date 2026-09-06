@@ -1,11 +1,12 @@
 #pragma once
 #include "ember_movies.h"
 namespace sunrise::client::hooks::ember_movies {
-// E15D50's normal gameplay choices -> E2EAE0's native movie presentation state.
-// Both cinematic states 21h/22h map to native UI category 4 at E2E9F0.
+// E15D50's gameplay choices -> native cinematic_overlay. Category 4 alone
+// does not distinguish playback from loading: 1312540 maps 21h -> window 26
+// (cinematic_overlay), but 22h -> window 29 (loading) at 13126E0.
 constexpr int movie_ui_state(int requested,bool presenting) noexcept {
     return presenting && (requested==0x2B || requested==0x2D || requested==0x2F)
-        ? 0x22 : requested;
+        ? 0x21 : requested;
 }
 constexpr bool can_chain_movies(Owner current,Owner next,Owner firstCompleted,
                                  unsigned previous,unsigned requested,Status state) noexcept {

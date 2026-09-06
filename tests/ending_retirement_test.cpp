@@ -42,8 +42,9 @@ int main() {
     for (int ui=-1;ui<=0x2F;++ui) {
         assert(movies::movie_ui_state(ui,false)==ui);
         const bool gameplay=ui==0x2B || ui==0x2D || ui==0x2F;
-        assert(movies::movie_ui_state(ui,true)==(gameplay ? 0x22 : ui));
+        assert(movies::movie_ui_state(ui,true)==(gameplay ? 0x21 : ui));
     }
+    assert(movies::movie_ui_state(0x22,true)==0x22); // An actual loading request keeps priority.
     movies::OrbitReturn orbit;
     movies::OrbitObservation inApex{true,true,false,false,true,0,38,38,true};
     using OA=movies::OrbitAction;
