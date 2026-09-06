@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <span>
 #include <string_view>
@@ -537,8 +539,35 @@ void dispatch_intent(RuntimeInstance& instance, std::uint64_t now) noexcept {
         } else if (!abandon_reserved_delivery(instance, reservation)) {
             return;
         } else if (scene_lease_still_publishing(status)) {
+            // A lease that never publishes stalls the intent until its lifetime expires, and the
+            // status name alone does not say which side moved. The dispatcher gate that lets a
+            // state selection complete tests exactly `revision == publishedRevision`, so a lease
+            // pending immediately afterwards means one of them changed between the two checks.
+            // report_intent_status dedups on the status, so this records the numbers once.
+            std::array<char, 176> detail{};
+            scenes::Snapshot lease{};
+            const scenes::Status leaseStatus = scenes::query(instance.view, lease);
+            const int written =
+                std::snprintf(detail.data(),
+                              detail.size(),
+                              "%s lease=%s configured=%d revision=%llu published=%llu "
+                              "pending=%d arrival=%d region=%d plan_region=%u state_row=%u",
+                              scenes::status_name(status),
+                              scenes::status_name(leaseStatus),
+                              lease.configured ? 1 : 0,
+                              static_cast<unsigned long long>(lease.revision),
+                              static_cast<unsigned long long>(lease.publishedRevision),
+                              lease.publicationPending ? 1 : 0,
+                              lease.regionArrivalPending ? 1 : 0,
+                              lease.effectiveRegion,
+                              static_cast<unsigned>(lease.plan.effectiveRegion),
+                              static_cast<unsigned>(lease.plan.stateRow));
             report_intent_status(
-                instance, kIntentStatusSceneLeasePending, scenes::status_name(status));
+                instance,
+                kIntentStatusSceneLeasePending,
+                written > 0
+                    ? std::string_view{detail.data(), static_cast<std::size_t>(written)}
+                    : scenes::status_name(status));
         } else {
             refuse_delivery(instance,
                             sequence ? "sequence_refused" : "cinematic_refused",
