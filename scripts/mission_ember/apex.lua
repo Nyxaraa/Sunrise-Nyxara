@@ -18,9 +18,12 @@ return function(m, a, ending)
         "APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER"}
     -- The authored explosion prefab's four player triggers, west to east along the rails:
     -- set A x -448.75..-438.75, B -403.75..-393.75, C -368.75..-358.75, D -323.75..-313.75,
-    -- all spanning y 2967..3002.5 and z 185..212.5. They were never armed, so the sequence
-    -- had nothing to advance it and everything the scene did happened at the deposit.
+    -- all spanning y 2967..3002.5 and z 185..212.5. Their receipts must be forwarded
+    -- to the scene's external event list; arming the volumes alone cannot do that.
     local explosion_triggers = {}
+    -- FNV-1 event names in 80BEB1CC's five authored event-gate nodes.
+    local explosion_events = {0x329EB106, 0x633B82E9, 0x15A78938, 0xF9D55A83}
+    local explosion_scene = "EMBER_APEX_EXPLOSION_SEQUENCE_PREFAB_TRIGGERED_EXPLOSIONS_SCENE"
     for _, set in ipairs({"A", "B", "C", "D"}) do
         explosion_triggers[#explosion_triggers + 1] =
             "EMBER_APEX_EXPLOSION_SEQUENCE_PREFAB_EXPLOSION_SET_" .. set .. "_PLAYER_TRIGGER"
@@ -30,7 +33,6 @@ return function(m, a, ending)
     local function generation(s) return s:variable("ember.apex.generation") or 1 end
     local function dead(s, target) return s:variable("ember.apex.dead." .. target) == true end
     local function vent_timer(s) return "ember.apex.vents." .. generation(s) end
-    local function surge_audio_timer(s) return "ember.apex.surge_audio." .. generation(s) end
     local function lane(c, name, transition, snap)
         a.slot(c, name):transition{transition = c.sdk.device_transitions[transition], snap = snap or false}
     end
@@ -95,6 +97,15 @@ return function(m, a, ending)
         if s:variable("ember.apex.beam") ~= true or s:variable("ember.apex.surge") == on then return end
         c:set_variable("ember.apex.surge", on)
         beam_pose(c, on, false)
+        -- One rising edge owns both the beam drive and its authored alarm. There is no
+        -- independent pre-roll clock that can drift into the shutter cooling window.
+        if on then
+            if phase(s) == 3 then
+                for _, side in ipairs(sides) do
+                    if not dead(s, side) then a.slot(c, "REACTOR_CLAMSHELL_" .. side .. "_ALARM_SEQUENCE"):play_sequence{} end
+                end
+            elseif phase(s) == 4 then a.slot(c, "REACTOR_COFFIN_ALARM_SEQUENCE"):play_sequence{} end
+        end
     end
     -- Native slot 43 substitutes the actual sunburn attachment 80B82489 for the
     -- Foundry thermal resource. One slot owns climb/escape damage: a filter revision
@@ -127,10 +138,20 @@ return function(m, a, ending)
                 "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), mode == "escape")
         end
     end
-    -- Activate the authored explosion scene once, then arm its own four progress triggers
-    -- alongside the escape dialogue volumes so each section detonates as the player reaches it.
-    local function arm_escape(c)
-        a.scene(c, "EMBER_APEX_EXPLOSION_SEQUENCE_PREFAB_TRIGGERED_EXPLOSIONS_SCENE")
+    local function publish_explosions(c, s)
+        local events = {}
+        for i, event in ipairs(explosion_events) do
+            if s:variable("ember.apex.explosion." .. i) then events[#events + 1] = event end
+        end
+        a.slot(c, explosion_scene):set_scene_events{
+            generation = s:variable("ember.apex.explosion_generation"), events = events}
+    end
+    -- Scene activation alone supplies no event keys. Keep one generation alive and append
+    -- the authored explosion_set_a_trigger .. explosion_set_d_trigger keys as we pass them.
+    local function arm_escape(c, s)
+        c:set_variable("ember.apex.explosion_generation", (s:variable("ember.apex.explosion_generation") or 0) + 1)
+        for i in ipairs(explosion_events) do c:clear_variable("ember.apex.explosion." .. i) end
+        publish_explosions(c, s)
         for _, name in ipairs(explosion_triggers) do a.slot(c, name):fire_trigger{} end
         for _, name in ipairs(escape_triggers) do a.slot(c, name):fire_trigger{} end
     end
@@ -165,12 +186,6 @@ return function(m, a, ending)
                 coffin_doors(c, step == "open", snap)
                 if step == "open" then a.cue(c, s, 46) end
             end
-        end
-        c:cancel_timer(surge_audio_timer(s))
-        if step == "closed" then
-            -- The live cue still landed four seconds late with a 4s request delay.
-            -- Queue on the next event, retaining the 14s closed / 6s surge / 10s cooling clock.
-            c:start_timer(surge_audio_timer(s), 1)
         end
         c:start_timer(vent_timer(s), ({closed = 14000, warning = 6000, open = 10000})[step])
     end
@@ -225,9 +240,8 @@ return function(m, a, ending)
             -- opened both devices here, which left it running through the whole escape.
             beam(c, s, false, true)
             c:cancel_timer(vent_timer(s))
-            c:cancel_timer(surge_audio_timer(s))
             a.scene(c, "MOTHER_BRAIN_HOLE_EXPLOSION_SCENE")
-            arm_escape(c)
+            arm_escape(c, s)
             a.cue(c, s, 51); A.guidance(c, s)
         end)
     function A.enter(c, s)
@@ -276,6 +290,12 @@ return function(m, a, ending)
         -- The explanatory cue follows the arrival line, even if its trigger was crossed in the same tick.
         if phase(s) == 5 and a.matches(c, e, "DIALOG_APEX_MOTHER_BRAIN_001_PLAYER_TRIGGER") then a.cue(c, s, 50) end
         if phase(s) == 6 then
+            for i, name in ipairs(explosion_triggers) do
+                if a.matches(c, e, name) and not s:variable("ember.apex.explosion." .. i) then
+                    c:set_variable("ember.apex.explosion." .. i, true)
+                    publish_explosions(c, s)
+                end
+            end
             if a.matches(c, e, "APEX_MOTHER_BRAIN_006_DIALOG_PLAYER_TRIGGER") then a.cue(c, s, 52) end
             if a.matches(c, e, "APEX_MOTHER_BRAIN_007_DIALOG_PLAYER_TRIGGER") then a.cue(c, s, 53) end
             if a.matches(c, e, "APEX_MOTHER_BRAIN_008_DIALOG_PLAYER_TRIGGER") then a.cue(c, s, 54) end
@@ -321,7 +341,6 @@ return function(m, a, ending)
         else
             set(c, 5)
             c:cancel_timer(vent_timer(s)); c:cancel_timer("ember.apex.explain." .. generation(s))
-            c:cancel_timer(surge_audio_timer(s))
             coffin_doors(c, true)
             -- The weapon keeps firing until the cell goes in.
             beam(c, s, true)
@@ -348,22 +367,9 @@ return function(m, a, ending)
         destroyed(c, s, which)
     end
     function A.timer(c, s, e)
-        if e.timer_name == surge_audio_timer(s) then
-            if s:variable("ember.region") == 0 and s:variable("ember.apex.vent_step") == "closed" then
-                if phase(s) == 3 then
-                    for _, side in ipairs(sides) do
-                        if not dead(s, side) then
-                            a.slot(c, "REACTOR_CLAMSHELL_" .. side .. "_ALARM_SEQUENCE"):play_sequence{}
-                        end
-                    end
-                elseif phase(s) == 4 then a.slot(c, "REACTOR_COFFIN_ALARM_SEQUENCE"):play_sequence{} end
-            end
-            return true
-        end
         if e.timer_name == "ember.apex.hazards" then
-            -- The climb pipes burn while the cell is being carried up (phase 5), well before
-            -- the deposit. Escape (phase 6) uses only the native sunburn object.
-            -- Entering escape or resetting detaches the climb burn.
+            -- One attachment owner moves from climb pipes (phase 5) to escape rails (phase 6).
+            -- Entering escape revises the filter and removes attachments from the old filter.
             if s:variable("ember.region") == 0 then
                 local p = phase(s)
                 if p == 5 then hazards(c, s, "climb")
@@ -420,11 +426,10 @@ return function(m, a, ending)
             -- The weapon is already dead at this checkpoint: restoring it must leave the
             -- beam off and re-arm the escape's own progress triggers.
             beam(c, s, false, true)
-            arm_escape(c)
+            arm_escape(c, s)
             a.darkness(c, s, true)
         else
             c:cancel_timer(vent_timer(s)); c:cancel_timer("ember.apex.core." .. generation(s))
-            c:cancel_timer(surge_audio_timer(s))
             c:cancel_timer("ember.apex.explain." .. generation(s)); c:cancel_timer("ember.apex.setup." .. generation(s))
             a.reset(c, reactor); carry.reset(c, s)
             c:set_variable("ember.apex.generation", generation(s) + 2)

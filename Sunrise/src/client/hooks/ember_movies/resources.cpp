@@ -23,7 +23,8 @@ void* call(std::byte* code,unsigned offset) {
     return code+offset+5+read<std::int32_t>(reinterpret_cast<std::uintptr_t>(code+offset+1));
 }
 bool resolve_native() {
-    // B46E10: the native startup loader creates a root, adds {2, TagHash}, submits it.
+    // B46E10 supplies the root lifecycle API. Its startup assets use kind 2;
+    // movies use kind 1, as selected from their package type_info by native 426920.
     constexpr auto loadSig=signature<signature_length("40 53 56 57 48 81 EC 50 01 00 00 48 8B 05 ? ? ? ? 48 33 C4 48 89 84 24 40 01 00 00 48 63 DA 48 8B F1")>(
         "40 53 56 57 48 81 EC 50 01 00 00 48 8B 05 ? ? ? ? 48 33 C4 48 89 84 24 40 01 00 00 48 63 DA 48 8B F1");
     // B44020: inspect the completed root, then release it; no global I/O drain needed.
@@ -78,10 +79,15 @@ bool MovieResource::begin(std::uint32_t asset) noexcept {
     create(mgr,&root_,8,2,0,"mission_ember_movie");
     if (!held()) return false;
     auto* root=blob(root_);if (!root) return false;
-    const std::uint32_t request[]{2,asset};
-    add(root,request);submit(mgr,root_);asset_=asset;
+    // Explicitly retain the small metadata records dereferenced by 41A810 and
+    // the subtitle reader. Native playback streams the 640MB video entry itself.
+    for (const auto tag : movie_metadata(asset)) {
+        const std::uint32_t request[]{movie_resource_kind,tag};
+        add(root,request);
+    }
+    submit(mgr,root_);asset_=asset;
     core::log::writef(core::log::Channel::client,core::log::Level::info,
-        "ev=ember_movie result=resource_requested asset=%08X root=%08X",asset_,root_);
+        "ev=ember_movie result=resource_requested asset=%08X root=%08X kind=1 metadata=4",asset_,root_);
     return true;
 }
 int MovieResource::state() const noexcept {
@@ -97,6 +103,9 @@ bool MovieResource::ready() const noexcept {
         const auto header=read<std::uint32_t>(reinterpret_cast<std::uintptr_t>(wrapper)+8);
         if (header!=asset_-1) return false;
         auto* info=blob(header,0x80808499U);
+        const auto metadata=movie_metadata(asset_);
+        if (read<std::uint32_t>(reinterpret_cast<std::uintptr_t>(wrapper)+12)!=metadata[2]
+            || !blob(metadata[2],0x80809A88U) || !blob(metadata[3],0x80806B8FU)) return false;
         return movie_resources_ready(2,asset_,true,header,info!=nullptr,
             info ? read<std::uint32_t>(reinterpret_cast<std::uintptr_t>(info)+0x18) : 0xFFFFFFFFU);
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }

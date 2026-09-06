@@ -8,6 +8,7 @@
 #include "../../../middleware/bap/activity_message/combatant_retire_auth.h"
 #include "../../../middleware/bap/activity_message/ghost_link_auth.h"
 #include "../../../middleware/bap/activity_message/interactable_object_auth.h"
+#include "../../../middleware/bap/activity_message/scene_events_auth.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -898,6 +899,34 @@ constexpr std::size_t kOccupancyAuthByteCount = 11;
     return queue_intent(state, frame, intent);
 }
 
+/** Publishes one scene generation and its cumulative authored event keys. */
+[[nodiscard]] int slot_set_scene_events(lua_State* state) {
+    namespace scene=middleware::bap::activity_message::scene_events;
+    const auto* handle=static_cast<const SlotHandle*>(luaL_checkudata(state,1,kSlotMetatable));
+    SlotDefinition slot{};
+    if (!current_slot(state,*handle,slot) || slot.slotType!=43 || slot.componentClass!=0x80806382U
+        || slot.authSchema!=scene::kSchema || (slot.flags&format::kSlotSchemaJoinExact)==0)
+        return luaL_error(state,"scene events require an exact type-43 scene");
+    static constexpr std::array<std::string_view,2> declared{"generation","events"};
+    refuse_unknown_arguments(state,declared);
+    lua_getfield(state,2,"generation"); const auto generation=luaL_checkinteger(state,-1);lua_pop(state,1);
+    if (generation<=0 || generation>0x7FFFFFFF) return luaL_error(state,"scene generation must be positive int32");
+    lua_getfield(state,2,"events");luaL_checktype(state,-1,LUA_TTABLE);
+    const auto count=lua_rawlen(state,-1);
+    if (count>scene::kMaximumEvents) return luaL_error(state,"scene event list exceeds 32 keys");
+    std::array<std::uint32_t,scene::kMaximumEvents> events{};
+    for (std::size_t i=0;i<count;++i) {
+        lua_rawgeti(state,-1,static_cast<lua_Integer>(i+1));const auto event=luaL_checkinteger(state,-1);lua_pop(state,1);
+        if (event<=0 || event>=0xFFFFFFFFLL) return luaL_error(state,"invalid scene event key");
+        events[i]=static_cast<std::uint32_t>(event);
+    }
+    lua_pop(state,1);
+    std::array<std::byte,scene::kMaximumBytes> body{};std::size_t bytes{},bits{};
+    if (!scene::encode(static_cast<std::int32_t>(generation),std::span(events).first(count),body,bytes,bits))
+        return luaL_error(state,"scene event keys must be unique");
+    return queue_slot_auth(state,slot,scene::kSchema,bits,std::span(body).first(bytes));
+}
+
 /** Lua `play_sequence` on a slot. Errors unless the slot is an exact type-5 sequence. */
 [[nodiscard]] int slot_play_sequence(lua_State* state) {
     const auto* const handle =
@@ -1385,6 +1414,8 @@ void parse_atom(lua_State* state, int table, scriptable_auth::Type2KeyedLane& la
         lua_pushcfunction(state, &slot_fire_trigger);
     } else if (key == "play_sequence") {
         lua_pushcfunction(state, &slot_play_sequence);
+    } else if (key == "set_scene_events") {
+        lua_pushcfunction(state, &slot_set_scene_events);
     } else if (key == "set_cinematic_active") {
         lua_pushcfunction(state, &slot_set_cinematic_active);
     } else if (key == "reset_objectives") {

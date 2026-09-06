@@ -1,69 +1,82 @@
-# 1AU: final playback, burn and surge correction
+# 1AU: movie loader, surge audio and escape explosions
 
-## Confirmed failure and plan
+## Current status
 
-The `4f5c706` playtest reached escape, queued STM at t=284067 and submitted it at t=284084. The decoder stayed at state 0. The deeper worker stack contains an exception record: `C0000005`, instruction `game+349D2C`, reading address `0x8`. Its callers are `41A810 -> 41CB60 -> 41D590` (movie resource lookup, prepare, manager service). This is an access violation during preparation, not an ordinary slow load and not the earlier world-retirement failure.
+The latest changes address the captured `bc3e912` movie-loader crash, couple the alarm request to the beam surge, and forward escape triggers into the authored explosion scene. Release compilation, 24 portable tests, all five Lua mission suites, native ABI/package checks, and scene schema/content checks pass. **Rendered ending playback, audible alignment and visible explosions still require a fresh game test.** Offline verification does not establish those outcomes.
 
-Read-only residency capture confirms the cause: movie tags `80BCA001/000/003/002` still contain `FEFE` free-list entries. The package is registered, but these entries were never requested. A package TagHash is already a valid runtime handle; the missing operation is **loading**, not converting the numeric hash. The package loading and handle guides under Sunrise-docs/refs document that distinction.
+## The freeze: two distinct failures
 
-Implement and verify the following:
+`4f5c706` called the movie player before requesting its assets. The decoder worker faulted at `game+349D2C`, reading address 8; movie wrappers and headers contained `FEFE` free-list entries. These TagHashes are valid runtime handles, but their contents were not resident.
 
-1. Use the native asynchronous resource-root producer to load each movie and its authored dependency graph. Require the completed root and matching resident wrapper/header before calling the player. Keep the resource request through playback, then release it without a global I/O drain.
-2. Keep STM -> CNN -> mission complete driven by real playback and completion observations. Retain Apex while the videos play, avoiding the independently broken world teardown. Failures must leave the mission incomplete and report a specific cause.
-3. Use one native sunburn effect attachment for the climb and escape. Change its filter at deposit; disable the separate damage-volume object. Preserve native damage timing, duplicate protection and detachment instead of applying an additional damage multiplier.
-4. Advance only the surge sequence request by four seconds. Keep the visual/mechanical clock at 14 seconds closed, 6 seconds surge, 10 seconds cooling.
-5. Build, run native ABI checks and mission regression suites, then install with backups and hashes while the game is closed. The user launches the game.
+`bc3e912` added asynchronous resource loading, but copied request kind **2** from startup loader `B46E10`. That kind is specific to shared/type-16 resources. The next captured worker exception was **C0000005 at `game+3374C6`, reading address 8**. Its request record at `8F267A0` contained movie `80BCA001`, unresolved shared-resource handle `FFFFFFFF`, and kind 2. The resource root was pending; acquire/play had not yet been called. This is the direct cause of this test's freeze, not cinematic authority waiting on a missing global seed.
 
-## Executed implementation
+Native `426920` derives the correct request kind from each package entry: kind 2 only when `(type_info & F000) == 2000`, otherwise kind 1. `4312D0` routes those kinds to different root lists. The installed movie records are ordinary tags:
 
-### Native movie resource lifetime
+| Asset | Class | type_info | Required kind |
+| --- | --- | --- | --- |
+| `80BCA001`, `80BCA003` movie wrappers | `80808495` | `100A` | 1 |
+| `80BCA000`, `80BCA002` movie headers | `80808499` | `103B` | 1 |
+| `80B9EB33`, `80B9EB34` subtitle metadata | `80809A88` | `1019` | 1 |
+| `80BCA032` shared movie metadata | `80806B8F` | `103B` | 1 |
 
-The bridge follows the existing startup loader `B46E10`:
+The correction creates one native asynchronous root and adds the selected wrapper, its header, its subtitle metadata and `80BCA032`, each using `{1, tag}`. It retains that root through playback. The large media entry is streamed by the native player, not loaded wholesale into the root.
 
-- `4294D0()` gets the resource manager.
-- `423EF0(manager, &root, 8, 2, 0, "mission_ember_movie")` creates an asynchronous root.
-- `4312D0(rootObject, {2, movieTag})` adds the authored resource.
-- `435AA0(manager, rootHandle)` submits the request.
-- `42C650(rootObject)` observes native root state: 1 pending, 2 completed, 3 failed.
-- The wrapper must be class `80808495`; its +8 child must be the exact corresponding class `80808499` movie header; the media reference must be present.
-- Only then run the existing acquire/play pair `41A3C0 / 41CD20`.
-- After the native movie player releases its reference, `425310` disposes the completed request. Pending requests are polled, never synchronously drained on the frame. Failed requests do not award completion.
+Playback requires native root state 2, matching resident wrapper/header classes, the expected subtitle reference and resident metadata, and a present media reference. Only then call the original acquire/play pair. Both native completion and Escape stopping must finish before releasing the root. Pending roots are polled; the frame never invokes a global I/O drain. Failed or timed-out preparation never completes the mission.
 
-All callable addresses are resolved through unique native signatures and relative call targets. No hardcoded executable address is called. The saved executable verifies the six resource calls and pool accessor. The existing decoder rules still require state 5 for the exact asset, then native completion; queued and prepared requests cannot complete a movie.
+The established sequence remains **escape trigger -> STM -> CNN -> mission complete**, using exact decoder asset/state and native busy completion. Apex stays loaded during the movies; this avoids the separately observed world-retirement failure. See [the native movie bridge](mission-ember-prerendered-ending.md) for its lifecycle and frame observer.
 
-### Single sunburn attachment
+## Beam audio follows the surge request
 
-The placed native sunburn volume's condition component (`80B82485`, `c_condition_vol_component_*`) references effect entity `80B82489`. That entity carries its own burn logic and visual components (`80F7AB1E` and `80BEB1C9`). The scripted deck heat shimmer (`80B3A2A8`) is only the visual layer; attaching it alone would not supply burn damage.
+`beam_surge(c, s, true)` now changes the beam drive and queues the appropriate surviving clamshell/coffin alarm sequences in the same callback. Its rising-edge guard prevents repeated alarms from redundant updates. Cooling changes the drive back without replaying an alarm.
 
-A read-only live capture verifies Ember slot 43's source `(80B3C0C6, 80809540, +AC8)` and its writable attachment template: `self+210+relative`, with resource `80C1D9E0` at +0. Native `9F2760 -> 56DE00` consumes that template to create an actor's tracked child attachment.
+The separate `surge_audio` timer and its speculative preroll offsets are removed. The visual/mechanical cycle stays 14 seconds closed, 6 seconds surge, 10 seconds cooling; shutters still open after the surge. This establishes shared script timing, not a measured sample-accurate native sound onset. Actual audible alignment needs confirmation in game.
 
-The narrowly scoped hook substitutes resident `80B82489` only during that one source's native attachment call, then restores the template even on exception. It does not modify package data or Foundry's shared resource. Native duplicate checks, attachment registration and removal remain in control. A missing sunburn resource refuses attachment and logs it rather than dereferencing unloaded data.
+## Escape explosions need retained scene inputs
 
-Lua uses that same slot for the five climb-pipe volumes and, after deposit, the escape rail volume `60/414`. It moves the filter with a new revision, never enables a second attachment owner, and keeps `SUNBURN_DAMAGE_OBJECT` disabled. Completion and checkpoint handling clear/reconcile the attachment through the existing hazard lifecycle. Damage rate and visual behavior still need confirmation in the game; the source/ownership fix is established, not a measured final health-loss rate.
+The failed live run already reported all four authored player triggers: registry `A3B76C64`, slots **105..108**, volumes **242..245**, at t=297197, 302773, 306890 and 312164. The missing step was forwarding them. Generic `scene:activate{}` only publishes a generation with an empty external event list; it does not automatically connect those trigger receipts to the scene.
 
-### Audio
+The native scene is `A3B76C64/43/20`, object `80B3C21C`, config `80B3C0BA+368`, resource entity `80B8248D`, graph `80BEB1CC`. Its external event-gate nodes, class `8080637D`, contain these exact FNV-1 keys:
 
-The sequence request changes from 4000 ms into the closed window to the next timer event (1 ms). This is approximately four seconds earlier. No beam pose, surge, shutter, or cooling duration changes.
+| Player trigger | Authored event name | Event key | Graph key offset |
+| --- | --- | --- | --- |
+| A / slot 105 | `explosion_set_a_trigger` | `329EB106` | `5BC0` |
+| B / slot 106 | `explosion_set_b_trigger` | `633B82E9` | `5C20` |
+| C / slot 107 | `explosion_set_c_trigger` | `15A78938` | `5C80` |
+| D / slot 108 | `explosion_set_d_trigger` | `F9D55A83` | `5CE0` |
 
-## Failure cases checked
+New Lua slot method:
 
-| Case | Required behavior |
-| --- | --- |
-| Registered but unloaded movie | Request and wait; never call native playback |
-| Partially resident or wrong movie header | Keep waiting, then fail on the preparation bound |
-| Native resource load fails | Report failure; do not complete mission |
-| Preparation timeout with pending I/O | Leave frame responsive; defer disposal until request finishes |
-| Decoder never reaches playback | Do not count it as a completed movie |
-| Wrong decoder/asset, world change | Fail rather than complete another movie's request |
-| Repeated escape, completion, or hazard callbacks | No duplicate movie completion or burn attachment |
-| Deposit | Stop beam; move the existing burn to escape bounds; no volume-object damage in parallel |
-| Movie EOF or player skip | Confirm native stop before starting the next movie / completing mission |
-| Another mission or another effect source | Sunburn substitution does not match |
+```lua
+scene:set_scene_events{generation = 1, events = {0x329EB106, 0x633B82E9}}
+```
 
-## Validation and remaining live test
+It accepts only an exact type-43 / component `80806382` / schema `8080626B` SDK binding. The packet contains signed generation, stop=false, zero dependencies, scalar=0, event count and up to 32 unique nonzero event keys: **74 + 32*n bits**. The runtime validates this restricted schema before transport, including lengths, duplicates, forbidden fields and padding. This is a full scene Auth replacement, not a squad/combatant field patch.
 
-Release build, 23 portable tests, all five Lua mission suites, and `tests/verify_ember_movie_native.py` pass. The full route stays within 239 variables, 61 intents/event and four timers. The native test validates signatures, call offsets, table accessor and attachment asset field against the mapped image. The portable cases explicitly reject unloaded/partial/wrong headers and pending disposal, and verify burn source isolation. Lua tests cover single-source damage ownership and the revised audio request timing.
+Deposit starts one generation with an empty list. Each phase-6 route trigger adds its corresponding key to the retained cumulative list without changing generation. Duplicate receipts and backtracking add nothing. Escape checkpoint reset increments generation and clears history. This matches the retained-event mechanism documented for native `B41330` in `MissionDocs/IKORA-ANIMATION-AND-ENDING.md`: unchanged generations and already committed keys do not restart or refire the graph. The native scene owns the explosion timing, placements, animation and effects. The separate core-hole explosion on deposit remains independent.
 
-The fix has **not yet been confirmed by a fresh game run**. Acceptance requires: scorch after deposit with normal damage and clean removal; surge audio aligned with the existing visual; STM begins at escape with moving frames/audio; CNN follows; mission completion occurs only after CNN; both movies can be skipped; no freeze. Expected diagnostics are `resource_requested -> resource_ready -> submitted -> playing -> complete -> resource_released` (release may log immediately before complete), repeated for movie 2. Burn attaches log `ev=ember_sunburn result=attached ... asset=80B82489`.
+## Existing scorch ownership
 
-Evidence is saved under `build/first-encounter-audit/`: `direct-movie-stall-4f5c706-20260906-1803.log`, `movie-stacks-20260906-180532/00000180.bin`, `direct-movie-20260906-180404/manager.bin`, and `reactor-runtime-20260906-181944/`. These are diagnostics, not a promise that passing offline checks proves rendered playback.
+This patch does not change damage. The prior single-owner path remains: Ember's exact slot-43 attachment source temporarily substitutes resident authored sunburn entity `80B82489`; the same source moves its filter from climb pipes to escape rails on deposit. `SUNBURN_DAMAGE_OBJECT` stays disabled to avoid a second damage owner. Native attachment registration, duplicate checks and removal remain in control. The prior test did not establish final damage-rate correctness.
+
+## Reproduction and validation
+
+Evidence lives under `build/first-encounter-audit/`: `bc3e912-resource-stall.log`, `movie-stacks-20260906-184021/`, and the resource/request captures made while that process was frozen. The prior decoder-residency failure is in `direct-movie-stall-4f5c706-20260906-1803.log` and `movie-stacks-20260906-180532/`.
+
+Checks run:
+
+```sh
+cmake --build build -j4
+cmake --build build/portable-tests -j4
+ctest --test-dir build/portable-tests --output-on-failure
+python3 tests/verify_ember_movie_native.py build/first-encounter-audit/game_image.bin /home/millie/Games/Sunrise/packages
+python3 tests/verify_ember_explosion_content.py build/sdk-corrected/activity_sdk.pack build/first-encounter-audit/tags/80BEB1CC.bin
+lua tests/mission_ember_controller_test.lua
+lua tests/mission_ember_encounter_test.lua
+lua tests/mission_ember_wipe_test.lua
+lua tests/mission_ember_combat_ai_test.lua
+lua tests/mission_ember_routes_test.lua build/sdk-mission-complete/sdk/lua/missions/mission_ember_80b3c09e.lua
+```
+
+The full route peaks at 244 durable variables, 61 intents per event, three timers, and 13,000 Lua instructions including the test mock. Packet tests check an independently assembled four-event fixture, empty/reset and maximum lists, invalid generations, malformed fields, duplicates, truncation and padding. Native verification now checks the request-kind branch and installed metadata classes/types, in addition to function addresses and call offsets. Authored-content verification checks the actual SDK wire schema and four event hashes in the extracted graph.
+
+Game acceptance: beam alarm accompanies surge without changing shutter timing; explosions A-D play as the player passes their volumes; a wipe allows a new traversal; STM has moving frames and audio, then CNN plays, and only its completion completes the mission. Test normal EOF and both Escape skips. Expected movie diagnostics: `resource_requested ... kind=1 metadata=4`, `resource_ready`, `submitted`, `playing`, `complete`, and resource release, repeated for movie 2. A request or a ready resource alone is not success.

@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
 project(SunrisePortableTests LANGUAGES CXX)
 enable_testing()
+add_executable(scene_events_test scene_events_test.cpp
+    ../Sunrise/src/middleware/encoding/bit_reader.cpp
+    ../Sunrise/src/middleware/encoding/bit_writer.cpp)
+target_compile_features(scene_events_test PRIVATE cxx_std_20)
+if(MSVC)
+    target_compile_options(scene_events_test PRIVATE /W4 /WX /UNDEBUG)
+else()
+    target_compile_options(scene_events_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+endif()
+add_test(NAME scene_events COMMAND scene_events_test)
 add_executable(ending_retirement_test ending_retirement_test.cpp
     ../Sunrise/src/middleware/bap/activity_message/activity_sensor_auth_encoder.cpp
     ../Sunrise/src/middleware/bap/activity_message/activity_sensor_auth_blocks.cpp

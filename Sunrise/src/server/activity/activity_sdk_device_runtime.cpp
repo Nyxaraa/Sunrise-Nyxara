@@ -7,6 +7,7 @@
 #include "../../middleware/bap/activity_message/combatant_delivery_auth.h"
 #include "../../middleware/bap/activity_message/combatant_retire_auth.h"
 #include "../../middleware/bap/activity_message/ghost_link_auth.h"
+#include "../../middleware/bap/activity_message/scene_events_auth.h"
 #include "activity_sdk_device_runtime.h"
 #include "../../middleware/bap/activity_message/interactable_object_auth.h"
 
@@ -469,6 +470,9 @@ prepare_slot(const sdk::BoundView& view, std::uint32_t slotRow, PreparedDevice& 
     namespace music = middleware::bap::activity_message::music_section;
     const bool musicSection = slotType == 11 && slot.componentClass == music::kClass
         && authSchema == music::kSchema && music::validate(body, bitCount);
+    namespace scene = middleware::bap::activity_message::scene_events;
+    const bool sceneEvents = slotType == 43 && slot.componentClass == 0x80806382U
+        && authSchema == scene::kSchema && scene::validate(body, bitCount);
     const bool damageMonitor = slotType == 20 && slot.componentClass == 0x80809560U
         && authSchema == 0x80809563U && bitCount == 87 && body.size() == 11;
     const bool occupancy = slotType == format::kOccupancySlotType
@@ -515,7 +519,7 @@ prepare_slot(const sdk::BoundView& view, std::uint32_t slotRow, PreparedDevice& 
     const bool squadObjective = slotType == 1 && authSchema == objective::kSchema
         && slot.componentClass == format::kSquadComponentClass && objective::validate(body, bitCount);
     if (!musicSection && !objectFilter && !missionEffect && !damageMonitor && !darknessZone && !squadObjective && !occupancy && !directive && !engagement && !publicEvent && !performance && !combatant
-        && !ghostLink && !interactableObject) {
+        && !ghostLink && !interactableObject && !sceneEvents) {
         return Status::invalidBody;
     }
     return Status::ready;

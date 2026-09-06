@@ -15,7 +15,7 @@ The placement's entity reference is at +0x30. Both entities contain class 808065
 
 ## Required residency correction
 
-The installed `4f5c706` bridge froze on its first live STM request: the resource lookup read address 0x8 at `349D2C`. Both movie wrappers and headers were registered but unloaded. The bridge now requests each movie through the native asynchronous loader and validates completed residency before playback. See [the correction plan, evidence and validation](mission-ember-final-corrections.md). The original direct-play call alone was insufficient.
+The installed `4f5c706` bridge froze on its first live STM request: the resource lookup read address 0x8 at `349D2C`. Both movie wrappers and headers were registered but unloaded. The subsequent `bc3e912` loader also failed: its kind-2 request sent the ordinary movie tag down the shared-resource path, leaving a handle at `FFFFFFFF` before a worker dereferenced it at `3374C6`. The current bridge uses the package-verified kind 1 and pins the small movie, header, subtitle and shared metadata tags before playback. See [the correction evidence and validation](mission-ember-final-corrections.md). Rendered playback remains unconfirmed until a fresh game test.
 
 ## Native playback bridge
 

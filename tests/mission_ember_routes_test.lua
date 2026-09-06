@@ -33,7 +33,7 @@ end
 function c:prerendered_movie_status(index) return movieStatus[index] or 'absent' end
 c.lifetime = {set = function(_, args) record("lifetime",args.state) end}
 local types = {set_engagement_state=70,set_music_section=11,set_mission_effect=26,set_object_filter=34,transition=23,set_interactable_object=4,set_object_active=4,watch_damage=20,
-    fire_trigger=31,set_directive=68,set_darkness_zone=35,play_dialogue_cue=53,play_sequence=5,
+    set_scene_events=43,fire_trigger=31,set_directive=68,set_darkness_zone=35,play_dialogue_cue=53,play_sequence=5,
     assign_combat_objective=1,reset_objectives=3,set_cinematic_active=6}
 function c:slot(id)
     assert(id, "nil SDK slot")
@@ -271,14 +271,22 @@ for _,side in ipairs({'east','west'})do for _,wave in ipairs({'entry','reinforce
 assert(vars['ember.music.section']==22)
 timer('ember.apex.explain.');assert(vars['ember.r.cue.41'] and vars['ember.music.section']==23)
 assert(timers['ember.apex.vents.1']==14000)
-assert(timers['ember.apex.surge_audio.1']==1,'request the sound four seconds earlier without moving the visual clock')
+assert(timers['ember.apex.surge_audio.1']==nil,'audio must have no independent pre-roll timer')
 local beforeAudio=#calls
-timer('ember.apex.surge_audio.')
-assert(vars['ember.apex.vent_step']=='closed' and not vars['ember.apex.surge'],'audio pre-roll changed visual timing')
+timer('ember.apex.vents.') -- Same callback starts the visible surge and its sound.
 local alarms=0
-for i=beforeAudio+1,#calls do if calls[i][1]=='play_sequence' then alarms=alarms+1 end end
-assert(alarms==2,'both surviving clamshells must pre-roll their authored audio')
-timer('ember.apex.vents.') -- Surge precedes any target exposure.
+local beamMoved=false
+for i=beforeAudio+1,#calls do
+    local row=calls[i]
+    if row[1]=='transition' and row[2]==slotDefs[m.Slot.SPECOPS_APEX_RING_LASER_DEVICE].name then
+        beamMoved=row[3].transition=='close'
+    end
+    if row[1]=='play_sequence' then
+        assert(beamMoved,'alarm was requested before the surge state changed')
+        alarms=alarms+1
+    end
+end
+assert(alarms==2,'both surviving clamshell alarms must start on the surge rising edge')
 assert(vars['ember.apex.vent_step']=='warning' and timers['ember.apex.vents.1']==6000)
 -- The weapon fires continuously through the fight; the exposure cycle must not blink it.
 -- The surge is the authored device drive of a beam that stays present and powered.
@@ -446,9 +454,27 @@ for _,set in ipairs({'A','B','C','D'})do
     end
     assert(armed,'explosion set '..set..' was never armed')
 end
+local explosionKeys={0x329EB106,0x633B82E9,0x15A78938,0xF9D55A83}
+local function explosionState()
+    for i=#calls,1,-1 do if calls[i][1]=='set_scene_events' then return calls[i][3] end end
+end
+assert(#explosionState().events==0,'deposit must not detonate all four escape sets')
+local explosionGeneration=explosionState().generation
+for i,set in ipairs({'A','B','C','D'}) do
+    local triggerName='EMBER_APEX_EXPLOSION_SEQUENCE_PREFAB_EXPLOSION_SET_'..set..'_PLAYER_TRIGGER'
+    trigger(triggerName)
+    local state=explosionState()
+    assert(state.generation==explosionGeneration,'route events must not restart the whole scene')
+    assert(#state.events==i and state.events[i]==explosionKeys[i],'wrong authored explosion event')
+    local before=#calls
+    trigger(triggerName)
+    assert(#calls==before,'backtracking detonated an explosion twice')
+end
 reset_check('escape',function()
     assert(vars['ember.apex.phase']==6 and vars['ember.apex.dead.COFFIN'])
     assert(vars['ember.apex.beam']==false,'escape restart must leave the beam off')
+    assert(explosionState().generation==explosionGeneration+1 and #explosionState().events==0,
+        'wipe must restart the explosion scene without replaying old events')
 end)
 trigger('APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER')
 local sunburnAfterEscape

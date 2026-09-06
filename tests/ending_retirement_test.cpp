@@ -22,6 +22,11 @@ static void expect(Reader& reader, unsigned width, std::uint64_t expected) {
 }
 int main() {
     namespace movies=sunrise::client::hooks::ember_movies;
+    // Native kind 2 resolves shared-tag records; these ordinary movie tags require 1.
+    static_assert(movies::movie_resource_kind==1);
+    assert((movies::movie_metadata(0x80BCA001)==std::array<std::uint32_t,4>{0x80BCA001,0x80BCA000,0x80B9EB33,0x80BCA032}));
+    assert((movies::movie_metadata(0x80BCA003)==std::array<std::uint32_t,4>{0x80BCA003,0x80BCA002,0x80B9EB34,0x80BCA032}));
+    assert((movies::movie_metadata(0x80BCA034)==std::array<std::uint32_t,4>{})); // never pin raw video
     // Captured crash: registered movie tags contain free-list entries, not resident headers.
     assert(!movies::movie_resources_ready(1,0x80BCA001,false,0,false,0xFFFFFFFF));
     assert(!movies::movie_resources_ready(2,0x80BCA001,false,0x80BCA000,true,0x80BCA034));
