@@ -96,8 +96,9 @@ struct PendingMutation final {
  * @return True when the session exists and the arm changed.
  */
 [[nodiscard]] bool arm_host_teleport(std::uint64_t sessionId,
-                                     std::int32_t sliceSetIndex,
-                                     std::uint32_t sliceSetHash) noexcept;
+                                    std::int32_t sliceSetIndex,
+                                    std::uint32_t sliceSetHash,
+                                    bool qualified = false) noexcept;
 
 /** Starts one idempotent native hard wipe on an exact session generation. */
 [[nodiscard]] bool hard_wipe_needs_publish(std::uint64_t sessionId) noexcept;

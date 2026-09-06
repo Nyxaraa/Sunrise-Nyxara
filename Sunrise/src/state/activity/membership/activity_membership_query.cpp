@@ -1,4 +1,5 @@
 #include "activity_membership_query.h"
+#include "teleport_rules.h"
 
 #include <Windows.h>
 
@@ -28,7 +29,8 @@ bool acknowledged(std::uint64_t sessionId) noexcept {
 /** Arms or clears the host-named teleport region for one joined session. */
 bool arm_host_teleport(std::uint64_t sessionId,
                        std::int32_t sliceSetIndex,
-                       std::uint32_t sliceSetHash) noexcept {
+                       std::uint32_t sliceSetHash,
+                       bool qualified) noexcept {
     if (sessionId == kAbsentSessionId) {
         return false;
     }
@@ -41,6 +43,7 @@ bool arm_host_teleport(std::uint64_t sessionId,
         if (sliceSetIndex == kAbsentSliceSetIndex) {
             changed = membership.hasHostTeleport;
             membership.hasHostTeleport = false;
+            membership.hostTeleportQualified = false;
             membership.hostTeleport = {};
         } else if (!membership.hasHostTeleport
                    || membership.hostTeleport.sliceSetIndex != sliceSetIndex
@@ -48,12 +51,14 @@ bool arm_host_teleport(std::uint64_t sessionId,
             // Step 0 latches the token, it does not compare it, so the increment is bookkeeping
             // for the client's own arm. The state is what gates the step, and zero is idle.
             const std::uint8_t token =
-                static_cast<std::uint8_t>(membership.hostTeleport.token + 1U);
+                qualified ? next_teleport_token(membership.teleport.token)
+                          : static_cast<std::uint8_t>(membership.hostTeleport.token + 1U);
             membership.hostTeleport.sliceSetIndex = sliceSetIndex;
             membership.hostTeleport.sliceSetHash = sliceSetHash;
             membership.hostTeleport.token = token;
             membership.hostTeleport.state = kHostTeleportArmedState;
             membership.hasHostTeleport = true;
+            membership.hostTeleportQualified = qualified;
             // The client refuses a region record whose per-member token does not equal its own
             // transition count. The initial slice-set load is count 1 and each host teleport adds
             // one, so the published token must advance or the target region never precaches.
@@ -63,8 +68,10 @@ bool arm_host_teleport(std::uint64_t sessionId,
             if (advanced == 0) {
                 advanced = kInitialTransitionToken;
             }
-            membership.transitionToken = advanced;
-            membership.hasTransitionToken = true;
+            if (!qualified) {
+                membership.transitionToken = advanced;
+                membership.hasTransitionToken = true;
+            }
             changed = true;
         }
     }

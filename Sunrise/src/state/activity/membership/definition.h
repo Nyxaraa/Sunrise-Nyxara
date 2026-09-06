@@ -160,6 +160,8 @@ struct MembershipState final {
      */
     TeleportState hostTeleport{};
     bool hasHostTeleport{};
+    /** Bookend travel qualifies native arrival and echoes the separate world token. */
+    bool hostTeleportQualified{};
     HardWipeState hardWipe{};
     /** Region of the slice set the client holds; -1 while it holds none. */
     RegionState currentRegion{};

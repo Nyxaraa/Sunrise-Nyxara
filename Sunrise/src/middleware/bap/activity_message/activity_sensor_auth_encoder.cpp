@@ -71,15 +71,14 @@ constexpr std::uint32_t kMaximumRegion = 0x7FFFFFFF;
     }
     std::size_t topLevelRecords = 0;
     for (std::size_t index = 0; index < roster.topLevelGroupCount; ++index) {
-        if (!add_client_records(roster.groups[index].slotTypes.size(), topLevelRecords)) {
+        if (roster.groups[index].retired
+            || !add_client_records(roster.groups[index].slotTypes.size(), topLevelRecords)) {
             return false;
         }
     }
     std::array<bool, kPublishedGroupCapacity> referenced{};
     for (const BubbleSubBlock& block : roster.bubbleSubBlocks) {
-        if (block.keys.size() > kClientGroupCapacity - roster.topLevelGroupCount) {
-            return false;
-        }
+        std::size_t activeGroups = roster.topLevelGroupCount;
         std::size_t activeRecords = topLevelRecords;
         for (const std::uint32_t key : block.keys) {
             std::size_t matched = roster.groupCount;
@@ -94,10 +93,11 @@ constexpr std::uint32_t kMaximumRegion = 0x7FFFFFFF;
                 }
                 matched = index;
             }
-            if (matched == roster.groupCount
-                || !add_client_records(roster.groups[matched].slotTypes.size(), activeRecords)) {
+            if (matched == roster.groupCount) return false;
+            if (!roster.groups[matched].retired
+                && (++activeGroups > kClientGroupCapacity
+                    || !add_client_records(roster.groups[matched].slotTypes.size(), activeRecords)))
                 return false;
-            }
             referenced[matched] = true;
         }
     }
@@ -214,6 +214,7 @@ constexpr std::uint32_t kMaximumRegion = 0x7FFFFFFF;
     bool keyPlaced = false;
     for (std::size_t group = 0; encoded && group < snapshot.roster.groupCount; ++group) {
         const Group& row = snapshot.roster.groups[group];
+        if (row.retired) continue;
         // The filler word after the key is read and discarded.
         encoded = writer.write(1, kPresenceWidth) && writer.write(row.key, kKeyWidth)
                   && writer.write(0, kKeyWidth);

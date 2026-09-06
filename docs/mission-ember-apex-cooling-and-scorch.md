@@ -5,7 +5,7 @@
 - Cooling doors open after the surge stops. Visual/mechanical intervals remain 14 seconds closed, 6 seconds surging, 10 seconds exposed.
 - The user confirmed those visuals/mechanics align, but hears the surge at cooling-door opening. The next live test requested another four seconds of lead. Audio sequences now pre-roll at closed-window second 4, ten seconds before the visual surge. This is playtest-based compensation, not a recovered native delay parameter. Pending audio is phase/region/generation guarded and cancelled on reset, core destruction and deposit.
 - Initial beam: snapping to the resting endpoint still showed the incomplete beam in the first user screenshot. Native device position/power both reached 1. The new candidate seeks the driven endpoint once on laser creation, then animates to the resting endpoint so authored animation events can run. Duplicate presence and late presence after deposit cannot restart it. The target is the second user screenshot's thin, continuous beam. Needs visual confirmation.
-- Escape damage: deposit created SUNBURN_DAMAGE_OBJECT and also attached an extra rail-wide thermal effect. Reaching the end detached only that extra effect, matching the user's report that damage then became normal. The new script retires the climb attachment on deposit and leaves the native sunburn object as the escape damage source. No global damage multiplier changes.
+- Escape damage: the live test showed no scorch after the extra thermal attachment was removed. Deposit now replaces the pipe attachment with one rail-scoped instance of the proven burn (80C1D9E0), and explicitly disables SUNBURN_DAMAGE_OBJECT. Escape completion detaches it. This restores the working attachment without running both sources; visual/damage confirmation remains a live-test requirement.
 - Escape ship: wait for native object presence, unlock, power on, seek closed, animate open. Duplicate presence does not restart it. Flight remains subject to visual testing.
 
 ## Escape trigger evidence
@@ -34,7 +34,16 @@ Current candidate:
 6. Skip sends stop authority; it does not complete the movie. Only the matching native terminated incident after start advances to bookend 2, which goes through its own travel/arrival/offer.
 7. Complete native lifetime only after the second movie finishes. Ignore stale, unstarted, wrong-controller and duplicate receipts. Gameplay callbacks stop publishing encounter actions once the ending owns the route.
 
-Remaining differences from the full Omega contract: no explicit native old-roster retirement receipt, resource/owner readiness bridge, or controller-revision-qualified completion bridge has been implemented yet. Current guards use typed native incidents and exact travel arrival. Do not claim the complete guide has been ported or live playback has succeeded. Native movie creation/playback and teardown are the next live checkpoints. Compare existing message-12 hash/token handling with the contributor's spawn-set/token description if arrival stalls.
+The subsequent test froze at t=465615, just after the t=465535 escape state selection and t=465590 native teleport. The sense probe saw a cycling freed-record chain; the native frame then reported a `network_send` job stalled. The 16:49:39 capture contains zero registry groups. Evidence is retained in `build/first-encounter-audit/ending-freeze-20260906-1651.log` and the corresponding capture folder. This localizes the failure to teardown; it does not prove every cause of that stall.
+
+New candidate after this failure:
+
+- Retired per-bubble keys remain at their wire ordinals with clear presence bits; phase two omits their object bodies. Active keys and state-byte order remain intact. A bounded Apex key history preserves those positions across both bookends, appending each new movie after existing keys. A cleanup timeout cannot re-enable already-retired groups.
+- For 1AU bookends, the host identifies old local keys from the roster and retains scenario-wide services. Before sending removal, a read-only frame observer must see old keys in the native registry. After removal, the same registry owner must still exist in the same source region, with a nonempty registry and none of those keys remaining. Unknown/empty worlds, different owners, other regions and partial removal cannot release travel.
+- The selection intent waits for `ev=mission_retirement result=native_cleanup_complete` before arming travel. This observes native descriptor removal; it does not manually free records, skip readiness checks, or call cleanup from the network thread. The request is bound to session, ActivityClient generation and lease revision. Existing intent expiry bounds a stalled request.
+- Ending-only host teleport uses the prior local command token plus one (skipping zero), echoes the independent native world-transition token, and waits for local state 3 with matching command token, destination and hash plus the actual current region. A matching local state 0 retires the command. Intro travel retains its existing policy.
+
+Remaining differences from the full Omega contract: exact cinematic resource/owner readiness and controller-revision-qualified completion are still not implemented. Current movie guards use typed native incidents and exact arrival. The teleport hash still uses the existing scenario lookup; its bookend spawn-set semantics need checking if arrival fails. Do not claim full ending playback is fixed until a live test reaches both movies. The new checks specifically address the observed teardown boundary.
 
 ## Package evidence correction
 
@@ -42,6 +51,6 @@ Config 80B3D494 (ship) and 80B3D497 (sunburn) share fallback resource 80BFDDC2 a
 
 ## Validation and outstanding work
 
-Release build, all 22 portable tests and all five mission Lua suites pass. Route peak: 238 variables, 61 intents per event, four timers, 13,000 Lua instructions including mock. Coverage includes exact bookend arrival, stale native incidents, skip/finish ordering, audio pre-roll, cooling order, startup deduplication and removal of stacked escape scorch.
+Release build, all 23 portable tests and all five mission Lua suites pass. Route peak: 238 variables, 61 intents per event, four timers, 13,000 Lua instructions including mock. Coverage includes exact bookend arrival, stale native incidents, skip/finish ordering, audio pre-roll, cooling order, startup deduplication single-source escape scorch, native retirement qualification, preserved wire ordinals, absent retired authority bodies, and exact teleport tuple matching.
 
 The full-screen surge effect is still unresolved. The new guide points to authored Scene inputs/source bindings; no arbitrary Omega event hash or substitute damage effect has been added.

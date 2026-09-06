@@ -9,6 +9,7 @@
 #include "bootflow_hook_lifecycle.h"
 #include "internal.h"
 #include "spawn/probe.h"
+#include "../mission_retirement/mission_retirement.h"
 
 namespace sunrise::client::hooks::bootflow {
 namespace {
@@ -63,6 +64,7 @@ void poll_world_step() noexcept {
 /** Publishes the client's current local slice-set index. */
 void poll_current_slice_set() noexcept {
     const std::int32_t index = spawn::sample_current_slice_set();
+    mission_retirement::poll(index);
     const std::int32_t previous = g_publishedSliceSet.load(std::memory_order_relaxed);
     // A slice-set change is a world replacement whose transition arms a fresh fade, and a
     // teleport never passes the off-destination step that re-arms the release. Re-arm here or

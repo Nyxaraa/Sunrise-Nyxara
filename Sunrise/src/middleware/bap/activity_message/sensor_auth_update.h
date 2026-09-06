@@ -96,6 +96,8 @@ struct Group final {
     bool hasStateSequence{};
     /** True only for a generated mission group whose non-overridden slots seed empty deltas. */
     bool missionSeedOnly{};
+    /** Retain this key's ordinal but clear its presence and omit its authority bodies. */
+    bool retired{};
 };
 
 /** One exact, already-registered slot body substituted into phase 2. */

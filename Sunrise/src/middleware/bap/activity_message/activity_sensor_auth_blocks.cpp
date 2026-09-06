@@ -1,6 +1,7 @@
 #include <algorithm>
 
 #include "sensor_auth_update.h"
+#include "roster_presence.h"
 
 namespace sunrise::middleware::bap::activity_message::sensor_auth_update {
 namespace {
@@ -140,9 +141,10 @@ group_state_sequence(const Roster& roster, std::uint32_t key, std::uint8_t fallb
     for (std::size_t index = 0; encoded && index < keyCount; ++index) {
         encoded = writer.write(block.keys[index], kKeyWidth);
     }
-    encoded = encoded && writer.write(1, kPresenceWidth)
-              && write_key_mask(writer, keyCount, kBubbleMaskWords)
-              && writer.write(1, kPresenceWidth) && writer.write(count, kBubbleCountWidth);
+    encoded = encoded && writer.write(1, kPresenceWidth);
+    for (std::size_t word = 0; encoded && word < kBubbleMaskWords; ++word)
+        encoded = writer.write(presence_word(roster, block.keys, word), kChunkWidth);
+    encoded = encoded && writer.write(1, kPresenceWidth) && writer.write(count, kBubbleCountWidth);
     for (std::size_t index = 0; encoded && index < keyCount; ++index) {
         encoded = writer.write(
             kStateByteBias + group_state_sequence(roster, block.keys[index], stateSequence), 8);

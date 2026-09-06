@@ -1,5 +1,8 @@
 #include "activity_mission_seed_roster.h"
+#include "../../../../../client/hooks/mission_retirement/mission_retirement.h"
+#include "../../../../../middleware/bap/activity_message/roster_presence.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <limits>
@@ -598,7 +601,10 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
                 }
             }
             if (managed && !active) {
-                continue;
+                // Removal is a cleared presence bit at the old key ordinal, not omission.
+                for (std::size_t group = 0; group < snapshot.roster.groupCount; ++group)
+                    if (snapshot.roster.groups[group].key == key)
+                        snapshot.roster.groups[group].retired = true;
             }
             if (retainedCount >= scratch.rosterSubBlockKeys[blockIndex].size()) {
                 return refuse_seed("managed_key_capacity");
@@ -683,6 +689,77 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
         return refuse_seed("scene_install");
     }
 
+    // Ember bookends replace Apex inside the same bubble. Retire its local roster while
+    // it still owns the world; the state dispatcher waits for native group removal.
+    const auto activities = view.catalog->activities();
+    const bool ember = view.activityRow < activities.size()
+        && activities[view.activityRow].definitionHash == 0x38F926B2U;
+    const bool emberBookend = ember && lease.scriptSelected
+        && (lease.plan.effectiveRegion == 1 || lease.plan.effectiveRegion == 2);
+    if (emberBookend) {
+        // A previous movie's definition can be retained while its activation is absent
+        // from the canonical roster. Restore its old ordinal before encoding removal.
+        for (std::size_t i = 0; i < lease.emberApexKeyCount; ++i) {
+            bool defined = false;
+            for (std::size_t group = 0; group < snapshot.roster.groupCount; ++group)
+                defined = defined || snapshot.roster.groups[group].key == lease.emberApexKeyOrder[i];
+            if (!defined || !append_bubble_key(0, lease.emberApexKeyOrder[i], scratch, snapshot.roster))
+                return refuse_seed("retirement_key_history");
+        }
+        for (std::size_t block = 0; block < snapshot.roster.bubbleSubBlocks.size(); ++block) {
+            const auto& source = snapshot.roster.bubbleSubBlocks[block];
+            if (source.bubble != 0) continue;
+            auto order = lease.emberApexKeyOrder;
+            std::size_t count = lease.emberApexKeyCount;
+            if (!message::extend_key_order(order, count, source.keys))
+                return refuse_seed("retirement_key_capacity");
+            std::copy_n(order.begin(), count, scratch.rosterSubBlockKeys[block].begin());
+            scratch.rosterSubBlocks[block].keys = std::span<const std::uint32_t>(
+                scratch.rosterSubBlockKeys[block].data(), count);
+        }
+    }
+    if (emberBookend) {
+        namespace retirement = client::hooks::mission_retirement;
+        std::array<std::uint32_t, message::kBubbleKeyCapacity> retiringKeys{};
+        std::size_t retiringCount = 0;
+        for (const auto& block : snapshot.roster.bubbleSubBlocks) {
+            if (block.bubble != 0) continue;
+            for (auto key : block.keys) {
+                for (std::size_t group = snapshot.roster.topLevelGroupCount;
+                     group < snapshot.roster.groupCount; ++group) {
+                    const auto& row = snapshot.roster.groups[group];
+                    if (row.key != key) continue;
+                    bool shared = false;
+                    if (!sdk::mission_seed_group_is_scenario_wide(view, row.objectTag, key, shared))
+                        return refuse_seed("retirement_group_scope");
+                    if (shared) continue;
+                    // Authored generic-controller registry for the selected movie. The
+                    // temporary materialization storage has been folded/appended by now.
+                    const auto movieTag = lease.plan.effectiveRegion == 1 ? 0x80B3C224U : 0x80B3C228U;
+                    const bool selected = !arrivalWindow && row.objectTag == movieTag;
+                    if (!selected) {
+                        if (retiringCount == retiringKeys.size()) return refuse_seed("retirement_capacity");
+                        retiringKeys[retiringCount++] = key;
+                    }
+                }
+            }
+        }
+        auto cleanup = retirement::Status::complete;
+        if (arrivalWindow) {
+            cleanup = retirement::prepare(
+                {session.activity.session.sessionId, session.activity.bindingGeneration, lease.revision},
+                heldRegion, std::span(retiringKeys).first(retiringCount));
+        }
+        if (cleanup == retirement::Status::retiring || cleanup == retirement::Status::complete
+            || cleanup == retirement::Status::failedRetiring) {
+            for (std::size_t group = snapshot.roster.topLevelGroupCount;
+                 group < snapshot.roster.groupCount; ++group)
+                for (std::size_t key = 0; key < retiringCount; ++key)
+                    if (snapshot.roster.groups[group].key == retiringKeys[key])
+                        snapshot.roster.groups[group].retired = true;
+        }
+    }
+
     if (adopting) {
         lease = {};
         lease.plan = plan;
@@ -711,6 +788,13 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
         }
     }
     lease.fullSetPublished = lease.fullSetPublished || !transitionPublication;
+    if (ember) {
+        for (const auto& block : snapshot.roster.bubbleSubBlocks) {
+            if (block.bubble != 0) continue;
+            lease.emberApexKeyCount = static_cast<std::uint8_t>(block.keys.size());
+            std::copy(block.keys.begin(), block.keys.end(), lease.emberApexKeyOrder.begin());
+        }
+    }
     return MissionSeedRosterResult::ready;
 }
 

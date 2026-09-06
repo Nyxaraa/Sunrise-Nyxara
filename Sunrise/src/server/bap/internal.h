@@ -217,6 +217,10 @@ struct MissionSeedLease {
     bool regionArrivalPending{};
     /** Set when a mission script selected the plan. An adopted default plan is not a selection. */
     bool scriptSelected{};
+    /** 1AU's same-bubble bookends must retain the applied key ordinals across both movies. */
+    std::array<std::uint32_t, middleware::bap::activity_message::sensor_auth_update::kBubbleKeyCapacity>
+        emberApexKeyOrder{};
+    std::uint8_t emberApexKeyCount{};
 };
 
 static_assert(middleware::bap::activity_message::sensor_auth_update::kAuthOverrideCapacity

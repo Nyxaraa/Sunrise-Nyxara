@@ -17,6 +17,7 @@
 #include "../activity_sdk_squad_runtime.h"
 #include "mission_script_runtime.h"
 #include "mission_script_runtime_internal.h"
+#include "../../../client/hooks/mission_retirement/mission_retirement.h"
 
 // The intent fan-out reserves one Host output revision, then asks one typed adapter to encode it.
 
@@ -230,8 +231,12 @@ void arm_state_region_teleport(RuntimeInstance& instance,
         // arm a move it can never finish.
         return;
     }
+    const auto activities = instance.view.catalog->activities();
+    const bool emberBookend = !instance.publicTarget && instance.view.activityRow < activities.size()
+        && activities[instance.view.activityRow].definitionHash == 0x38F926B2U
+        && (plan.effectiveRegion == 1 || plan.effectiveRegion == 2);
     const bool armed = membership::arm_host_teleport(
-        instance.view.binding.sessionId, static_cast<std::int32_t>(plan.effectiveRegion), hash);
+        instance.view.binding.sessionId, static_cast<std::int32_t>(plan.effectiveRegion), hash, emberBookend);
     log_line(core::log::Level::info,
              &instance,
              "state_region",
@@ -314,6 +319,25 @@ void dispatch_intent(RuntimeInstance& instance, std::uint64_t now) noexcept {
         // A selected state names its own slice-set region. Until the client transitions there its
         // object registry comes from the loaded slice-set entry, so the new state's objects stay
         // unfindable. Arming the host teleport is the only mid-activity move.
+        const auto activities = instance.view.catalog->activities();
+        const bool emberBookend = !instance.publicTarget
+            && instance.view.activityRow < activities.size()
+            && activities[instance.view.activityRow].definitionHash == 0x38F926B2U
+            && (selected.plan.effectiveRegion == 1 || selected.plan.effectiveRegion == 2);
+        if (emberBookend && selected.regionArrivalPending) {
+            namespace retirement = client::hooks::mission_retirement;
+            const auto cleanup = retirement::status({instance.view.binding.sessionId,
+                selected.activityClientGeneration, selected.revision});
+            if (cleanup == retirement::Status::failed || cleanup == retirement::Status::failedRetiring) {
+                refuse_delivery(instance, "retirement_failed", "native roster cleanup did not complete",
+                    host::EffectOutcome::refused);
+                return;
+            }
+            if (cleanup != retirement::Status::complete) {
+                report_intent_status(instance, kIntentStatusStateTransitionPending, "native_retirement_pending");
+                return;
+            }
+        }
         arm_state_region_teleport(instance, selected.plan);
         static_cast<void>(complete_local_effect(instance, "state_selected"));
         return;

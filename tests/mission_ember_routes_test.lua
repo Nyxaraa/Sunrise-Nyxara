@@ -390,14 +390,21 @@ assert(vars['ember.carry.apex.done'] and not vars['ember.carry.apex.held'])
 local before=#calls;use('MOTHER_BRAIN_INTERACT_OBJECT');assert(#calls==before)
 call(R.dispatch,'object',c,s,event('MOTHER_BRAIN_CARRY_OBJECT',{generation=3,present=false,alive=false}))
 assert(not timers['ember.carry.recover.apex.3'],'consumed final cell respawned')
--- Escape's native sunburn object must not stack with the scripted climb/rail burn.
+-- Escape replaces the climb attachment with one scoped burn and disables the other source.
 timer('ember.apex.hazards')
 local escapeEffect
 for i=#calls,1,-1 do
     if calls[i][1]=='set_mission_effect' then escapeEffect=calls[i][3];break end
 end
-assert(escapeEffect and escapeEffect.enabled==false and escapeEffect.filter==nil,
-    'escape must detach the added burn instead of stacking it with native sunburn')
+assert(escapeEffect and escapeEffect.enabled==true and escapeEffect.filter~=nil,
+    'escape must attach the rail burn after deposit')
+local sunburnState
+for i=depositStart+1,#calls do
+    if calls[i][1]=='set_object_active' and calls[i][2]==slotDefs[m.Slot.SUNBURN_DAMAGE_OBJECT].name then
+        sunburnState=calls[i][3].active
+    end
+end
+assert(sunburnState==false,'escape must not stack the sunburn prop with the rail burn')
 -- The weapon is dead once the cell is in: powered off, but still installed. Deactivating the
 -- ring objects would take the beam and its surrounding structure out of the world entirely.
 assert(vars['ember.apex.beam']==false,'the beam must stop firing after the deposit')

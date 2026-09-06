@@ -120,11 +120,10 @@ return function(m, a, ending)
                     a.slot(c, "SLOT_0005_80B3C09F"), a.slot(c, "SLOT_0006_80B3C09F"),
                     a.slot(c, "SLOT_0008_80B3C09F")}}, true)
         elseif mode == "escape" then
-            -- Escape already owns SUNBURN_DAMAGE_OBJECT. Adding this rail-wide burn on top
-            -- adds damage until the escape-end trigger detaches it. Retire the
-            -- climb attachment here and let the native sunburn object own escape damage.
+            -- Replace the climb attachment with one rail-scoped burn. The sunburn prop
+            -- alone did not deliver damage in the live test; do not run both sources.
             a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
-                "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), false)
+                "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), true)
         else
             a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
                 "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), false)
@@ -218,7 +217,8 @@ return function(m, a, ending)
             a.device(c, "MOTHER_BRAIN_CONSOLE_DEVICE", true)
             a.device(c, "MOTHER_BRAIN_ENGINE_LEFT_DEVICE", true)
             a.device(c, "MOTHER_BRAIN_ENGINE_RIGHT_DEVICE", true)
-            a.objects(c, {"REACTOR_GETAWAY_SHIP_OBJECT", "SUNBURN_DAMAGE_OBJECT"}, true)
+            a.objects(c, {"REACTOR_GETAWAY_SHIP_OBJECT"}, true)
+            a.objects(c, {"SUNBURN_DAMAGE_OBJECT"}, false)
             -- Object publication is not an entity-creation receipt. Start its device from
             -- A.object once the ship is present, so the initial movement is not lost.
             c:clear_variable("ember.apex.ship_started")
@@ -364,7 +364,7 @@ return function(m, a, ending)
         end
         if e.timer_name == "ember.apex.hazards" then
             -- The climb pipes burn while the cell is being carried up (phase 5), well before
-            -- the deposit. Escape (phase 6) uses its separate native sunburn object, so
+            -- the deposit. Escape (phase 6) replaces it with the rail-scoped burn, so
             -- entering it detaches the climb burn. A checkpoint reset also detaches it.
             if s:variable("ember.region") == 0 then
                 local p = phase(s)
