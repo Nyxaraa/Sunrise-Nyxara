@@ -1,5 +1,15 @@
 # 1AU: movie loader, surge audio and escape explosions
 
+## Gameplay HUD survives cinematic overlay selection
+
+The follow-up test of `88a9632` (delivery source commit `b9880dc`) reports reticle, ammunition, abilities, radar and mission objectives drawn over the movie. The captured log confirms `presentation_state requested=43 selected=33 applied=33 category=6` at t=766752 and native STM playing at t=767072. The selected window state is correct; it does not by itself remove gameplay HUD ownership while Apex remains loaded. Evidence is under `build/first-encounter-audit/b9880dc-hud/`.
+
+Native window manager `1316FC0` has an independent HUD branch: it selects the `hud` name at `1317689` (or an equipment override), creates the window at `1317784`, then calls `13165C0` with role `18` at `1317796`. That setter stores the role at window offset `310`. This is different from the window-state enum at `410`.
+
+The correction preserves cinematic state `21h` and adds a narrowly scoped draw filter in `bootflow/ember_movie_hud.cpp`. Only the full-window submission at `132C1BD` to `13D9060` can read offset `310`; nested widgets using the same draw function are passed through untouched. During owned Ember movie presentation, role 18 skips submission of the complete HUD subtree, including cached child commands. All other roles and both native UI layers continue normally, retaining subtitles and inventory/settings rendering/input. No saved preferences, visibility bits, native lists or gameplay mission state are changed. Presentation stays owned through the STM/CNN handoff and clears on final completion/failure.
+
+The mapped-image verifier checks both unique signatures, the caller/callee relationship, root-pointer construction and the native role setter. The next live test must confirm `hud_draw_suppressed`, the absence of the reported HUD, subtitles, menus and restoration after leaving playback. This is a specific gameplay-window filter, not the removed blanket UI-layer mask. The release DLL built successfully and was installed after the game closed, with all 18 destination hashes verified. DLL SHA-256: `c2e84a350012ffd11eaeb39ef39bcb385b986c42dac5c0386ac0d0325f7fcd5b`; manifest `build/ember-installation.json`, backup `build/ember-install-backup-20260906-212949-077349`. No game launch or stop was performed. Visual acceptance remains pending.
+
 ## Correct the cinematic loading state to the playback overlay
 
 The `41e2728` test exposed a specific presentation regression: `presentation_state requested=43 selected=34 applied=34 category=6` at t=281212, followed by valid movie playback. A read-only UI capture found window `80B46D88`, name hash `D505DEBB` = FNV-1(`loading`), above the video, alongside `80BC6681`, name hash `7737E414` = FNV-1(`subtitle_overlay`). Valid 1920x800 surfaces were captured for both movies. The previous verification established category membership, but misidentified state `0x22` as playback.

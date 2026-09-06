@@ -1,22 +1,24 @@
 # 1AU / mission_ember — implementation and engineering handover
 
-Prepared 6 September 2026 for Millie and the next agent working on Sunrise. Read this document before the older plans or transcripts. It describes the implementation at **`88a9632`**, followed by the documentation/archive commit identified in the delivery manifest. Later historical notes often describe approaches that have already been replaced.
+Prepared 6 September 2026 for Millie and the next agent working on Sunrise. Read this document before the older plans or transcripts. The delivered ZIPs preserve **`b9880dc`**, whose gameplay implementation was `88a9632`. This working handover now also documents the subsequent gameplay-HUD correction; the existing delivery archives have not been replaced. Later historical notes often describe approaches that have already been replaced.
 
 ## 1. Current result and first action
 
 1AU is scripted from the opening cinematic through the escape and two ending movies. The user has repeatedly played the route and described it as almost complete. The latest investigation isolated the ending presentation problem after resolving native playback, texture residency, movie sequencing and return to orbit.
 
-**The next action is a visual test of the correction in `88a9632`.** Do not start by rewriting mission progression or the movie loader.
+**The next action is a visual test of the installed gameplay-HUD filter.** The user tested `88a9632` and reported reticle, ammunition, abilities, radar and mission objectives still rendering over the movie. The log confirmed `requested=43 selected=33 applied=33` at t=766752 and STM playing at t=767072. Native HUD ownership is separate from the cinematic overlay window; see section 17. Do not start by rewriting mission progression or the movie loader.
 
-The immediately preceding build, `41e2728`, played both movies through the native decoder. Movie one was skipped with Escape; movie two reached its natural end. The game accepted completion, selected orbit and reached native `orbit_setup`. However, a loading window covered the video. The new build changes the selected UI state from `0x22` (`loading`) to `0x21` (`cinematic_overlay`). That mapping is now verified through the native state-to-window tables, rather than inferred from the broad cinematic category. The correction is compiled, tested and installed, but **the user has not yet visually tested it**.
+The earlier build, `41e2728`, played both movies through the native decoder. Movie one was skipped with Escape; movie two reached its natural end. The game accepted completion, selected orbit and reached native `orbit_setup`. However, a loading window covered the video. `88a9632` changed the selected UI state from `0x22` (`loading`) to `0x21` (`cinematic_overlay`). That mapping is verified through the native state-to-window tables, rather than inferred from the broad cinematic category. The subsequent HUD filter keeps that correction and excludes only the native role-18 HUD window's drawing during owned movie presentation. It is built, ABI-verified and installed. The first installation attempt stopped before any game writes because Destiny was running; installation succeeded after a subsequent process check confirmed the game had closed.
+
+Installed HUD-correction DLL SHA-256: `c2e84a350012ffd11eaeb39ef39bcb385b986c42dac5c0386ac0d0325f7fcd5b`. It still requires an in-game HUD/subtitle/menu test. The guarded installer verified the DLL and all 17 mission scripts against their source hashes.
 
 Latest installed DLL SHA-256:
 
 ```text
-e8388cd407e2c90d423fdf4574ef0b1eb7e3a848bd1148710aeca890ef326343
+c2e84a350012ffd11eaeb39ef39bcb385b986c42dac5c0386ac0d0325f7fcd5b
 ```
 
-Installation manifest: `build/apex-cooling-installation.json`. Last backup: `build/apex-cooling-install-backup-20260906-210821`. The install replaced the DLL and 17 mission Lua files, verified their hashes, and preserved settings, save and generated SDK. The agent did not launch or stop the game.
+Installation manifest: `build/ember-installation.json`. Last backup: `build/ember-install-backup-20260906-212949-077349`. The old `build/apex-cooling-installation.json` still records the pre-filter delivery baseline. The install replaced the DLL and 17 mission Lua files, verified their hashes, and preserved settings, save and generated SDK. The agent did not launch or stop the game.
 
 ### What the evidence establishes
 
@@ -27,7 +29,7 @@ Installation manifest: `build/apex-cooling-installation.json`. Last backup: `bui
 | Movie picture | User explicitly confirmed visible first-movie picture on `15e507e`. Subsequent captures show valid video surfaces for both movies. |
 | Movie sequencing | `41e2728` produced first completion, second request, second playing and second natural completion. |
 | Orbit handoff | `41e2728` accepted completion, queued orbit, requested native cleanup and reached orbit setup. |
-| Unobscured picture, subtitles and menus on latest build | Pending visual test of `88a9632`. Previous build rendered `loading` over playback. |
+| Gameplay HUD, subtitles and menus | `88a9632` selects state 33, but the user reports gameplay HUD over the movie. The new role-18 drawing filter is installed and awaiting visual testing. Subtitle/menu behavior still needs visual confirmation. |
 | Remaining finale polish | Beam sound/screen effect, escape scorch, explosions, extraction-ship path and menu/skip behavior need targeted confirmation. Earlier source changes are not proof of visual or audio success. |
 | Fireteam wipe and respawn presentation | Implemented and covered by tests; a multiplayer acceptance run is still valuable. Do not imply solo observations prove co-op correctness. |
 
@@ -425,7 +427,11 @@ The live UI capture showed `loading` asset `80B46D88` alongside `subtitle_overla
 
 **`88a9632` changes the substitution to `0x21`.** It leaves other requested UI states alone, retains presentation across the movie handoff, and clears it on final completion or failure. Native drawing, window updates and input remain intact. The tests now follow state → enum → actual name hash and check that true loading/menu requests are preserved.
 
-The user briefly opened menus for a read-only capture on the old build, but that only caught a short-lived additional window while the loading state was active. It is not a validated inventory/settings allowlist. There is currently no selective draw mask in the source.
+The user briefly opened menus for a read-only capture on the old build, but that only caught a short-lived additional window while the loading state was active. It is not a validated inventory/settings allowlist.
+
+The next `88a9632` test left the gameplay HUD over the video. Native `1316FC0` independently creates `hud` (name hash `268AB804`) or an equipment-specific override, then assigns semantic role 18 through `13165C0`. That setter writes window offset `310`; it is distinct from the state enum at `410`. The current `bootflow/ember_movie_hud.cpp` filter checks this role only at the verified root-window draw caller `132C1BD` → `13D9060`, returning before the entire HUD subtree, including cached child commands, is submitted. Recursive child widgets use the same callee but do not have a full window allocation, so the exact return-address guard must precede the role read. Do not remove that guard.
+
+Both `132BD80` layers and every other window role continue drawing. Native updates/input/visibility and user preferences remain unchanged. The filter is active only while the ending bridge owns presentation, spanning the movie handoff and ending on final completion/failure. It reports `hud_filter_attached` at startup and `hud_draw_suppressed` with the actual window identity on its first suppression. The native verifier checks the root construction, caller/callee and role setter; visual validation is pending. This is narrower than the old blanket layer suppression. Latest log and disassembly evidence: `build/first-encounter-audit/b9880dc-hud/`.
 
 A remaining interaction concern to test: the direct player uses a foreground Escape edge to call native stop. Native in-engine cutscenes have a type-6 skip incident; direct movies do not. Verify that closing inventory/settings does not accidentally skip the movie. If a change is needed, base it on native menu/input ownership rather than simply consuming all Escape presses.
 
@@ -506,9 +512,9 @@ For the DLL carried in the archive, add `--dll _snapshot/runtime/steam_api64.dll
 
 ## 21. Next test and debugging decision tree
 
-1. Have the user manually launch the installed `88a9632` build. Confirm `frame_attached` and `presentation_attached` in the new log.
+1. Have the user manually launch the installed HUD-filter DLL; its SHA-256 is in section 1. Confirm `frame_attached`, `presentation_attached` and `hud_filter_attached` in the new log.
 2. Reach the final escape trigger normally. Confirm one movie-1 request. Preserve the current trigger and progression if it already fires.
-3. Expect requested gameplay state 43 to select/applied state **33**, not 34. Check that the picture is visible, gameplay HUD/loading window is absent and subtitles appear when enabled.
+3. Expect requested gameplay state 43 to select/applied state **33**, not 34, and require `hud_draw_suppressed role=18` during playback. Check that the picture is visible, reticle/ammunition/abilities/radar/objective HUD is absent and subtitles appear when enabled.
 4. Open inventory and settings; verify normal input and rendering, including closing them without unintended skip. The native state is preferred to a new mask, but this behavior has not yet been observed on the new build.
 5. Test first-movie natural EOF in one run and explicit skip in another. The last run established first skip and second natural EOF, not every combination.
 6. Verify second-movie picture and subtitles; require native `playing movie=2`, not just its queued/submitted log.
@@ -531,10 +537,10 @@ Keep read-only evidence scoped to the relevant process/module and never recover 
 
 ## 22. Handover completion checklist
 
-- Source at `88a9632` is the last installed gameplay implementation.
+- The delivered archives remain source `b9880dc` with installed gameplay `88a9632`. This working tree additionally carries the HUD correction described in sections 1 and 17; do not assume it is in the old ZIPs.
 - This document, the reusable installer and the two pre-existing untracked handovers are included in the final documentation commit, with no co-author trailer.
 - Branch ZIP includes all committed files and branch history; scripts ZIP includes all 17 Lua files.
 - Runtime DLL, matching generated SDK and selected diagnostic data are supplemental branch-archive assets with checksums.
 - Archive verification and the exact final commit are recorded in the delivery manifest.
 - No game launch, stop, new gameplay change or settings/save replacement is part of packaging.
-- First unresolved acceptance item remains the visible result of selecting `cinematic_overlay` on `88a9632`.
+- First unresolved acceptance item is the role-18 HUD filter, subtitles and menu behavior during both ending movies.

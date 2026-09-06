@@ -100,7 +100,28 @@ target(0x1317366,0,0x13126E0)
 # The UI explicitly excludes loading state 22h from its cinematic-overlay branch.
 assert data[0x1317094:0x131709A] == bytes.fromhex('41 83 fc 22 74 05')
 assert fnv1('subtitle_overlay') == 0x7737E414
-print('Native UI 21h -> cinematic_overlay; 22h -> loading verified; no draw suppression.')
+print('Native UI 21h -> cinematic_overlay; 22h -> loading verified; UI layers preserved.')
+# A playback overlay does not remove the separate gameplay HUD. Filter only
+# its full-window submission, before 13D9060 can replay the cached subtree.
+hud = 'Sunrise/src/client/hooks/bootflow/ember_movie_hud.cpp'
+window_call = signature(hud, 'windowDrawSig')
+widget_draw = signature(hud, 'widgetSig')
+assert window_call == 0x132C1B2 and widget_draw == 0x13D9060
+target(window_call, 11, widget_draw)
+assert window_call + 16 == 0x132C1C2
+# The caller passes the full window at intrusive-list node minus 600h.
+assert data[0x132C0F9:0x132C100] == bytes.fromhex('48 8d b3 00 fa ff ff')
+assert data[0x132C1BA:0x132C1BD] == bytes.fromhex('48 8b ce')
+# Child submissions share this callee but have a different caller and only a
+# widget-sized allocation. They must pass through without accessing +310.
+target(0x13D91FA, 0, widget_draw)
+# Native HUD creation selects "hud" (or an equipment override), then assigns
+# the semantic role 18. The role setter writes window+310, not state enum +410.
+assert struct.unpack_from('<I', data, 0x1FE2060)[0] == fnv1('hud')
+assert data[0x131778E:0x1317796] == bytes.fromhex('ba 12 00 00 00 48 8b c8')
+target(0x1317796, 0, 0x13165C0)
+assert data[0x13165DA:0x13165E0] == bytes.fromhex('89 90 10 03 00 00')
+print('Native gameplay HUD role 18 and root-only cached draw boundary verified.')
 for offset, expected in [(0x96, 0x4294D0), (0xD1, 0x423EF0), (0x14C, 0x4312D0), (0x157, 0x435AA0)]:
     target(load, offset, expected)
 for offset, expected in [(0x85, 0x42C650), (0x9F, 0x425310)]:

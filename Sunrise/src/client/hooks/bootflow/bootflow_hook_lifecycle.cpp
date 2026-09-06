@@ -31,6 +31,7 @@ constexpr std::array kFixes{
     Fix{&stage_loading_cinematics, &publish_loading_cinematics},
     Fix{&stage_ember_movie_tick, &publish_ember_movie_tick},
     Fix{&stage_ember_movie_ui, &publish_ember_movie_ui},
+    Fix{&stage_ember_movie_hud, &publish_ember_movie_hud},
     Fix{&stage_ember_sunburn, &publish_ember_sunburn},
     Fix{&stage_owner_activity_slot, &publish_owner_activity_slot},
     Fix{&stage_region_private, &publish_region_private},
@@ -122,6 +123,7 @@ void uninstall() noexcept {
     uninstall_loading_cinematics();
     uninstall_ember_sunburn();
     uninstall_ember_movie_tick();
+    uninstall_ember_movie_hud();
     uninstall_ember_movie_ui();
     uninstall_orbit_handoff();
     uninstall_composition_check();
