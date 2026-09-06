@@ -6,7 +6,7 @@ Read `OpusHandoff.md` and retained Claude's latest beam polarity (normal open, s
 
 The Omega contributor supplied `LoadingCinematics_Suppressed`, then RVA `0xC24490`. In the captured native image this is a no-argument boolean wrapper. Its travel/spaceflight callers skip cinematic setup and waiting when it returns true (D46900, D474D0, EE50A0 and EF44C0 inspected).
 
-`client.suppress_loading_cinematics` now forces that predicate true. It defaults false in source and is enabled in the installed settings. Setting it false restores the original predicate. It applies to loading cinematics generally, rather than being scoped to a particular mission. The scripted type-6 movie controller is not detoured. Verify that the erroneous Earth fly-in disappears while the authored 1AU introduction and ending movies still play.
+`client.suppress_loading_cinematics` now forces that predicate true only when the native loading flow names 1AU (definition 38F926B2). It defaults false in source and is enabled in the installed settings. Setting it false restores the original predicate. The scope is re-evaluated on every call through the same native activity reader the loading flow uses (C294B0). The SDK maps its index to the definition hash. Orbit, another activity, an absent SDK or an unresolved activity uses the original predicate; retained host sessions do not control suppression. The scripted type-6 movie controller is not detoured. Verify that the erroneous Earth fly-in disappears while the authored 1AU introduction and ending movies still play.
 
 The hook resolves the unique EF44C0 caller signature, follows its call at +30 and checks the target's boolean-wrapper bytes. Offline signature validation found exactly one caller and resolved C24490. The short predicate signature alone matches two functions and is deliberately not used for lookup.
 
@@ -33,3 +33,7 @@ Installed 19 files, including the settings change, with complete prior-file back
 Backup: `/home/millie/Documents/Sunrise-builds/mission-ember/build/post-opus-install-backup-20260906-150504`.
 
 Installed DLL SHA-256: `be4ea67c9399c4f08c41eac25f9ed2f27152dff9876b449e8d0d60e7fc9a0139`.
+
+## Scope correction
+
+Loading suppression is now limited to 1AU using the native loading activity reader above. The corrected Release DLL built successfully, and offline signature/call validation passed. Installation was deferred because the game was running; the installed DLL still has the earlier global override until this build is copied after the game closes. The scope-only installer is `/tmp/install-ember-loading-scope.py` and preserves settings, saves and scripts.

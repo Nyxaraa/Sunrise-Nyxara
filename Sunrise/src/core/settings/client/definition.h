@@ -44,7 +44,7 @@ struct Settings {
      * suppresses the orbit-side entry cinematic.
      */
     bool skipOrbitCinematicWait{false};
-    /** Force LoadingCinematics_Suppressed before travel; authored mission movies stay native. */
+    /** Force LoadingCinematics_Suppressed only for 1AU; other activities use the native predicate. */
     bool suppressLoadingCinematics{false};
     /**
      * Forces the peer channel to connect directly instead of through a NAT relay.
