@@ -433,10 +433,14 @@ reset_check('escape',function()
     assert(vars['ember.apex.beam']==false,'escape restart must leave the beam off')
 end)
 trigger('APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER')
--- Regions 0, 1 and 2 are sibling states of one slice set, so the client never reports a new
--- held region. Both the selection and activation must be queued in this callback.
--- No teleport is armed for a sibling state, so no further client report arrives. The movie
--- must be queued with its own selection or it never starts.
+-- A selected bookend is not loaded merely because the player holds Apex's base world.
+local beforeArrival=#calls
+call(R.client,c,s,{held_region_index=0})
+call(R.client,c,s,{current_region_index=1})
+assert(#calls==beforeArrival and not vars['ember.ending.offered'],'pending/base world offered playback')
+region(1)
+assert(vars['ember.ending.offered']==1)
+local offeredCalls=#calls;region(1);assert(#calls==offeredCalls,'duplicate arrival replayed the movie offer')
 assert(vars['ember.ending']==1 and not vars['ember.ending.playing'],'offer is not native playback')
 local offered=false
 for _,row in ipairs(calls)do
@@ -459,6 +463,8 @@ local stoppingCalls=#calls;call(R.skip,c,s,first);assert(#calls==stoppingCalls,'
 call(R.terminated,c,s,first)
 assert(vars['ember.ending']==2 and not vars['ember.ending.playing'],'second movie is only offered')
 call(R.terminated,c,s,first);assert(vars['ember.ending']==2,'old movie completion advanced its successor')
+call(R.started,c,s,second);assert(not vars['ember.ending.playing'],'unoffered second movie claimed playback')
+region(2)
 call(R.started,c,s,second);call(R.terminated,c,s,second)
 assert(vars['ember.complete'])
 local objective=vars['ember.r.guidance']

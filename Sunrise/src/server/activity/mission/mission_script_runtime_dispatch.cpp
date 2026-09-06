@@ -215,27 +215,8 @@ void arm_state_region_teleport(RuntimeInstance& instance,
             instance.view.binding.sessionId, membership::kAbsentSliceSetIndex, 0));
         return;
     }
-    // A region is `sliceSetIndex + stateOrdinal`, so a sibling state sits in the slice set the
-    // client already holds and there is nothing to transition to. Arming anyway hands the client
-    // a slice-set index that is not a slice set (region 1 carrying slice set 0's name hash), and
-    // it starts a teleportation it can never finish: the client logs the transition and never
-    // reaches "Finished synchronizing". Clear the arm and let the roster publish the new state's
-    // groups into the world that is already standing.
-    //
-    // The slice set the client holds is derived from the region it reports, not from
-    // `reported_slice_set()`: that reads the newest D6 host teleport, which still named the
-    // mission's opening move to region 64 long after later areas were reached on z-legs.
-    // Slice-set indices are multiples of the factor, so a region's own slice set is that region
-    // rounded down to it.
-    const auto factor = middleware::content::packages::tables::kSliceSetIndexFactor;
-    if (reported >= 0
-        && static_cast<std::uint32_t>(reported) - (static_cast<std::uint32_t>(reported) % factor)
-               == plan.sliceSetIndex) {
-        static_cast<void>(membership::arm_host_teleport(
-            instance.view.binding.sessionId, membership::kAbsentSliceSetIndex, 0));
-        log_line(core::log::Level::info, &instance, "state_region", "teleport_not_required");
-        return;
-    }
+    // Native 4C8E40 registers alternate entries as distinct packed regions. A sibling
+    // bookend still needs travel: its cinematic controller is absent in gameplay's world.
     const std::string_view name(reinterpret_cast<const char*>(destination.packageName.data()),
                                 destination.packageNameLength);
     ::sunrise::state::build_data::scenarios::Definition layout{};

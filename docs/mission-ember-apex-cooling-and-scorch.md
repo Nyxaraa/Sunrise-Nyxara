@@ -1,38 +1,47 @@
-# Apex cooling, object initialization, and escape scorch
+# 1AU Apex and ending corrections — 6 September 2026
 
-Changes on 2026-09-06:
+## Current implementation
 
-- End the beam surge before publishing clamshell/coffin cooling-door opening. Keep the existing 6-second surge, 10-second exposure, and 14-second closed intervals.
-- On native laser/ring object presence, reapply power and the current pose. Initial commands can precede entity creation; this is a candidate fix for the dark beam before the first surge, pending visual confirmation. Late presence after deposit must not relight the beam.
-- Start the escape ship device only after its native object-presence receipt. Unlock, power on, snap to closed, then animate to open. Duplicate presence does not restart it. Authored flight playback remains to be verified in game; the script does not synthesize a flight path.
-- Remove the added rail-wide thermal attachment during escape. Deposit already creates SUNBURN_DAMAGE_OBJECT, while the old script additionally attached REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON to the rails. The escape-end trigger removed only that attachment. This matches the report that damage becomes normal after reaching the end. Preserve the native sunburn object and retire the climb attachment on entering escape. No global damage multiplier is changed; exact damage rate still needs playtesting.
+- Cooling doors open after the surge stops. Visual/mechanical intervals remain 14 seconds closed, 6 seconds surging, 10 seconds exposed.
+- The user confirmed those visuals/mechanics align, but hears the surge at cooling-door opening. Audio sequences now pre-roll at closed-window second 8, six seconds before the visual surge. This is playtest-based compensation, not a recovered native delay parameter. Pending audio is phase/region/generation guarded and cancelled on reset, core destruction and deposit.
+- Initial beam: snapping to the resting endpoint still showed the incomplete beam in the first user screenshot. Native device position/power both reached 1. The new candidate seeks the driven endpoint once on laser creation, then animates to the resting endpoint so authored animation events can run. Duplicate presence and late presence after deposit cannot restart it. The target is the second user screenshot's thin, continuous beam. Needs visual confirmation.
+- Escape damage: deposit created SUNBURN_DAMAGE_OBJECT and also attached an extra rail-wide thermal effect. Reaching the end detached only that extra effect, matching the user's report that damage then became normal. The new script retires the climb attachment on deposit and leaves the native sunburn object as the escape damage source. No global damage multiplier changes.
+- Escape ship: wait for native object presence, unlock, power on, seek closed, animate open. Duplicate presence does not restart it. Flight remains subject to visual testing.
 
-Package evidence correction: config 80B3D494 (ship) and 80B3D497 (sunburn) both contain fallback resource 80BFDDC2 at offset 0x538. Their actual first placed entries at offset 0x580 are respectively 80B71228 and 80B82486. Do not use the fallback model to infer ship capabilities. Ship model 80B71228 includes device component 80C70C0E and animation component 80B71226. Device placement identity 42BF7017F2901B45 matches the placed ship. Model component references have 12-byte stride, not 16.
+## Escape trigger evidence
 
-Validation: all five mission Lua suites pass. Route peak: 235 variables, 61 intents per callback, three concurrent timers, 13,000 Lua instructions including the mock. Tests cover cooling command order, beam presence, deferred ship activation, duplicate ship receipts, and disabling the extra escape burn.
+The tested installed run resolved `AD062E98 / type 31 / slot 2`, volume 17, at t=451535. This is APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER. At t=451650 it selected the ending state; at t=452290 cinematic authority was staged. Therefore the escape trigger fired. The failure followed it.
 
-Still unresolved: exact native ending-readiness failure and full-screen surge distortion. The diagnostic DLL commit fe45d11 improves visibility but does not itself fix cinematic playback. Do not reinstate the reverted cinematic-region ordinal encoding: it caused Lime.
+## Ending: corrected native-world model
 
-## Ending roster correction
+The contributor's IKORA-ANIMATION-AND-ENDING.md describes retirement, native travel, exact resource/owner readiness, offered authority, revision-qualified active playback, inactive completion and post-cinematic handoff. Its Omega-specific asset/event hashes are not Ember inputs.
 
-The 15:52:37 stalled-run capture contains 491 allocated sync records and no type-6 cinematic record. All allocated records have byte 20 set to 1; its exact native readiness meaning is not established. This capture does not demonstrate Omega's 19-unseeded-record condition.
+Earlier Ember code incorrectly treated packed regions 0, 1 and 2 as one instantiated world because they share bubble 0. Direct native instruction inspection corrected this:
 
-The roster's transitionPublication predicate still compared heldRegion directly against selectedRegion. Thus held Apex region 0 / selected bookend region 1 withheld state-local groups even after the separate arrival-window check accepted the shared world. Apply the shared-world arrival rule to the roster subset too. Both bookends may then publish while the player holds Apex; genuine world changes and unknown held-world state still defer local records.
+- 4C8E60 registers the base world at bubble*8.
+- 4C8E40 registers alternates at bubble*8+(alternateIndex+1).
+- 436530 rejects global per-bubble state bytes >=1 and separately registers alternate entries. The message-1 byte is not how to select an ending variant. Leave that encoding unchanged; the reverted experiment caused Lime.
 
-This is isolated from the reverted global-message state-byte experiment. Global state encoding is unchanged. Release build and all 22 portable tests pass, including the production subset predicate. Native movie creation and playback need a live test; do not treat server cinematic_staged as proof of playback.
+The 16:20:23 stalled capture contains 479 allocated sync records and no type 6. Publishing a roster subset without actual native travel did not create the movie controller. This supersedes the same-world hypothesis and the insufficient 7ff004d roster-only fix.
 
-## Follow-up from IKORA-ANIMATION-AND-ENDING.md and live screenshots
+Current candidate:
 
-Read contributor guide `/home/millie/Documents/Sunrise-docs/MissionDocs/IKORA-ANIMATION-AND-ENDING.md`. Its current implementation distinguishes native retirement, travel arrival, exact resource/owner readiness, offered authority, revision-qualified active playback, and inactive completion. Scene VFX require the correct source bindings and retained authored external inputs; Omega event hashes are not transferable to Ember.
+1. Exact escape trigger claims the ending once.
+2. Select bookend region 1; native message-12 travel is armed even though its bubble matches Apex.
+3. The arrival lease closes only on exact packed-region arrival. Ordinary traversal can satisfy an already-held exact destination, but base Apex 0 cannot satisfy bookend 1.
+4. Lua waits for held_region_index=1 before offering type-6 playback. A pending/current-only report does not offer it. Existing host publication gates still apply.
+5. Only the exact controller's started incident records playback. Preserve its runtime-object identity as a string.
+6. Skip sends stop authority; it does not complete the movie. Only the matching native terminated incident after start advances to bookend 2, which goes through its own travel/arrival/offer.
+7. Complete native lifetime only after the second movie finishes. Ignore stale, unstarted, wrong-controller and duplicate receipts. Gameplay callbacks stop publishing encounter actions once the ending owns the route.
 
-Prepared Lua changes:
+Remaining differences from the full Omega contract: no explicit native old-roster retirement receipt, resource/owner readiness bridge, or controller-revision-qualified completion bridge has been implemented yet. Current guards use typed native incidents and exact travel arrival. Do not claim the complete guide has been ported or live playback has succeeded. Native movie creation/playback and teardown are the next live checkpoints. Compare existing message-12 hash/token handling with the contributor's spawn-set/token description if arrival stalls.
 
-- Beam startup: a presence receipt followed only by a snap to position 1 still reproduced the incomplete beam. The live device reported position/power 1. On the first laser presence for each generation, seek the driven endpoint, then animate to the resting endpoint so animation events have an opportunity to run. This is a candidate fix requiring visual confirmation against the user's second screenshot (thin continuous beam). Duplicate presence and post-deposit presence cannot restart it.
-- Surge audio: user confirms visuals and mechanics now align, but the sound arrives when cooling doors open. Request the authored alarm sequences at 8 seconds into the unchanged 14-second closed window, six seconds before the visual surge. This is playtest-based compensation, not a recovered native six-second delay parameter. Preserve the 6-second surge and 10-second exposure. Cancel pending audio on reset/core destruction/deposit, and guard region, phase and generation.
-- Ending lifecycle: publishing play is now an offer; only the exact controller's started incident records playing. Retain its runtime object identity as a string. Skip requests stop authority and waits for the matching terminated incident. Ignore unstarted, wrong-controller and stale-object completion. The native controller revision/resource-owner bridge described by Omega is still not implemented; these incident guards are not equivalent to that full contract.
+## Package evidence correction
 
-New stalled-ending evidence after installed 7ff004d: capture `build/first-encounter-audit/reactor-runtime-20260906-162023` has 479 allocated records and no type 6. Fixing roster subset publication was insufficient to instantiate the bookend. Investigate native travel/resource loading before adding more play revisions.
+Config 80B3D494 (ship) and 80B3D497 (sunburn) share fallback resource 80BFDDC2 at offset 0x538. Their actual placed entries at 0x580 are 80B71228 and 80B82486. Ship model 80B71228 includes device component 80C70C0E and animation component 80B71226; placement 42BF7017F2901B45 matches its device. Component references have 12-byte stride. Do not infer ship capabilities from the fallback model.
 
-Native Lime evidence: `436530` explicitly rejects a nonnegative per-bubble state byte >=1. It registers alternate entries through a separate path (`4C8E40`) in the subsequent loop. The global message-1 byte is not the route to selecting Ember bookend ordinal 1/2. Keep its encoding unchanged. Compare Ember's message-12 transit against the guide: local code labels the hash a slice-set hash and advances a world-transition token, while the guide identifies a spawn-set hash and separately echoes native transition tokens. Those differences require instruction/packet verification before changing travel behavior.
+## Validation and outstanding work
 
-All five Lua suites passed after the lifecycle/startup changes; the route suite also passes the audio follow-up (237 variables, 61 intents per event, four timers). No live verification of these follow-ups yet.
+Release build, all 22 portable tests and all five mission Lua suites pass. Route peak: 238 variables, 61 intents per event, four timers, 13,000 Lua instructions including mock. Coverage includes exact bookend arrival, stale native incidents, skip/finish ordering, audio pre-roll, cooling order, startup deduplication and removal of stacked escape scorch.
+
+The full-screen surge effect is still unresolved. The new guide points to authored Scene inputs/source bindings; no arbitrary Omega event hash or substitute damage effect has been added.

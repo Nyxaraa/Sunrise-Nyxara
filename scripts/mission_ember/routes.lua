@@ -10,9 +10,8 @@ return function(m)
     controllers[0] = require("mission_ember.apex")(m, a, ending)
     local R = {}
     function R.client(c, s, e)
-        -- Once the ending owns the mission the route stops driving anything. The bookends
-        -- need no client report: they are queued with their own state selection.
-        if s:variable("ember.ending") then return end
+        -- Native travel must reach the exact bookend before playback is offered.
+        if s:variable("ember.ending") then ending.client(c, s, e); return end
         local active = controllers[s:variable("ember.region")]
         if not active then return end
         if not s:variable("ember.later.owns_hud") then
@@ -31,6 +30,7 @@ return function(m)
         if active.guidance then active.guidance(c, s) end
     end
     function R.dispatch(method, c, s, e)
+        if s:variable("ember.ending") then return end
         if method == "timer" then
             for _, region in ipairs({56, 40, 0}) do
                 local controller = controllers[region]
@@ -41,7 +41,9 @@ return function(m)
         local active = controllers[s:variable("ember.region")]
         if active and active[method] then return active[method](c, s, e) end
     end
-    function R.squad(c, s, e) a.squad(c, s, e) end
+    function R.squad(c, s, e)
+        if not s:variable("ember.ending") then a.squad(c, s, e) end
+    end
     function R.reset(c, s)
         local active = controllers[s:variable("ember.checkpoint.region")]
         assert(active, "checkpoint has no encounter controller")

@@ -372,11 +372,7 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
     const state::activity::membership::ClientPlacement placement =
         client_placement(session, refresh);
     const std::int32_t heldRegion = state::activity::membership::instantiated_region(placement);
-    // The window closes on arrival, and also when no arrival can ever be reported because the
-    // pending region is a sibling state of the slice set the client already holds. Leaving it open
-    // there is fatal rather than cautious: the roster refuses to commit a published revision while
-    // it is set, so the lease never publishes, every scene lease on the new state reports a
-    // pending mission seed, and the selection's own gate is skipped so nothing else notices.
+    // Close only on the exact packed-region receipt, including cinematic variants.
     if (!adopting && lease.regionArrivalPending
         && mission_seed_arrival_window_closed(
             heldRegion,
@@ -503,8 +499,7 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
             publicRegion = isPublic;
         }
     }
-    // Arrival was already accepted for a sibling state above. Apply that same rule to
-    // the content subset, or the lease commits without ever registering its movie controller.
+    // Apply the same exact-arrival rule to the content subset and the lease.
     const bool transitionPublication = mission_seed_transition_subset_only(
         lease.fullSetPublished, lease.scriptSelected, publicRegion,
         heldRegion, selectedRegion, summary.sliceSetIndex,
