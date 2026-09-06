@@ -44,6 +44,8 @@ struct Settings {
      * suppresses the orbit-side entry cinematic.
      */
     bool skipOrbitCinematicWait{false};
+    /** Force LoadingCinematics_Suppressed before travel; authored mission movies stay native. */
+    bool suppressLoadingCinematics{false};
     /**
      * Forces the peer channel to connect directly instead of through a NAT relay.
      * The stock client always relays the gameplay peer channel, which cannot complete against a

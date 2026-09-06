@@ -212,8 +212,13 @@ return function(m, a, ending)
             a.device(c, "MOTHER_BRAIN_CONSOLE_DEVICE", true)
             a.device(c, "MOTHER_BRAIN_ENGINE_LEFT_DEVICE", true)
             a.device(c, "MOTHER_BRAIN_ENGINE_RIGHT_DEVICE", true)
-            a.device(c, "REACTOR_GETAWAY_SHIP_DEVICE", true)
             a.objects(c, {"REACTOR_GETAWAY_SHIP_OBJECT", "SUNBURN_DAMAGE_OBJECT"}, true)
+            -- The escape ship has no authored flight path: the four Harvesters own the only
+            -- type-58 sequences in the mission, so this ship travels on its own device's
+            -- position lane. That device was never unlocked or powered, which is the same
+            -- omission that left the weapon beam inert, so it held its start pose.
+            unlock(c, "REACTOR_GETAWAY_SHIP_DEVICE")
+            a.device(c, "REACTOR_GETAWAY_SHIP_DEVICE", true)
             -- The weapon is dead once the cell is in: powered off but still installed, so
             -- the beam and everything built around it stay in the world. The previous code
             -- opened both devices here, which left it running through the whole escape.

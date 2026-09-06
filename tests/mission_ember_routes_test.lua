@@ -333,7 +333,19 @@ call(R.dispatch,'object',c,s,event('MOTHER_BRAIN_CARRY_OBJECT',{generation=1,pre
 timer('ember.carry.recover.apex.')
 assert(vars['ember.carry.apex.generation']==3 and vars['ember.apex.phase']==5)
 use('MOTHER_BRAIN_CARRY_OBJECT',1);use('MOTHER_BRAIN_INTERACT_OBJECT');assert(vars['ember.apex.phase']==5)
+local depositStart=#calls
 use('MOTHER_BRAIN_CARRY_OBJECT',3);use('MOTHER_BRAIN_INTERACT_OBJECT');assert(vars['ember.apex.phase']==6)
+-- The device cannot animate an absent object or one left locked/unpowered.
+local shipSteps={}
+for i=depositStart+1,#calls do
+    local row=calls[i]
+    if row[2]==slotDefs[m.Slot.REACTOR_GETAWAY_SHIP_OBJECT].name and row[1]=='set_object_active' and row[3].active then
+        shipSteps[#shipSteps+1]='spawn'
+    elseif row[2]==slotDefs[m.Slot.REACTOR_GETAWAY_SHIP_DEVICE].name and row[1]=='transition' then
+        shipSteps[#shipSteps+1]=row[3].transition
+    end
+end
+assert(table.concat(shipSteps,',')=='spawn,unlock,power_on,open', 'escape ship activation order')
 assert(vars['ember.carry.apex.done'] and not vars['ember.carry.apex.held'])
 local before=#calls;use('MOTHER_BRAIN_INTERACT_OBJECT');assert(#calls==before)
 call(R.dispatch,'object',c,s,event('MOTHER_BRAIN_CARRY_OBJECT',{generation=3,present=false,alive=false}))
@@ -382,7 +394,7 @@ reset_check('escape',function()
 end)
 trigger('APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER')
 -- Regions 0, 1 and 2 are sibling states of one slice set, so the client never reports a new
--- held region. The bookend is activated on a later callback, never in the selecting one.
+-- held region. Both the selection and activation must be queued in this callback.
 -- No teleport is armed for a sibling state, so no further client report arrives. The movie
 -- must be queued with its own selection or it never starts.
 assert(vars['ember.ending']==1 and vars['ember.ending.playing']==1,'first movie never started')

@@ -63,4 +63,13 @@ mission_seed_arrival_window_closed(std::int32_t heldRegion,
            || held - (held % sliceSetFactor) == pendingSliceSetIndex;
 }
 
+/** A stale seed plan must not reopen arrival after ordinary traversal reached the target world. */
+[[nodiscard]] constexpr bool mission_seed_selection_needs_arrival(
+    std::uint32_t oldSliceSet, std::uint32_t oldRegion,
+    std::uint32_t newSliceSet, std::uint32_t newRegion,
+    std::int32_t heldRegion, std::uint32_t factor) noexcept {
+    return mission_seed_region_change_replaces_world(oldSliceSet, oldRegion, newSliceSet, newRegion)
+        && !mission_seed_arrival_window_closed(heldRegion, newRegion, newSliceSet, factor);
+}
+
 } // namespace sunrise::server::bap::encrypted::push::activity

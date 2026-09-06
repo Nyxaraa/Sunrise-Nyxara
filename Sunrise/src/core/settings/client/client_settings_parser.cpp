@@ -15,6 +15,7 @@ bool Parser::client_settings(client::Settings& output) noexcept {
     bool hasSkipProfileSetup = false;
     bool hasRegionPrivate = false;
     bool hasSkipOrbitCinematicWait = false;
+    bool hasSuppressLoadingCinematics = false;
     bool hasSuppressPeerRelay = false;
     bool hasPinReplicatedRecord = false;
     bool hasHoldSpawn = false;
@@ -65,6 +66,11 @@ bool Parser::client_settings(client::Settings& output) noexcept {
                 return false;
             }
             hasSkipOrbitCinematicWait = true;
+        } else if (key == "suppress_loading_cinematics") {
+            if (hasSuppressLoadingCinematics || !boolean(candidate.suppressLoadingCinematics)) {
+                return false;
+            }
+            hasSuppressLoadingCinematics = true;
         } else if (key == "suppress_peer_relay") {
             if (hasSuppressPeerRelay || !boolean(candidate.suppressPeerRelay)) {
                 return false;

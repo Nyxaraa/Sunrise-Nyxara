@@ -28,6 +28,7 @@ constexpr std::array kFixes{
     Fix{&stage_profile_setup_skip, &publish_profile_setup_skip},
     Fix{&stage_composition_check, &publish_composition_check},
     Fix{&stage_orbit_handoff, &publish_orbit_handoff},
+    Fix{&stage_loading_cinematics, &publish_loading_cinematics},
     Fix{&stage_owner_activity_slot, &publish_owner_activity_slot},
     Fix{&stage_region_private, &publish_region_private},
     Fix{&stage_spawn_hold, &publish_spawn_hold},
@@ -115,6 +116,7 @@ void uninstall() noexcept {
     uninstall_world_step();
     uninstall_region_private();
     uninstall_owner_activity_slot();
+    uninstall_loading_cinematics();
     uninstall_orbit_handoff();
     uninstall_composition_check();
     uninstall_profile_setup_skip();
