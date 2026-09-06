@@ -42,7 +42,6 @@ append_global_state_notification(Scratch& scratch,
                                  std::span<const std::byte, state::kAesKeySize> key,
                                  std::array<std::byte, state::kBapNonceSize>& nonce,
                                  std::span<std::byte> response,
-                                 std::size_t& written,
-                                 const ActivityMissionSeedPlan* selected = nullptr) noexcept;
+                                 std::size_t& written) noexcept;
 
 } // namespace sunrise::server::bap::encrypted::push::activity

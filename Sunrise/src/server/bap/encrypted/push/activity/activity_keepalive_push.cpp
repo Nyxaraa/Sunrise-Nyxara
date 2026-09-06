@@ -338,8 +338,7 @@ bool consume_activity_keepalive(Session& session,
         return delivered;
     }
     published = append_global_state_notification(
-        scratch, session.activity.session, key, nextSendNonce, scratch.framed, framedSize,
-        session.activityMissionSeed.configured ? &session.activityMissionSeed.plan : nullptr);
+        scratch, session.activity.session, key, nextSendNonce, scratch.framed, framedSize);
     const bool appendedReplicationEpoch =
         append_replication_epoch(session, scratch, key, nextSendNonce, scratch.framed, framedSize);
     published = appendedReplicationEpoch || published;

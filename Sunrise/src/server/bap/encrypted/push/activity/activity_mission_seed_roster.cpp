@@ -505,10 +505,8 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
     }
     const bool transitionPublication =
         !lease.fullSetPublished
-        && ((!lease.scriptSelected && !publicRegion)
-            || !mission_seed_arrival_window_closed(
-                heldRegion, selectedRegion, plan.sliceSetIndex,
-                middleware::content::packages::tables::kSliceSetIndexFactor));
+        && ((!lease.scriptSelected && !publicRegion) || heldRegion < 0
+            || static_cast<std::uint32_t>(heldRegion) != selectedRegion);
     for (std::size_t source = 0; source < foldGroupCount; ++source) {
         const layouts::RosterGroup& candidate = materialized[source];
         if (!layouts::valid_roster_group(candidate)) {
