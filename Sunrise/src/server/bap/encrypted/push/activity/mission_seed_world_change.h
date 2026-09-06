@@ -72,4 +72,11 @@ mission_seed_arrival_window_closed(std::int32_t heldRegion,
         && !mission_seed_arrival_window_closed(heldRegion, newRegion, newSliceSet, factor);
 }
 
+/** Message 1 uses a bias-128 signed state ordinal, not a state-presence boolean. */
+[[nodiscard]] constexpr std::uint8_t mission_seed_state_wire_byte(
+    std::uint32_t region, std::uint32_t sliceSet, std::uint32_t factor) noexcept {
+    return factor != 0 && region >= sliceSet && region - sliceSet < factor
+        && region - sliceSet < 128 ? static_cast<std::uint8_t>(128 + region - sliceSet) : 128;
+}
+
 } // namespace sunrise::server::bap::encrypted::push::activity

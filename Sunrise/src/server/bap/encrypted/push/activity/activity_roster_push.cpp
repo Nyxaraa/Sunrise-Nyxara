@@ -1,3 +1,4 @@
+#include "activity_global_state_push.h"
 #include "activity_roster_push.h"
 
 #include <Windows.h>
@@ -429,7 +430,11 @@ bool append_roster_notification(
         && stagedMissionSeed.bindingGeneration == session.activity.bindingGeneration
         && stagedMissionSeed.revision != stagedMissionSeed.publishedRevision
         && !stagedMissionSeed.regionArrivalPending;
-    bool encoded = message::encode_sensor_auth_update(snapshot, scratch.responseBody, messageSize);
+    // Publish the authored state ordinal before its roster and cinematic authority.
+    // This also prevents a later keepalive from restoring the default gameplay state.
+    bool encoded = !missionSeedPending || append_global_state_notification(
+        scratch, session.activity.session, key, nonce, response, written, &stagedMissionSeed.plan);
+    encoded = encoded && message::encode_sensor_auth_update(snapshot, scratch.responseBody, messageSize);
     // An unsolicited body identical to the last delivered one is skipped. A solicited one never
     // is. The repeat check knows only this host's own history, and a slice-set teardown clears
     // the client's mirror without telling us, which is exactly when it asks again.

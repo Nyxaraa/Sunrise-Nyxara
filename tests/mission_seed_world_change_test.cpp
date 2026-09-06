@@ -107,6 +107,13 @@ void arrival_window_stays_open_across_a_real_slice_set_change() {
 } // namespace
 
 int main() {
+    assert(seed::mission_seed_state_wire_byte(0, 0, 8) == 0x80);
+    assert(seed::mission_seed_state_wire_byte(1, 0, 8) == 0x81);
+    assert(seed::mission_seed_state_wire_byte(2, 0, 8) == 0x82);
+    assert(seed::mission_seed_state_wire_byte(49, 48, 8) == 0x81);
+    assert(seed::mission_seed_state_wire_byte(64, 64, 8) == 0x80);
+    assert(seed::mission_seed_state_wire_byte(0, 64, 8) == 0x80);
+
     // Real full-mission case: the last explicit seed is the landing, but ordinary
     // traversal already brought the player to Apex before selecting its ending.
     assert(!seed::mission_seed_selection_needs_arrival(64, 64, 0, 1, 0, 8));

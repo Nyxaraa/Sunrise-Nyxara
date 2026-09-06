@@ -13,6 +13,7 @@
 #include "../../../../../state/activity/runtime.h"
 #include "../../../../../state/build_data/runtime.h"
 #include "activity_arrival.h"
+#include "mission_seed_world_change.h"
 #include "activity_notification_frame.h"
 
 namespace sunrise::server::bap::encrypted::push::activity {
@@ -107,11 +108,20 @@ bool append_global_state_notification(Scratch& scratch,
                                       std::span<const std::byte, state::kAesKeySize> key,
                                       std::array<std::byte, state::kBapNonceSize>& nonce,
                                       std::span<std::byte> response,
-                                      std::size_t& written) noexcept {
+                                      std::size_t& written,
+                                      const ActivityMissionSeedPlan* selected) noexcept {
     message::GlobalActivityState body{};
     state::activity::destination::DestinationSelection selection{};
     if (written > response.size() || !resolve_state(binding, body, selection)) {
         return false;
+    }
+
+    if (selected != nullptr && selected->bubbleOrdinal < body.bubbleCount) {
+        // Message 1 owns the native per-bubble state ordinal. Registering a roster
+        // for bookend 1 while this remains zero leaves its controller uninstantiated.
+        body.bubbleStates[selected->bubbleOrdinal] = mission_seed_state_wire_byte(
+            selected->effectiveRegion, selected->sliceSetIndex,
+            middleware::content::packages::tables::kSliceSetIndexFactor);
     }
 
     const std::size_t initialWritten = written;

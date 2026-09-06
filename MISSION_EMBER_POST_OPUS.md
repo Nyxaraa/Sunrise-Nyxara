@@ -36,4 +36,16 @@ Installed DLL SHA-256: `be4ea67c9399c4f08c41eac25f9ed2f27152dff9876b449e8d0d60e7
 
 ## Scope correction
 
-Loading suppression is now limited to 1AU using the native loading activity reader above. The corrected Release DLL built successfully, and offline signature/call validation passed. Installation was deferred because the game was running; the installed DLL still has the earlier global override until this build is copied after the game closes. The scope-only installer is `/tmp/install-ember-loading-scope.py` and preserves settings, saves and scripts.
+Loading suppression is now limited to 1AU using the native loading activity reader above. The corrected Release DLL built successfully, and offline signature/call validation passed. The initial installation was deferred while the game was running; the correction is now installed with the ending-state candidate below. The scope-only installer is `/tmp/install-ember-loading-scope.py` and preserves settings, saves and scripts.
+
+## Ending-state candidate — 15:30
+
+Latest live log: state selected at t538613, cinematic queued at t538623 and staged at t538659, with no cinematic-start incident. Read-only native registry capture at `build/first-encounter-audit/reactor-runtime-20260906-151812` contains nine groups, gameplay Apex and globals, but no ending bookend group or type-6 controller. Thus the earlier lease deadlock is past; staging alone has not instantiated the movie controller.
+
+Message 1 previously always encoded per-bubble state zero (`0x80` after signed bias). It now carries the selected plan's authored state ordinal: STM 1 -> `0x81`, CNN 2 -> `0x82`. That state message precedes a pending seed roster; keepalives and refreshes preserve it. The transition-subset gate also recognises a held sibling world instead of requiring exact equality with its state ordinal. This is an evidence-based candidate; native playback must still be tested.
+
+Release build and all 22 portable tests pass. Added coverage for gameplay, both bookends and the initial cinematic's biased state value. DLL installed after the game closed, with no launch or save/script edits. The pending loading-suppression scope correction is included.
+
+The screen distortion is still unresolved and has NOT been implemented by this candidate. Reference frame 23:40 is saved at `/tmp/ember-reference/surge-screen.jpg`. Existing type-5 sequence Auth supplies no client references; whether the alarm effect needs an authored anchor or participant binding remains unproven. Do not claim an arbitrary heat/damage hop-on is the exact beam screen effect.
+
+DLL SHA-256: `fce6fd3e4b5451a797dee5fa962ed11337c5bd10e796c13d38638abb5405ccdf`. Backup: `/home/millie/Documents/Sunrise-builds/mission-ember/build/loading-scope-install-backup-20260906-153021`.
