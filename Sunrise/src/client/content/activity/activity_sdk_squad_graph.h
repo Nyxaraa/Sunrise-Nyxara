@@ -158,6 +158,8 @@ struct GraphReferenceDescriptor final {
 /** One decoded raw 0x98 or 0xA0 spawner reference and its complete resolution evidence. */
 struct GraphReference final {
     std::uint32_t spawnerRow{format::kAbsentIndex};
+    /** Exact occurrence-scoped source when one config is reused by separate scenarios. */
+    std::uint32_t sourceDescriptorRow{format::kAbsentIndex};
     std::uint32_t referenceOrdinal{};
     std::uint64_t rawReference{};
     std::uint32_t targetObjectKey{};

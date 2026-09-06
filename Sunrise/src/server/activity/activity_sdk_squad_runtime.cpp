@@ -1,5 +1,6 @@
 #include "activity_sdk_squad_runtime.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <string_view>
@@ -62,11 +63,6 @@ struct PreparedSquad final {
     return Status::invalidView;
 }
 
-/** @return True only for the two numeric modes accepted by the proved type-1 schema. */
-[[nodiscard]] bool valid_mode(squad_auth::Mode mode) noexcept {
-    return mode == squad_auth::Mode::mode0 || mode == squad_auth::Mode::mode2;
-}
-
 /** Validates the exact authored member vector and every requested safe bound. */
 [[nodiscard]] Status member_status(const sdk::Catalog& catalog,
                                    const format::Squad& squad,
@@ -100,8 +96,11 @@ struct PreparedSquad final {
     const auto members = sdk::squad_members(catalog, squad);
     const auto actors = catalog.actor_classes();
     bool found = false;
+    // A named type-2 member needs its parent's authored profile but zero loose actors.
+    const bool loose = std::any_of(requestedCounts.begin(), requestedCounts.end(),
+                                    [](auto count) { return count > 0; });
     for (std::size_t index = 0; index < members.size(); ++index) {
-        if (requestedCounts[index] <= 0) {
+        if (loose && requestedCounts[index] <= 0) {
             continue;
         }
         const format::SquadMember& member = members[index];
@@ -306,7 +305,7 @@ struct PreparedSquad final {
     if (liveStatus != Status::ready) {
         return liveStatus;
     }
-    if (!valid_mode(mode)) {
+    if (!squad_auth::valid_mode(mode)) {
         return Status::invalidMode;
     }
 

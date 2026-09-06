@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <span>
 #include <string_view>
 
@@ -124,6 +125,8 @@ constexpr std::size_t kRecordTransformOffset = 0xA0;
 constexpr std::size_t kRecordTransformDwords = 8;
 /** Seconds between censuses. Short enough to catch a bubble soon after it settles. */
 constexpr DWORD kCensusIntervalMs = 15'000;
+/** Small info-level sample remains available when verbose entity tracing is disabled. */
+void report_simulation_pressure() noexcept;
 /**
  * Most recent manager the allocator was handed.
  * The census needs the free bitmap to tell a live record from one an entity left behind, and the
@@ -336,7 +339,9 @@ void report_pair(const char* stage,
                  const char* outcome,
                  std::int64_t detail,
                  std::int64_t allocations) noexcept {
-    if (!core::log::accepts(core::log::Channel::client, core::log::Level::debug)
+    const auto level = std::string_view(outcome) == "exhausted"
+        ? core::log::Level::warn : core::log::Level::debug;
+    if (!core::log::accepts(core::log::Channel::client, level)
         || InterlockedIncrement(&g_reports) > kMaxReports) {
         return;
     }
@@ -350,7 +355,7 @@ void report_pair(const char* stage,
                                       static_cast<long long>(allocations));
     if (written > 0) {
         core::log::write(core::log::Channel::client,
-                         core::log::Level::debug,
+                         level,
                          {line.data(), static_cast<std::size_t>(written)});
     }
 }
@@ -1030,6 +1035,7 @@ DWORD WINAPI census_thread(LPVOID unused) noexcept {
         if (g_censusRunning == 0) {
             break;
         }
+        report_simulation_pressure();
         run_census();
     }
     return 0;
@@ -1101,6 +1107,121 @@ bool install_entity_create_probe(bool stockUnstockedPool, bool restockAlways) no
     // wrong and black-screened the load. It does not need hooking anyway: the allocator alone
     // answers the question, because the initialiser only runs when the allocator succeeded.
     return allocator;
+}
+
+namespace {
+// Original 16CC5D0 only returns the native failure-state pointer. It does not reset
+// the reason. Read it while the creation-failure log is emitted, before 16EE180
+// replaces the more specific reason with generic entity-creation failure (12).
+[[nodiscard]] int native_creation_failure_reason(std::uintptr_t base) noexcept {
+    constexpr std::uintptr_t rva = 0x16CC5D0;
+    constexpr std::array<unsigned char,13> prefix{
+        0x40,0x53,0x48,0x83,0xEC,0x20,0x48,0x8B,0x1D,0x2B,0x57,0x98,0x01};
+    __try {
+        if (base == 0 || std::memcmp(reinterpret_cast<const void*>(base+rva),
+                                     prefix.data(),prefix.size()) != 0) return -1;
+        using Getter = const int* (__fastcall*)();
+        const auto* state = reinterpret_cast<Getter>(base+rva)();
+        return state == nullptr ? -1 : *state;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+// 170B2B0 allocates from a separate 1024-record global bitmap. Free network
+// indices alone cannot establish room for a simulation record or its state.
+[[nodiscard]] int simulation_record_count(std::uintptr_t base) noexcept {
+    constexpr std::uintptr_t bitmapRva = 0x26BE0E0 + 2607256ULL * 4;
+    __try {
+        if (base == 0) return -1;
+        const auto* words = reinterpret_cast<const std::uint32_t*>(base+bitmapRva);
+        int used = 0;
+        for (std::size_t i=0;i<32;++i) used += static_cast<int>(__popcnt(words[i]));
+        return used;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+
+struct ReplicationCensus {
+    int authorityRecords{};
+    int detached{};
+    int views{};
+    int enabled{};
+    int pendingDeletes{};
+    int packetViews{};
+    int authorityEpoch{};
+    bool operator==(const ReplicationCensus&) const = default;
+};
+
+// Diagnostic reads only. Native records remain owned by their ordinary deletion
+// and acknowledgement handlers; a census must never free or alter them.
+[[nodiscard]] bool read_replication_census(std::uintptr_t base,
+                                          ReplicationCensus& result) noexcept {
+    __try {
+        if (base == 0) return false;
+        const auto* bitmap = reinterpret_cast<const std::uint32_t*>(base + 0x30B0340);
+        const auto* records = reinterpret_cast<const std::byte*>(base + 0x30B0440);
+        for (unsigned index = 0; index < 1024; ++index) {
+            if ((bitmap[index / 32] & (1U << (index % 32))) == 0) continue;
+            const auto* record = records + index * 112;
+            if (*reinterpret_cast<const std::uintptr_t*>(record + 96) == 0) continue;
+            ++result.authorityRecords;
+            if (*reinterpret_cast<const std::uint32_t*>(record + 4) == 0xFFFFFFFFU)
+                ++result.detached;
+        }
+        const auto* manager = static_cast<const std::byte*>(
+            InterlockedCompareExchangePointer(&g_lastPool, nullptr, nullptr));
+        if (manager == nullptr) return true;
+        result.authorityEpoch = std::to_integer<unsigned char>(manager[53284]);
+        for (unsigned index = 0; index < 31; ++index) {
+            const auto* view = *reinterpret_cast<const std::byte* const*>(manager + 24 + index * 8);
+            if (view == nullptr) continue;
+            if (*reinterpret_cast<const std::uintptr_t*>(view) != base + 0x1C9ADD8) return false;
+            ++result.views;
+            if (view[8] != std::byte{} && view[9] != std::byte{} && view[10] != std::byte{})
+                ++result.enabled;
+            result.pendingDeletes += *reinterpret_cast<const int*>(view + 48);
+            if (*reinterpret_cast<const std::uintptr_t*>(view + 32) != 0) ++result.packetViews;
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+void report_simulation_pressure() noexcept {
+    // This census has one reader thread. Report pressure and its eventual recovery,
+    // so the next mission test can show records being freed before a Bird failure.
+    static int previous = -1;
+    const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+    const int used = simulation_record_count(base);
+    if (used >= 0 && used != previous) {
+        core::log::writef(core::log::Channel::client, core::log::Level::info,
+            "ev=simulation_records stage=pressure used=%d previous=%d capacity=1024",
+            used, previous);
+    }
+    previous = used;
+    static ReplicationCensus previousReplication{};
+    static bool haveReplication = false;
+    ReplicationCensus current{};
+    if (read_replication_census(base, current)
+        && (!haveReplication || !(current == previousReplication))) {
+        core::log::writef(core::log::Channel::client, core::log::Level::info,
+            "ev=entity_replication stage=census authority_records=%d authority_capacity=512 "
+            "detached=%d views=%d enabled=%d pending_deletes=%d packet_views=%d authority_epoch=%d",
+            current.authorityRecords, current.detached, current.views, current.enabled,
+            current.pendingDeletes, current.packetViews, current.authorityEpoch);
+        previousReplication = current;
+        haveReplication = true;
+    }
+}
+}
+
+/** The retail Bird line is also used for initializer failure with free indices remaining. */
+void report_entity_create_failure_pool() noexcept {
+    const auto* pool = InterlockedCompareExchangePointer(&g_lastPool, nullptr, nullptr);
+    core::log::writef(core::log::Channel::client, core::log::Level::warn,
+        "ev=entity_create_failure stage=pool free=%lld allocations=%ld",
+        static_cast<long long>(free_slot_count(pool)), static_cast<long>(g_allocations));
+    const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+    core::log::writef(core::log::Channel::client, core::log::Level::warn,
+        "ev=entity_create_failure stage=native reason=%d simulation_records=%d capacity=1024 "
+        "reason_11=state_heap reason_14=simulation_records reason_15=authority_records",
+        native_creation_failure_reason(base), simulation_record_count(base));
 }
 
 /** Detaches the entity-creation probes. */

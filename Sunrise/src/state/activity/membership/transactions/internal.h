@@ -90,6 +90,7 @@ inline MembershipState merge(const MembershipState& state,
     }
     if (update.hasSpawn) {
         merged.spawn = update.spawn;
+        merged.hardWipe.observe(update.spawn);
     }
     if (update.hasTeleport) {
         merged.teleport = update.teleport;
@@ -158,6 +159,8 @@ inline bool equal_authoritative(const MembershipState& first,
            && first.hasTransitionToken == second.hasTransitionToken
            && equal(first.spawn, second.spawn) && equal(first.teleport, second.teleport)
            && first.hasHostTeleport == second.hasHostTeleport
+           && first.hardWipe.active == second.hardWipe.active
+           && equal(first.hardWipe.host,second.hardWipe.host)
            && equal(first.hostTeleport, second.hostTeleport)
            && equal(first.currentRegion, second.currentRegion) && equal(first.region, second.region)
            && first.currentReported == second.currentReported
@@ -188,7 +191,7 @@ inline Snapshot make_snapshot(const MembershipState& state,
                               std::uint32_t revision) noexcept {
     Snapshot snapshot{};
     snapshot.identity = identity;
-    snapshot.spawn = state.spawn;
+    snapshot.spawn = state.hardWipe.active ? state.hardWipe.host : state.spawn;
     // An armed host teleport replaces the mirror, because these are the fields the client's
     // teleport arm reads. Everything else about the block stays the client's own report.
     snapshot.teleport = state.hasHostTeleport ? state.hostTeleport : state.teleport;

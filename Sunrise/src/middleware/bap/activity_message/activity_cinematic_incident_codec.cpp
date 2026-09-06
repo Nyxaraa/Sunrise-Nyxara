@@ -23,7 +23,7 @@ constexpr std::int32_t kSlotIndexBias = 32'768;
 /**
  * Maps one global SObject row to its cinematic signal.
  * @param target Global SObject row from the incident header.
- * @param output Set only when the row is one of the two cinematic rows.
+ * @param output Set only when the row is one of the three cinematic rows.
  * @return True when the row names a cinematic signal.
  */
 bool signal_for_target(std::uint32_t target, Signal& output) noexcept {
@@ -33,6 +33,10 @@ bool signal_for_target(std::uint32_t target, Signal& output) noexcept {
     }
     if (target == kTerminatedTarget) {
         output = Signal::terminated;
+        return true;
+    }
+    if (target == kSkipTarget) {
+        output = Signal::skipRequested;
         return true;
     }
     return false;

@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <charconv>
 #include <cstdint>
 #include <limits>
 #include <string_view>
@@ -21,6 +22,31 @@ namespace {
     }
     push_handle(state, kSquadMetatable, SquadHandle{definition.localRow});
     return 1;
+}
+
+[[nodiscard]] int context_restart_checkpoint(lua_State* state) {
+    static_cast<void>(luaL_checkudata(state,1,kContextMetatable));
+    static constexpr std::array<std::string_view,3> fields{"region","spawn_set_hash","release_request"};
+    refuse_unknown_arguments(state,fields);
+    const auto region=optional_integer_argument(state,"region",-1);
+    const auto hash=optional_integer_argument(state,"spawn_set_hash",0);
+    if (region<0 || region>511 || hash<=0 || hash>=UINT32_MAX)
+        return luaL_error(state,"checkpoint requires an authored region and spawn-set hash");
+    std::uint64_t release{};
+    lua_getfield(state,2,"release_request");
+    if (!lua_isnil(state,-1)) {
+        std::size_t length{};
+        const char* value=luaL_checklstring(state,-1,&length);
+        const auto parsed=std::from_chars(value,value+length,release);
+        if (parsed.ec!=std::errc{} || parsed.ptr!=value+length || release==0)
+            return luaL_error(state,"checkpoint release requires the original RequestKey.value");
+    }
+    lua_pop(state,1);
+    Intent intent{};intent.kind=IntentKind::restartCheckpoint;
+    intent.checkpointReleaseRequest=static_cast<std::uint64_t>(release);
+    intent.effectiveRegion=static_cast<std::int32_t>(region);
+    intent.checkpointSpawnHash=static_cast<std::uint32_t>(hash);
+    return queue_intent(state,active_frame(state),intent);
 }
 
 [[nodiscard]] int context_scene(lua_State* state) {
@@ -197,6 +223,8 @@ resolve_message_name(lua_State* state, std::string_view name, ActivityMessageDef
         lua_pushcfunction(state, &context_slot);
     } else if (key == "select_state") {
         lua_pushcfunction(state, &context_select_state);
+    } else if (key == "restart_checkpoint") {
+        lua_pushcfunction(state, &context_restart_checkpoint);
     } else if (key == "set_phase") {
         lua_pushcfunction(state, &context_set_phase);
     } else if (key == "set_variable") {

@@ -9,6 +9,8 @@ namespace sunrise::server::activity::mission::lua_vm::detail {
 [[nodiscard]] std::string_view event_kind_name(lua_State* state, host::EventKind kind) noexcept {
     (void)state;
     switch (kind) {
+    case host::EventKind::fireteamState:
+        return "fireteamState";
     case host::EventKind::senseUpdate:
         return "sensorSenseUpdated";
     case host::EventKind::clientStateChanged:
@@ -45,8 +47,18 @@ namespace sunrise::server::activity::mission::lua_vm::detail {
         return "playerTrigger";
     case host::EventKind::cinematicStarted:
         return "cinematicStarted";
+    case host::EventKind::cinematicSkipRequested:
+        return "cinematicSkipRequested";
     case host::EventKind::cinematicTerminated:
         return "cinematicTerminated";
+    case host::EventKind::actorPathState:
+        return "actorPathState";
+    case host::EventKind::objectInteracted:
+        return "objectInteracted";
+    case host::EventKind::damageState: return "damageState";
+    case host::EventKind::objectState: return "objectState";
+    case host::EventKind::ghostLinkState:
+        return "ghostLinkState";
     case host::EventKind::clientMessageReceived:
         return "clientMessageReceived";
     case host::EventKind::authStateCommitted:
@@ -82,6 +94,8 @@ namespace sunrise::server::activity::mission::lua_vm::detail {
 /** @return The view metatable one kind is pushed with. */
 [[nodiscard]] const char* event_metatable(host::EventKind kind) noexcept {
     switch (kind) {
+    case host::EventKind::fireteamState:
+        return kFireteamStateEventMetatable;
     case host::EventKind::senseUpdate:
         return kSenseUpdateEventMetatable;
     case host::EventKind::clientStateChanged:
@@ -142,8 +156,17 @@ namespace sunrise::server::activity::mission::lua_vm::detail {
         return kPlayerTriggerEventMetatable;
     case host::EventKind::cinematicStarted:
         return kCinematicStartedEventMetatable;
+    case host::EventKind::cinematicSkipRequested:
     case host::EventKind::cinematicTerminated:
         return kCinematicTerminatedEventMetatable;
+    case host::EventKind::actorPathState:
+        return kActorPathEventMetatable;
+    case host::EventKind::objectInteracted:
+        return kObjectInteractionEventMetatable;
+    case host::EventKind::damageState:
+    case host::EventKind::objectState: return kObjectInteractionEventMetatable;
+    case host::EventKind::ghostLinkState:
+        return kGhostLinkEventMetatable;
     }
     return kSenseUpdateEventMetatable;
 }

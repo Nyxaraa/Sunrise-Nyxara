@@ -8,6 +8,7 @@
 #include <span>
 
 #include "peer_transport.h"
+#include "peer_external_ack.h"
 
 namespace sunrise::server::gameplay::peer {
 
@@ -32,18 +33,6 @@ extern const void* g_entityAcceptedContext;
 extern EntityTransport g_entityTransport;
 /** Channel ids this host hands out. The peer refuses one that does not increase. */
 extern std::uint32_t g_channelId;
-
-/** One external outcome copied out before its callback runs. */
-struct CompletedExternal {
-    std::uint64_t groupSessionId{};
-    std::uint64_t transmissionId{};
-    middleware::gameplay::peer::AckOutcome outcome{
-        middleware::gameplay::peer::AckOutcome::unresolved};
-};
-
-/** Every occupied external contribution one link is about to lose. */
-using DisplacedExternals =
-    std::array<CompletedExternal, state::gameplay::external::kExternalContributionCapacity>;
 
 /**
  * Sends one payload over whichever transport the peer arrived on.

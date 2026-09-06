@@ -397,25 +397,11 @@ void consume_established(const gp::Endpoint& from,
     }
     if (guardAccepted) {
         // Reliable queues drain even when a later external component rejects its body.
-        if (externalValid) {
-            for (auto& contribution : peer->externalContributions) {
-                if (!contribution.occupied) {
-                    continue;
-                }
-                const wire::AckOutcome outcome =
-                    wire::acknowledgement_outcome(packet.ack, contribution.packetSequence);
-                if (outcome == wire::AckOutcome::unresolved) {
-                    continue;
-                }
-                completed[completedCount++] = {
-                    contribution.groupSessionId, contribution.transmissionId, outcome};
-                if (outcome == wire::AckOutcome::received && contribution.commonPresent
-                    && contribution.viewGeneration == peer->viewGeneration) {
-                    peer->commonCommitted = true;
-                }
-                contribution = {};
-            }
-        }
+        // ACKs belong to the validated transport header, independently of this
+        // packet's incoming gameplay lanes. An unsupported lane must not pin
+        // every outgoing contribution: after 128 packets that prevents sending
+        // ACKs at all, leaving native deletion recipients permanently pending.
+        completedCount = acknowledge_external(*peer, packet.ack, completed);
         if (packet.ack.outboundHeadPresent) {
             record_sequence(*peer, packet.ack.outboundHead);
         }

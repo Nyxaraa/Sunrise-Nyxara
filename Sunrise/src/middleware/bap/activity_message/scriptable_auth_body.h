@@ -456,6 +456,10 @@ struct Type68Preset final {
     /** Native directive state: 0 enters, 1 completes, and 2 uses the alternate exit state. */
     std::int8_t state{};
     bool visible{true};
+    /** Authored type-47 destination; absent removes the explicit guidance marker. */
+    Type2LaneClientRef navpoint{};
+    /** Player audience checked by native 1009740 before showing the mission banner. */
+    Type2LaneClientRef audience{};
 };
 
 /** One exact type-70 state with both optional authored filter lists absent. */

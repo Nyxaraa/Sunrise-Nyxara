@@ -87,6 +87,13 @@ local EventKind = {
     PLAYER_TRIGGER = 28,
     CINEMATIC_STARTED = 29,
     CINEMATIC_TERMINATED = 30,
+    ACTOR_PATH_STATE = 31,
+    GHOST_LINK_STATE = 32,
+    OBJECT_INTERACTED = 33,
+    CINEMATIC_SKIP_REQUESTED = 34,
+    FIRETEAM_STATE = 35,
+    OBJECT_STATE = 36,
+    DAMAGE_STATE = 37,
 }
 
 ---@class SunriseEvent
@@ -155,6 +162,13 @@ local EventKind = {
             R"lua(event: SunriseCinematicEvent)
 ---@field on_event_cinematic_terminated? fun(context: any, state: SunriseState, )lua"
             R"lua(event: SunriseCinematicEvent)
+---@field on_event_actor_path_state? SunriseEventHandler
+---@field on_event_ghost_link_state? SunriseEventHandler
+---@field on_event_object_interacted? SunriseEventHandler
+---@field on_event_fireteam_state? SunriseEventHandler
+---@field on_event_object_state? SunriseEventHandler
+---@field on_event_damage_state? SunriseEventHandler
+---@field on_event_cinematic_skip_requested? fun(context: any, state: SunriseState, event: SunriseCinematicEvent)
 
 ---@class SunriseVector3
 ---@field x number
@@ -176,6 +190,19 @@ local EventKind = {
 ---@field auth_dynamic boolean|nil
 ---@field auth_writable boolean|nil
 ---@field set_object_active fun(SunriseSlot, SunriseObjectArguments?): SunriseRequestKey
+---@field assign_combat_objective fun(self: SunriseSlot, args: {objective: SunriseSlot, revision: integer, task_group: integer, reserved: boolean?}): SunriseRequestKey
+---@field play_actor_path fun(self: SunriseSlot, args: {generation: integer, revision: integer, path: SunriseSlot}): SunriseRequestKey
+---@field deliver_squads fun(self: SunriseSlot, args: {generation: integer, revision: integer, squads: SunriseSlot[]}): SunriseRequestKey
+---@field deliver_squad fun(self: SunriseSlot, args: {generation: integer, revision: integer, squad: SunriseSlot}): SunriseRequestKey
+---@field play_actor_action fun(self: SunriseSlot, args: {generation: integer, revision: integer, group: integer, action: integer}): SunriseRequestKey
+---@field retire_actor fun(self: SunriseSlot, args: {generation: integer}): SunriseRequestKey
+---@field set_darkness_zone fun(self: SunriseSlot, args: {enabled: boolean, wipe_seconds: integer?}): SunriseRequestKey
+---@field set_interactable_object fun(self: SunriseSlot, args: {generation: integer, track_owner: boolean?, active: boolean?}): SunriseRequestKey
+---@field set_music_section fun(self: SunriseSlot, args: {section: integer, enabled: boolean?}): SunriseRequestKey
+---@field watch_damage fun(self: SunriseSlot, args: {target: SunriseSlot, revision: integer}): SunriseRequestKey
+---@field set_object_filter fun(self: SunriseSlot, args: {players: boolean?, target: SunriseSlot?, inside: SunriseSlot?, inside_any: SunriseSlot[]?}): SunriseRequestKey
+---@field set_mission_effect fun(self: SunriseSlot, args: {filter: SunriseSlot?, enabled: boolean, revision: integer}): SunriseRequestKey
+---@field set_ghost_link fun(self: SunriseSlot, args: {generation: integer, enabled: boolean}): SunriseRequestKey
 ---@field bind_combatant_to_squad fun(self: SunriseSlot): SunriseRequestKey
 ---@field transition fun(SunriseSlot, SunriseDeviceTransitionArguments): SunriseRequestKey
 ---@field fire_trigger fun(self: SunriseSlot): SunriseRequestKey
@@ -207,6 +234,8 @@ local EventKind = {
 ---@class SunriseDirectiveArguments
 ---@field directive table Generated mission directive declaration.
 ---@field state? integer Defaults to 0, the native enter state.
+---@field audience? SunriseSlot Authored type-70 engagement sensor for the mission banner.
+---@field navpoint? SunriseSlot Authored type-47 navigation marker.
 
 ---@class SunriseEngagementArguments
 ---@field flags? integer Five native flag bits; the shipped constructor default is 1.

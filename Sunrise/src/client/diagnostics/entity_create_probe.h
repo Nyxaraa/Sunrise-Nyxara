@@ -28,6 +28,9 @@ namespace sunrise::client::diagnostics {
 [[nodiscard]] bool install_entity_create_probe(bool stockUnstockedPool,
                                                bool restockAlways) noexcept;
 
+/** Reads the current free-slot count at a native entity-creation failure. */
+void report_entity_create_failure_pool() noexcept;
+
 /** Detaches the entity-creation probes. */
 void uninstall_entity_create_probe() noexcept;
 

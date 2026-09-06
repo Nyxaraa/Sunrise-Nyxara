@@ -1,3 +1,5 @@
+#include "../../../middleware/bap/activity_message/sense_observation_packet.h"
+#include "mission_script_event_batch.h"
 #include "mission_script_runtime.h"
 
 #include <Windows.h>
@@ -159,6 +161,67 @@ struct ReloadAuthorization final {
 };
 
 std::array<RuntimeInstance, host::kInstanceCapacity> g_instances{};
+
+[[nodiscard]] PlayerLife own_player_life(const RuntimeInstance& instance) noexcept {
+    if (!instance.occupied || instance.playerLifeGeneration!=instance.view.activityClientGeneration)
+        return PlayerLife::unknown;
+    for (const auto& life:instance.playerLife)
+        if (life.playerKey==instance.playerKey && instance.playerKey!=0) return life.life();
+    return PlayerLife::unknown;
+}
+
+// A private mission's committed destination peers form its joined party. Public
+// activity co-residents must never be treated as a fireteam. Missing or loading
+// party members count as unknown and prevent the all-dead edge.
+void publish_fireteam_life(std::uint64_t now) noexcept {
+    for (auto& instance:g_instances) {
+        if (!instance.occupied || instance.publicTarget || !instance.sessionRosterObserved
+            || instance.programStatus!=ProgramStatus::loaded) continue;
+        FireteamLife counts{};
+        counts.add(own_player_life(instance));
+        for (const auto& peer:instance.sessionRoster) {
+            if (!peer.used) continue;
+            PlayerLife life=PlayerLife::unknown;
+            for (const auto& candidate:g_instances) {
+                if (candidate.occupied && !candidate.publicTarget
+                    && candidate.view.binding.sessionId==peer.sessionId
+                    && candidate.view.binding.createdRevision==peer.createdRevision) {
+                    life=own_player_life(candidate);break;
+                }
+            }
+            counts.add(life);
+        }
+        if (instance.fireteamLifePublished && counts==instance.lastFireteamLife) continue;
+        instance.lastFireteamLife=counts;instance.fireteamLifePublished=true;
+        host::Event event{};
+        event.kind=host::EventKind::fireteamState;event.binding=instance.view.binding;
+        event.sequence=instance.missionStateRevision;
+        event.sourceGeneration=instance.view.activityClientGeneration;
+        event.missionSequence=instance.lastMissionSequence;event.tick=now;
+        event.fireteamAlive=counts.alive;event.fireteamDead=counts.dead;event.fireteamUnknown=counts.unknown;
+        push_script_event(instance,event);
+        std::array<char,96> fields{};
+        const int length=std::snprintf(fields.data(),fields.size(),"alive=%u dead=%u unknown=%u",
+            unsigned(counts.alive),unsigned(counts.dead),unsigned(counts.unknown));
+        if (length>0) log_line(core::log::Level::info,&instance,"fireteam_life","changed",
+            {fields.data(),static_cast<std::size_t>(length)});
+    }
+}
+
+void observe_player_life(RuntimeInstance& instance, const host::SenseObservationSnapshot& sense) noexcept {
+    if (instance.playerLifeGeneration!=sense.sourceGeneration) {
+        instance.playerLife={};instance.playerLifeGeneration=sense.sourceGeneration;
+    }
+    for (std::size_t i=0;i<sense.observationCount;++i) {
+        const auto& observation=sense.observations[i];
+        if (observation.key.slotType!=13 || observation.key.senseSchema!=0x80804F2F
+            || observation.key.objectTag!=0x80FEB3DC || observation.key.slotIndex<5
+            || observation.key.slotIndex>=21 || observation.firstValue>sense.valueCount
+            || observation.valueCount>sense.valueCount-observation.firstValue) continue;
+        update_player_life(instance.playerLife[observation.key.slotIndex-5],
+            std::span(sense.values).subspan(observation.firstValue,observation.valueCount));
+    }
+}
 std::array<AttachDiagnostic, kAttachDiagnosticCapacity> g_attachDiagnostics{};
 std::vector<PendingMissionEvent> g_pendingMissionEvents{};
 std::array<ReloadAuthorization, host::kInstanceCapacity> g_reloadAuthorizations{};
@@ -473,11 +536,15 @@ void clear_instance(RuntimeInstance& instance, bool clearPending = true) noexcep
     instance.startPending = false;
     instance.timerPending = false;
     instance.triggerOccupancy = {};
+    instance.ghostObservations = {};
+    instance.actorPathObservations = {};
     instance.squadObservations = {};
     instance.sceneObservations = {};
     instance.objectiveObservations = {};
     instance.sessionRoster = {};
     instance.sessionRosterObserved = false;
+    instance.playerLife={};instance.playerLifeGeneration=0;
+    instance.lastFireteamLife={};instance.fireteamLifePublished=false;
     std::vector<host::Event>{}.swap(instance.scriptEvents);
     instance.firstScriptEventAttempt = 0;
     instance.nextScriptEventAttempt = 0;
@@ -1243,6 +1310,7 @@ void synchronize_instances(std::uint64_t now) noexcept {
         }
     }
     const sdk::Snapshot catalog = sdk::snapshot();
+    publish_fireteam_life(now);
     for (std::size_t index = 0; index < diagnostics.instanceCount; ++index) {
         if (diagnostics.instances[index].active) {
             attach_instance(diagnostics.instances[index], catalog, now);
@@ -1311,7 +1379,14 @@ void service_pending_starts(std::uint64_t now) noexcept {
     case host::EventKind::sessionLeft:
     case host::EventKind::playerTrigger:
     case host::EventKind::cinematicStarted:
+    case host::EventKind::cinematicSkipRequested:
     case host::EventKind::cinematicTerminated:
+    case host::EventKind::actorPathState:
+    case host::EventKind::damageState:
+    case host::EventKind::objectState:
+    case host::EventKind::fireteamState:
+    case host::EventKind::objectInteracted:
+    case host::EventKind::ghostLinkState:
         return false;
     default:
         return true;
@@ -1344,11 +1419,16 @@ void service_pending_starts(std::uint64_t now) noexcept {
            || event.kind == host::EventKind::sessionLeft
            || event.kind == host::EventKind::playerTrigger
            || event.kind == host::EventKind::cinematicStarted
+           || event.kind == host::EventKind::actorPathState
+           || event.kind == host::EventKind::damageState
+           || event.kind == host::EventKind::objectState
+           || event.kind == host::EventKind::fireteamState
+           || event.kind == host::EventKind::objectInteracted
+           || event.kind == host::EventKind::ghostLinkState
+           || event.kind == host::EventKind::cinematicSkipRequested
            || event.kind == host::EventKind::cinematicTerminated
            || delivery_lifecycle_event(event.kind)
-           || (event.kind == host::EventKind::senseUpdate
-               && event.senseDecodeStatus
-                      == middleware::bap::activity_message::sense_update::DecodeStatus::complete);
+           || event.has_sense_observations();
 }
 
 /** Faults the instance unless the ordered mission input arrives with no gap, starting at one. */
@@ -1381,12 +1461,17 @@ void service_pending_starts(std::uint64_t now) noexcept {
     return false;
 }
 
-/** Records the typed Ghost-link fields while its interaction semantics are being verified. */
-void log_ghost_link_sense(const RuntimeInstance& instance,
+/** Records bounded Ember bridge/console fields while interaction semantics are verified. */
+void log_ember_interaction_sense(RuntimeInstance& instance,
                           const host::SenseObservationSnapshot& sense) noexcept {
     for (std::size_t index = 0; index < sense.observationCount; ++index) {
         const auto& observation = sense.observations[index];
-        if (observation.key.slotType != 65 || observation.key.senseSchema != 0x80804D3EU
+        const bool console = observation.key.slotType == 65
+                             && observation.key.senseSchema == 0x80804D3EU;
+        const bool bridge = observation.key.slotType == 23 && observation.key.slotIndex < 6
+                            && observation.key.senseSchema == 0x80804F47U;
+        if (observation.key.registryKey != 0xF6FFB59EU || (!console && !bridge)
+            || instance.emberInteractionReports >= 256
             || observation.firstValue > sense.valueCount
             || observation.valueCount > sense.valueCount - observation.firstValue) {
             continue;
@@ -1396,6 +1481,15 @@ void log_ghost_link_sense(const RuntimeInstance& instance,
             if (!value.present || value.schemaRow != observation.key.schemaRow) {
                 continue;
             }
+            if (value.fieldOrdinal >= 9) continue;
+            const std::size_t field = (console ? 54U : observation.key.slotIndex * 9U)
+                                      + value.fieldOrdinal;
+            const std::uint64_t bit = std::uint64_t{1} << field;
+            if ((instance.emberInteractionSeen & bit) != 0
+                && instance.emberInteractionValues[field] == value.unsignedValue) continue;
+            instance.emberInteractionSeen |= bit;
+            instance.emberInteractionValues[field] = value.unsignedValue;
+            if (instance.emberInteractionReports++ >= 256) return;
             std::array<char, 192> fields{};
             const int written = std::snprintf(
                 fields.data(),
@@ -1411,7 +1505,7 @@ void log_ghost_link_sense(const RuntimeInstance& instance,
             if (written > 0) {
                 log_line(core::log::Level::info,
                          &instance,
-                         "ghost_link_sense",
+                         console ? "ghost_link_sense" : "bridge_device_sense",
                          "observed",
                          {fields.data(),
                           (std::min)(static_cast<std::size_t>(written), fields.size() - 1)});
@@ -1460,8 +1554,11 @@ void log_ghost_link_sense(const RuntimeInstance& instance,
         }
     }
     const lua_vm::CallStatus status = lua_vm::dispatch(instance.vm, event, clientMessage, now);
-    if (event.kind == host::EventKind::clientStateChanged && event.clientStateHasRegion) {
-        instance.activeRegion = event.regionIndex;
+    if (event.kind == host::EventKind::clientStateChanged) {
+        // Pending-region reports can name the next slice while the player still
+        // holds the old one. Match Lua's region choice and the committed after-image.
+        if (event.heldRegionIndex >= 0) instance.activeRegion = event.heldRegionIndex;
+        else if (event.currentRegionIndex >= 0) instance.activeRegion = event.currentRegionIndex;
     }
     if (firstAttempt && event.kind == host::EventKind::incidentReceived) {
         push_player_trigger(instance, event);
@@ -1469,9 +1566,15 @@ void log_ghost_link_sense(const RuntimeInstance& instance,
     }
     if (event.kind == host::EventKind::senseUpdate && sense != nullptr) {
         if (firstAttempt) {
-            log_ghost_link_sense(instance, *sense);
+            log_ember_interaction_sense(instance, *sense);
+            observe_player_life(instance,*sense);
+            publish_fireteam_life(now);
         }
         push_trigger_edges(instance, *sense);
+        push_ghost_edges(instance, *sense);
+        push_object_interaction_edges(instance, *sense);
+        push_damage_edges(instance, *sense);
+        push_actor_path_edges(instance, *sense);
         push_squad_edges(instance, *sense);
         push_scene_edges(instance, *sense);
         push_objective_edges(instance, *sense);
@@ -1593,9 +1696,7 @@ void consume_delivery_events(std::uint64_t now) noexcept {
         return false;
     }
     clear_pending_event(*pending);
-    if (input.event.kind == host::EventKind::senseUpdate
-        && input.event.senseDecodeStatus
-               == middleware::bap::activity_message::sense_update::DecodeStatus::complete) {
+    if (input.event.has_sense_observations()) {
         pending->senseAvailable =
             host::mission_input_sense_snapshot(input.sequence, pending->sense);
     }
@@ -1935,30 +2036,37 @@ void retire_scriptless_inputs() noexcept {
            || (left.deadlineTick == right.deadlineTick && left.sequence < right.sequence);
 }
 
-/**
- * Delivers at most one queued host-state event per instance, in arrival order.
- * These events carry no durable state, so each head is delivered once and then retired.
- */
+/** Drain ordered derived events until output must commit or the batch budget is spent. */
 void service_script_events(std::uint64_t now) noexcept {
     for (RuntimeInstance& instance : g_instances) {
-        if (!instance.occupied || instance.scriptEventRead >= instance.scriptEvents.size()
-            || instance.programStatus != ProgramStatus::loaded || instance.startPending) {
-            continue;
-        }
-        lua_vm::Intent pendingIntent{};
-        if (instance.deliveryStage != DeliveryStage::idle
-            || lua_vm::pending_intent(instance.vm, pendingIntent)) {
-            continue;
-        }
-        const bool firstAttempt = instance.scriptEventAttempts == 0;
-        if (firstAttempt) {
-            instance.firstScriptEventAttempt = now;
-        }
-        ++instance.scriptEventAttempts;
-        host::Event& head = instance.scriptEvents[instance.scriptEventRead];
-        head.tick = now;
-        static_cast<void>(dispatch_event(instance, head, nullptr, nullptr, firstAttempt, now));
-        retire_script_event(instance);
+        drain_script_event_batch([&] {
+            if (!instance.occupied || instance.scriptEventRead >= instance.scriptEvents.size()
+                || instance.programStatus != ProgramStatus::loaded || instance.startPending) {
+                return false;
+            }
+            lua_vm::Intent pendingIntent{};
+            return instance.deliveryStage == DeliveryStage::idle
+                   && !lua_vm::pending_intent(instance.vm, pendingIntent);
+        }, [&] {
+            const bool firstAttempt = instance.scriptEventAttempts == 0;
+            if (firstAttempt) instance.firstScriptEventAttempt = now;
+            ++instance.scriptEventAttempts;
+            host::Event& head = instance.scriptEvents[instance.scriptEventRead];
+            if (head.kind == host::EventKind::actorPathState) {
+                std::array<char, 128> fields{};
+                const int length = std::snprintf(fields.data(), fields.size(),
+                    "slot=%u queued_ms=%llu remaining=%zu",
+                    static_cast<unsigned>(head.firstSlotIndex),
+                    static_cast<unsigned long long>(now >= head.tick ? now - head.tick : 0),
+                    instance.scriptEvents.size() - instance.scriptEventRead);
+                if (length > 0 && static_cast<std::size_t>(length) < fields.size())
+                    log_line(core::log::Level::info, &instance, "actor_callback", "dispatch",
+                             {fields.data(), static_cast<std::size_t>(length)});
+            }
+            head.tick = now;
+            static_cast<void>(dispatch_event(instance, head, nullptr, nullptr, firstAttempt, now));
+            retire_script_event(instance);
+        });
     }
 }
 

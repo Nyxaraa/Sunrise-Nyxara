@@ -17,6 +17,9 @@ struct ConnectionFields {
     std::uint64_t joinMemberKey{};
     /** The join also names the character the player signed in on. */
     std::uint64_t joinCharacterSoid{};
+    /** Msg25 advances only after its complete authenticated response is published. */
+    std::uint64_t authorityPurgeGeneration{};
+    std::uint8_t authorityPurgeEpoch{};
     bool retainsPatchEpoch{};
     /** Set when this transaction commits one client-authored type-23 identity. */
     bool receivesClientIdentity{};

@@ -115,5 +115,16 @@ int main() {
         assert(f.resolve()
                == Status::targetAmbiguous); // Shared objects retain overlapping contexts.
     }
-    std::cout << "8 squad reference scope regressions passed\n";
+    {
+        Fixture f;
+        f.graph.spawners[0].sourceDescriptorCandidates={0,2};
+        f.graph.sourceDescriptorCandidates={{0,0},{0,2}};
+        f.graph.descriptors[0].objectIndex=0;f.graph.descriptors[0].slotIndex=0;
+        assert(detail::scoped_sources(f.graph,f.graph.spawners[0],f.scenarios).size()==2);
+        f.scenarios[1]={0};
+        assert(detail::scoped_sources(f.graph,f.graph.spawners[0],f.scenarios).empty());
+        f.graph.descriptors[2].objectIndex=0;f.graph.descriptors[2].slotIndex=0;
+        assert(detail::scoped_sources(f.graph,f.graph.spawners[0],f.scenarios).size()==1);
+    }
+    std::cout << "squad reference scope and reused-source regressions passed\n";
 }

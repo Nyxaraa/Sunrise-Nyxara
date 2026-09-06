@@ -46,6 +46,8 @@ push_incident_revision_member(lua_State* state, const host::Event& event, std::s
         return {};
     case ActionKind::setLifetime:
         return "lifetime.set";
+    case ActionKind::restartCheckpoint:
+        return "mission.restart_checkpoint";
     case ActionKind::fireTrigger:
         return "slot.fire_trigger";
     case ActionKind::playSequence:

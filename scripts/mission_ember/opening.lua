@@ -22,6 +22,9 @@ return function(mission, landing)
                 context:slot(cinematic):set_cinematic_active{active = true}
             end
         end,
+        -- Native completion and cinematic_skip use the same exact source identity.
+        -- finish() commits phase 2 before requesting stop, so the ensuing finished
+        -- incident (or a repeated Escape) cannot start the spawn handoff twice.
         terminated = function(context, state, event)
             if phase(state) ~= 1 then return end
             local slot = context:slot(cinematic)

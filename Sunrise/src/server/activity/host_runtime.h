@@ -119,10 +119,20 @@ enum class EventKind : std::uint8_t {
     cinematicStarted = 29,
     /** One schema-0x808087BF msg-19 reports Type-6 start failure or runtime termination. */
     cinematicTerminated = 30,
+    /** Accepted native Ghost interaction progress for one exact type-65 slot. */
+    ghostLinkState = 31,
+    actorPathState = 32,
+    objectInteracted = 33,
+    /** Native cinematic_skip incident for an exact Type-6 source. */
+    cinematicSkipRequested = 34,
+    /** Death-with-Ghost observations for the current private activity's joined party. */
+    fireteamState = 35,
+    objectState = 36,
+    damageState = 37,
 };
 
 inline constexpr std::size_t kEventKindCount =
-    static_cast<std::size_t>(EventKind::cinematicTerminated) + 1U;
+    static_cast<std::size_t>(EventKind::damageState) + 1U;
 
 /**
  * Terminal delivery outcome of one script-requested effect.
@@ -434,6 +444,7 @@ struct Event final {
     std::uint64_t peerSessionGeneration{};
     /** Peer client key bound by its join, or zero before one. */
     std::uint64_t peerMemberKey{};
+    std::uint16_t fireteamAlive{}, fireteamDead{}, fireteamUnknown{};
     /** Committed mission phase, for phaseEntered events. */
     std::uint32_t missionPhase{};
     /** Mission phase this commit replaced. */
@@ -448,7 +459,22 @@ struct Event final {
     std::int32_t triggerValue{};
     /** True when the whole watched set is inside the volume. */
     bool triggerAll{};
+    float damageHealth{-1.0F}, damageShield{-1.0F};
+    std::int32_t damageRevision{};
+    std::int32_t objectGeneration{};
+    bool objectPresent{}, objectAlive{}, objectOwnerKnown{}, objectHasOwner{};
+    std::uint64_t objectOwnerKey{};
+    std::int32_t ghostGeneration{};
+    float ghostProgress{};
+    bool ghostActive{};
+    std::int32_t actorGeneration{}, actorPathRevision{}, actorPathState{};
+    std::int32_t actorDeliveryRevision{}, actorDeliveryState{};
+    bool actorDeliveryKnown{};
+    bool actorDead{};
     /** Per-slot member counts the client published, for squadState events. */
+    std::array<float, 24> squadObjectiveCosts{};
+    std::uint32_t squadObjectiveCostMask{};
+    std::uint32_t squadObjectiveRevision{};
     std::array<std::int32_t, kSquadSlotCapacity> squadSlotCounts{};
     /** Alive members the client published. Six bits on the wire, so 0 through 63. */
     std::int32_t squadAliveCount{};
@@ -552,6 +578,7 @@ struct Event final {
     middleware::bap::activity_message::sense_update::DecodeStatus senseDecodeStatus{
         middleware::bap::activity_message::sense_update::DecodeStatus::malformed};
     state::activity::receipts::Verdict verdict{state::activity::receipts::Verdict::absent};
+    bool senseSnapshotRetained{}; // Only bounded, fully owned observations may enter Lua.
     bool hasFirstObject{};
     bool clientStateHasRegion{};
     bool clientStateHasCurrentRegion{};
@@ -559,6 +586,12 @@ struct Event final {
     bool clientStateHasTeleport{};
     bool hasPlayerTrigger{};
     bool hasCinematic{};
+    [[nodiscard]] bool has_sense_observations() const noexcept {
+        using Status = middleware::bap::activity_message::sense_update::DecodeStatus;
+        return kind == EventKind::senseUpdate && senseSnapshotRetained
+            && (senseDecodeStatus == Status::complete || senseDecodeStatus == Status::partial);
+    }
+
 };
 
 /** Position after one event in one reset generation. */

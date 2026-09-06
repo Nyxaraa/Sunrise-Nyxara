@@ -10,7 +10,9 @@ namespace sunrise::middleware::bap::activity_message::cinematic_incident {
 inline constexpr std::uint32_t kStartedTarget = 5'239;
 /** Global SObject row emitted for start failure or when the runtime stops owning the resource. */
 inline constexpr std::uint32_t kTerminatedTarget = 1'685;
-/** Effective type-17 incident metadata schema selected by both global SObject rows. */
+/** FNV-1(cinematic_skip), posted by native 1069BE0 through 106A530. */
+inline constexpr std::uint32_t kSkipTarget = 3'338;
+/** Effective type-17 incident metadata schema selected by the three cinematic SObject rows. */
 inline constexpr std::uint32_t kSchema = 0x808087BFU;
 /** The native schema consumes 486 meaningful bits and two zero padding bits. */
 inline constexpr std::size_t kPayloadBits = 486;
@@ -19,6 +21,7 @@ inline constexpr std::size_t kPayloadBytes = 61;
 enum class Signal : std::uint8_t {
     started,
     terminated,
+    skipRequested,
 };
 
 /** Exact Type-6 source ClientRef and runtime values retained from one cinematic incident. */

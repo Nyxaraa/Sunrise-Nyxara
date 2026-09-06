@@ -130,11 +130,17 @@ constexpr std::size_t kSpawnKeyCount = 32;
            && writer.write(1, kPresenceWidth) && writer.write(snapshot.playerKey, 64)
            && writer.write(0, 5) && writer.write(3, 6) && writer.write(0, 6)
            && writer.write(0, 6)
-           // Byte 736 skips the respawn delay, whose countdown never expires when the content
-           // delay is negative. Byte 737 holds the spawn while the client loads.
+           // +736 bypasses DC3770's late spawn-location hold, NOT the HUD timer.
+           // The visible countdown is initialized by 12E9330 from +740 (half)
+           // into player+64, then displayed by 1677E60 via 12EE500/12EE590.
            && writer.write(1, kPresenceWidth)
            && writer.write(snapshot.awaitClientSync ? kAwaitingClientSync : 0U, 4)
-           && writer.write(0, 3) && writer.write(0, kPresenceWidth) && writer.write(128, 8)
+           && writer.write(0, kPresenceWidth) // +738: preserve authored revive delay.
+           && writer.write(snapshot.hasDarknessPolicy, kPresenceWidth)
+           && (!snapshot.hasDarknessPolicy
+               || writer.write(snapshot.darknessEnabled ? 0x4F80U : 0x4200U, 16)) // half 30 / 3
+           && writer.write(0, kPresenceWidth) // Optional spawn override absent.
+           && writer.write(0, kPresenceWidth) && writer.write(128, 8)
            && writer.write(kSignedZero, 32);
 }
 
@@ -150,7 +156,10 @@ constexpr std::size_t kSpawnKeyCount = 32;
     bool encoded = writer.write(std::uint32_t{snapshot.lifetime} + kLifetimeBias, kLifetimeWidth)
                    && writer.write(1, 3) && writer.write(0, kPresenceWidth)
                    && writer.write(kSignedZero, 32) && writer.write(kEmptyNameHash, 32)
-                   && writer.write(kSignedZero, 32) && writer.write(1, 6)
+                   && writer.write(snapshot.hasDarknessPolicy
+                           ? (snapshot.darknessEnabled && snapshot.hasRegion
+                                  ? kSignedZero + snapshot.region / 8U : kSignedMinusOne)
+                           : kSignedZero, 32) && writer.write(1, 6)
                    && writer.write(kWaitingSwitchKey, 32) && writer.write(1, kPresenceWidth)
                    && writer.write(kWaitingSwitchClass, 32) && writer.write(kSignedZero, 32)
                    && writer.write(kSignedZero, 32);
@@ -242,6 +251,7 @@ std::size_t auth_body_bits_of(const Snapshot& snapshot,
     if (slotType == kSlotTypeParticipation) {
         return carriesPlayerKey
                    ? kParticipationBits + (snapshot.hasRegion ? kParticipationRegionBits : 0)
+                         + (snapshot.hasDarknessPolicy ? 16U : 0U)
                    : 0;
     }
     if (slotType == kSlotTypeLifetime) {

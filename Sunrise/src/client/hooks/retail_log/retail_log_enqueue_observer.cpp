@@ -12,6 +12,7 @@
 #include "../bootflow/bootflow_hook_lifecycle.h"
 #include "../network/investment/internal.h"
 #include "../../targets/game.h"
+#include "../../diagnostics/entity_create_probe.h"
 
 namespace sunrise::client::hooks::retail_log {
 namespace {
@@ -117,8 +118,11 @@ volatile LONG g_callSiteReports{};
  * @param text Already-formatted native line.
  */
 void report_call_site(const void* returnAddress, const char* text) noexcept {
+    const bool entityFailure = std::string_view(text).find("networking:simulation:entity:")
+                               != std::string_view::npos;
+    const auto level = entityFailure ? core::log::Level::warn : core::log::Level::debug;
     if (returnAddress == nullptr
-        || !core::log::accepts(core::log::Channel::client, core::log::Level::debug)) {
+        || !core::log::accepts(core::log::Channel::client, level)) {
         return;
     }
     const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
@@ -140,8 +144,24 @@ void report_call_site(const void* returnAddress, const char* text) noexcept {
         const auto length = static_cast<std::size_t>(written) < line.size()
                                 ? static_cast<std::size_t>(written)
                                 : line.size() - 1;
-        core::log::write(core::log::Channel::client, core::log::Level::debug,
+        core::log::write(core::log::Channel::client, level,
                          {line.data(), length});
+    }
+    if (entityFailure) {
+        diagnostics::report_entity_create_failure_pool();
+        // Bird's retail line omits the entity identity and failure boundary. Capture
+        // the callers at the failure, while they still exist, at normal log settings.
+        // This observes the failure; it does not retry or suppress native creation.
+        std::array<void*, 12> frames{};
+        const auto count = RtlCaptureStackBackTrace(1, static_cast<DWORD>(frames.size()),
+                                                    frames.data(), nullptr);
+        for (USHORT index = 0; index < count; ++index) {
+            const auto address = reinterpret_cast<std::uintptr_t>(frames[index]);
+            core::log::writef(core::log::Channel::client, level,
+                "ev=entity_create_failure stage=stack frame=%u va=0x%llX image_base=0x%llX",
+                static_cast<unsigned>(index), static_cast<unsigned long long>(address),
+                static_cast<unsigned long long>(base));
+        }
     }
 }
 

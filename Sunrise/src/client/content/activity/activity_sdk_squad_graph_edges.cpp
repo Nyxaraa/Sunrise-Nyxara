@@ -280,10 +280,12 @@ template <typename Index> void canonicalize_scenarios(Index& index) {
     const std::unordered_map<std::uint32_t, std::uint32_t>& rulesByConfig,
     const std::vector<std::vector<std::uint32_t>>& scenariosByObject,
     std::map<TargetGroup, ExactTarget>& exactTargets,
-    ReferenceResolutionStatus& status) {
+    ReferenceResolutionStatus& status,
+    std::uint32_t scopedSource = format::kAbsentIndex) {
     const ObjectReference decoded = decode_reference(rawReference);
     GraphReference reference{};
     reference.spawnerRow = spawnerRow;
+    reference.sourceDescriptorRow = scopedSource;
     reference.referenceOrdinal = referenceOrdinal;
     reference.rawReference = rawReference;
     reference.targetObjectKey = decoded.objectKey;
@@ -307,12 +309,15 @@ template <typename Index> void canonicalize_scenarios(Index& index) {
     std::map<TargetGroup, std::vector<std::uint32_t>> groups{};
     std::size_t authoritativeCount = 0;
     const GraphSpawner& spawner = graph.spawners[spawnerRow];
+    const auto sourceStatus = scopedSource != format::kAbsentIndex
+        ? SourceDescriptorStatus::exact : spawner.sourceDescriptorStatus;
+    const auto sourceRow = scopedSource != format::kAbsentIndex ? scopedSource : spawner.sourceDescriptorRow;
     for (const std::uint32_t descriptorRow : candidates) {
         const GraphDescriptor& descriptor = graph.descriptors[descriptorRow];
         // Object keys are reused by campaign and arcade scenarios. A reference can only
         // name a target that occurs in a scenario containing its source object.
-        if (spawner.sourceDescriptorStatus == SourceDescriptorStatus::exact) {
-            const GraphDescriptor& source = graph.descriptors[spawner.sourceDescriptorRow];
+        if (sourceStatus == SourceDescriptorStatus::exact) {
+            const GraphDescriptor& source = graph.descriptors[sourceRow];
             const auto& sourceScenarios = scenariosByObject[source.objectIndex];
             const auto& targetScenarios = scenariosByObject[descriptor.objectIndex];
             const bool sharesScenario =
@@ -340,9 +345,9 @@ template <typename Index> void canonicalize_scenarios(Index& index) {
         static_cast<std::uint32_t>(graph.referenceDescriptors.size())
         - reference.candidateDescriptors.first;
 
-    if (spawner.sourceDescriptorStatus == SourceDescriptorStatus::missing) {
+    if (sourceStatus == SourceDescriptorStatus::missing) {
         status = ReferenceResolutionStatus::sourceDescriptorMissing;
-    } else if (spawner.sourceDescriptorStatus == SourceDescriptorStatus::ambiguous) {
+    } else if (sourceStatus == SourceDescriptorStatus::ambiguous) {
         status = ReferenceResolutionStatus::sourceDescriptorAmbiguous;
     } else if (reference.candidateDescriptors.count == 0) {
         status = ReferenceResolutionStatus::targetMissing;
@@ -374,6 +379,30 @@ template <typename Index> void canonicalize_scenarios(Index& index) {
     reference.status = status;
     graph.references.push_back(reference);
     return true;
+}
+
+/** A reused config is unambiguous in disjoint scenario contexts. Never resolve two
+ * different source slots that coexist in the same scenario by arbitrary row order. */
+[[nodiscard]] std::vector<std::uint32_t> scoped_sources(const GraphSnapshot& graph,
+    const GraphSpawner& spawner, const std::vector<std::vector<std::uint32_t>>& scenarios) {
+    std::map<std::pair<std::uint32_t,std::uint32_t>,std::uint32_t> logical;
+    for (std::uint32_t i=0;i<spawner.sourceDescriptorCandidates.count;++i) {
+        const auto row=graph.sourceDescriptorCandidates[spawner.sourceDescriptorCandidates.first+i].descriptorRow;
+        const auto& d=graph.descriptors[row];logical.try_emplace({d.objectIndex,d.slotIndex},row);
+    }
+    std::vector<std::uint32_t> result;
+    for (const auto& [identity,row]:logical) {
+        const auto& owned=scenarios[identity.first];
+        const bool overlap=std::any_of(logical.begin(),logical.end(),[&](const auto& other) {
+            if (other.first==identity) return false;
+            const auto& peers=scenarios[other.first.first];
+            return std::any_of(owned.begin(),owned.end(),[&](auto scenario) {
+                return std::binary_search(peers.begin(),peers.end(),scenario);
+            });
+        });
+        if (!overlap) result.push_back(row);
+    }
+    return result;
 }
 
 /** Resolves every spawner raw reference into sorted pending authored edges. */
@@ -440,94 +469,98 @@ template <typename Index> void canonicalize_scenarios(Index& index) {
         }
 
         spawner.references.first = static_cast<std::uint32_t>(graph.references.size());
-        std::map<TargetGroup, ExactTarget> exactTargets{};
-        std::array<ReferenceResolutionStatus, 2> statuses{};
-        const std::array<std::uint64_t, 2> raw{spawner.rawReference98, spawner.rawReferenceA0};
-        for (std::uint32_t ordinal = 0; ordinal < raw.size(); ++ordinal) {
-            if (!resolve_reference(topology,
-                                   graph,
-                                   spawnerRow,
-                                   ordinal,
-                                   raw[ordinal],
-                                   descriptorsByTarget,
-                                   rulesByConfig,
-                                   scenariosByObject,
-                                   exactTargets,
-                                   statuses[ordinal])) {
-                return false;
+        auto sources = scoped_sources(graph,spawner,scenariosByObject);
+        if (sources.empty()) sources.push_back(format::kAbsentIndex);
+        for (const auto sourceRow : sources) {
+            std::map<TargetGroup, ExactTarget> exactTargets{};
+            std::array<ReferenceResolutionStatus, 2> statuses{};
+            const std::array<std::uint64_t, 2> raw{spawner.rawReference98, spawner.rawReferenceA0};
+            for (std::uint32_t ordinal = 0; ordinal < raw.size(); ++ordinal) {
+                if (!resolve_reference(topology,
+                                       graph,
+                                       spawnerRow,
+                                       ordinal,
+                                       raw[ordinal],
+                                       descriptorsByTarget,
+                                       rulesByConfig,
+                                       scenariosByObject,
+                                       exactTargets,
+                                       statuses[ordinal], sourceRow)) {
+                    return false;
+                }
             }
-        }
-        spawner.references.count = 2;
-        const bool hasAmbiguous =
-            std::find(statuses.begin(), statuses.end(), ReferenceResolutionStatus::targetAmbiguous)
-            != statuses.end();
-        const bool hasOther = std::any_of(statuses.begin(), statuses.end(), [](auto status) {
-            return status != ReferenceResolutionStatus::exact
-                   && status != ReferenceResolutionStatus::invalidEncoding;
-        });
-        // With both refs absent, the spawner's own point set is the target, on its own slot.
-        const bool bothAbsent = std::all_of(statuses.begin(), statuses.end(), [](auto status) {
-            return status == ReferenceResolutionStatus::invalidEncoding;
-        });
-        if (bothAbsent && spawner.hasInlinePointSet && spawner.inlineRuleRow != format::kAbsentIndex
-            && spawner.sourceDescriptorRow != format::kAbsentIndex && exactTargets.empty()) {
-            const GraphDescriptor& source = graph.descriptors[spawner.sourceDescriptorRow];
-            ExactTarget& target =
-                exactTargets[{spawner.inlineRuleRow, source.objectIndex, source.slotIndex}];
-            target.descriptors = {spawner.sourceDescriptorRow};
-        }
-        const bool associationExact =
-            spawner.sourceDescriptorStatus == SourceDescriptorStatus::exact && !hasAmbiguous
-            && !hasOther && exactTargets.size() == 1;
-        if (spawner.sourceDescriptorRow == format::kAbsentIndex) {
-            continue;
-        }
-        for (const auto& [group, target] : exactTargets) {
-            if (target.descriptors.empty()) {
-                return false;
+            const bool hasAmbiguous =
+                std::find(statuses.begin(), statuses.end(), ReferenceResolutionStatus::targetAmbiguous)
+                != statuses.end();
+            const bool hasOther = std::any_of(statuses.begin(), statuses.end(), [](auto status) {
+                return status != ReferenceResolutionStatus::exact
+                       && status != ReferenceResolutionStatus::invalidEncoding;
+            });
+            // With both refs absent, the spawner's own point set is the target, on its own slot.
+            const bool bothAbsent = std::all_of(statuses.begin(), statuses.end(), [](auto status) {
+                return status == ReferenceResolutionStatus::invalidEncoding;
+            });
+            if (bothAbsent && spawner.hasInlinePointSet && spawner.inlineRuleRow != format::kAbsentIndex
+                && sourceRow != format::kAbsentIndex && exactTargets.empty()) {
+                const GraphDescriptor& source = graph.descriptors[sourceRow];
+                ExactTarget& target =
+                    exactTargets[{spawner.inlineRuleRow, source.objectIndex, source.slotIndex}];
+                target.descriptors = {sourceRow};
             }
-            PendingEdge edge{};
-            edge.spawnerRow = spawnerRow;
-            edge.ruleRow = std::get<0>(group);
-            edge.sourceDescriptorRow = spawner.sourceDescriptorRow;
-            edge.targetObjectRow = std::get<1>(group);
-            edge.targetSlotRow = std::get<2>(group);
-            edge.referenceMask = target.referenceMask;
-            edge.targetDescriptors = target.descriptors;
-            std::sort(edge.targetDescriptors.begin(),
-                      edge.targetDescriptors.end(),
-                      [&graph](std::uint32_t left, std::uint32_t right) {
-                          return graph.descriptors[left].id < graph.descriptors[right].id;
-                      });
-            edge.associationExact = associationExact;
-            if (!edge_identity(topology,
-                               spawner,
-                               graph.rules[edge.ruleRow],
-                               graph.descriptors[edge.sourceDescriptorRow],
-                               graph.descriptors[edge.targetDescriptors.front()],
-                               edge.id)) {
-                return false;
+            const bool associationExact =
+                sourceRow != format::kAbsentIndex && !hasAmbiguous && !hasOther
+                && !exactTargets.empty();
+            if (sourceRow == format::kAbsentIndex) {
+                continue;
             }
+            for (const auto& [group, target] : exactTargets) {
+                if (target.descriptors.empty()) {
+                    return false;
+                }
+                PendingEdge edge{};
+                edge.spawnerRow = spawnerRow;
+                edge.ruleRow = std::get<0>(group);
+                edge.sourceDescriptorRow = sourceRow;
+                edge.targetObjectRow = std::get<1>(group);
+                edge.targetSlotRow = std::get<2>(group);
+                edge.referenceMask = target.referenceMask;
+                edge.targetDescriptors = target.descriptors;
+                std::sort(edge.targetDescriptors.begin(),
+                          edge.targetDescriptors.end(),
+                          [&graph](std::uint32_t left, std::uint32_t right) {
+                              return graph.descriptors[left].id < graph.descriptors[right].id;
+                          });
+                edge.associationExact = associationExact;
+                if (!edge_identity(topology,
+                                   spawner,
+                                   graph.rules[edge.ruleRow],
+                                   graph.descriptors[edge.sourceDescriptorRow],
+                                   graph.descriptors[edge.targetDescriptors.front()],
+                                   edge.id)) {
+                    return false;
+                }
 
-            const GraphDescriptor& source = graph.descriptors[edge.sourceDescriptorRow];
-            if (source.objectIndex >= scenariosByObject.size()) {
-                return false;
+                const GraphDescriptor& source = graph.descriptors[edge.sourceDescriptorRow];
+                if (source.objectIndex >= scenariosByObject.size()) {
+                    return false;
+                }
+                const std::vector<std::uint32_t>& sourceScenarios =
+                    scenariosByObject[source.objectIndex];
+                const auto targetScenariosFound =
+                    exactRuleScenarios.find({edge.ruleRow, edge.targetObjectRow});
+                const std::vector<std::uint32_t> empty{};
+                const std::vector<std::uint32_t>& targetScenarios =
+                    targetScenariosFound == exactRuleScenarios.end() ? empty
+                                                                     : targetScenariosFound->second;
+                std::set_intersection(sourceScenarios.begin(),
+                                      sourceScenarios.end(),
+                                      targetScenarios.begin(),
+                                      targetScenarios.end(),
+                                      std::back_inserter(edge.scenarios));
+                output.push_back(std::move(edge));
             }
-            const std::vector<std::uint32_t>& sourceScenarios =
-                scenariosByObject[source.objectIndex];
-            const auto targetScenariosFound =
-                exactRuleScenarios.find({edge.ruleRow, edge.targetObjectRow});
-            const std::vector<std::uint32_t> empty{};
-            const std::vector<std::uint32_t>& targetScenarios =
-                targetScenariosFound == exactRuleScenarios.end() ? empty
-                                                                 : targetScenariosFound->second;
-            std::set_intersection(sourceScenarios.begin(),
-                                  sourceScenarios.end(),
-                                  targetScenarios.begin(),
-                                  targetScenarios.end(),
-                                  std::back_inserter(edge.scenarios));
-            output.push_back(std::move(edge));
         }
+        spawner.references.count = static_cast<std::uint32_t>(graph.references.size()) - spawner.references.first;
     }
     std::sort(output.begin(), output.end(), [](const PendingEdge& left, const PendingEdge& right) {
         return left.id < right.id;

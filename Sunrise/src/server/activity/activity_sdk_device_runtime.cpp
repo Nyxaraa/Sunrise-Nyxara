@@ -1,4 +1,14 @@
+#include "../../middleware/bap/activity_message/music_section_auth.h"
+#include "../../middleware/bap/activity_message/mission_effect_auth.h"
+#include "../../middleware/bap/activity_message/darkness_zone_auth.h"
+#include "../../middleware/bap/activity_message/squad_objective_auth.h"
+#include "../../middleware/bap/activity_message/combatant_path_auth.h"
+#include "../../middleware/bap/activity_message/combatant_action_auth.h"
+#include "../../middleware/bap/activity_message/combatant_delivery_auth.h"
+#include "../../middleware/bap/activity_message/combatant_retire_auth.h"
+#include "../../middleware/bap/activity_message/ghost_link_auth.h"
 #include "activity_sdk_device_runtime.h"
+#include "../../middleware/bap/activity_message/interactable_object_auth.h"
 
 #include <algorithm>
 #include <array>
@@ -452,6 +462,15 @@ prepare_slot(const sdk::BoundView& view, std::uint32_t slotRow, PreparedDevice& 
     }
     constexpr std::size_t kOccupancyAuthBits = 87;
     constexpr std::size_t kOccupancyAuthBytes = 11;
+    const bool objectFilter = slotType == 34 && slot.componentClass == 0x80809568U
+        && authSchema == 0x8080956AU && middleware::bap::activity_message::mission_effect::validate_filter(body,bitCount);
+    const bool missionEffect = slotType == 26 && slot.componentClass == 0x8080953FU
+        && authSchema == 0x8080954BU && middleware::bap::activity_message::mission_effect::validate(body,bitCount);
+    namespace music = middleware::bap::activity_message::music_section;
+    const bool musicSection = slotType == 11 && slot.componentClass == music::kClass
+        && authSchema == music::kSchema && music::validate(body, bitCount);
+    const bool damageMonitor = slotType == 20 && slot.componentClass == 0x80809560U
+        && authSchema == 0x80809563U && bitCount == 87 && body.size() == 11;
     const bool occupancy = slotType == format::kOccupancySlotType
                            && authSchema == format::kOccupancyAuthSchema
                            && bitCount == kOccupancyAuthBits && body.size() == kOccupancyAuthBytes;
@@ -474,8 +493,29 @@ prepare_slot(const sdk::BoundView& view, std::uint32_t slotRow, PreparedDevice& 
     const bool combatant =
         slotType == middleware::bap::activity_message::scriptable_auth::kType2SlotType
         && authSchema == middleware::bap::activity_message::scriptable_auth::kType2Schema
-        && middleware::bap::activity_message::scriptable_auth::validate_type2_body(body, bitCount);
-    if (!occupancy && !directive && !engagement && !publicEvent && !performance && !combatant) {
+        && (middleware::bap::activity_message::scriptable_auth::validate_type2_body(body, bitCount)
+            || (slot.componentClass == auth::kType2ComponentClass
+                && (middleware::bap::activity_message::combatant_path::validate(body, bitCount)
+                    || middleware::bap::activity_message::combatant_delivery::validate(body, bitCount)
+                    || middleware::bap::activity_message::combatant_action::validate(body, bitCount)
+                    || middleware::bap::activity_message::combatant_retire::validate(body, bitCount))));
+    namespace darkness=middleware::bap::activity_message::darkness_zone;
+    bool darknessEnabled{};
+    const bool darknessZone=slotType==darkness::kSlotType&&authSchema==darkness::kSchema
+        &&slot.componentClass==darkness::kClass&&darkness::decode(body,bitCount,darknessEnabled);
+    namespace object = middleware::bap::activity_message::interactable_object;
+    const bool interactableObject = slotType == format::kObjectSlotType
+        && authSchema == object::kSchema && slot.componentClass == format::kObjectComponentClass
+        && object::validate(body,bitCount);
+    namespace ghost = middleware::bap::activity_message::ghost_link;
+    const bool ghostLink = slotType == ghost::kSlotType && authSchema == ghost::kAuthSchema
+                           && slot.componentClass == ghost::kComponentClass
+                           && ghost::validate(body, bitCount);
+    namespace objective = middleware::bap::activity_message::squad_objective;
+    const bool squadObjective = slotType == 1 && authSchema == objective::kSchema
+        && slot.componentClass == format::kSquadComponentClass && objective::validate(body, bitCount);
+    if (!musicSection && !objectFilter && !missionEffect && !damageMonitor && !darknessZone && !squadObjective && !occupancy && !directive && !engagement && !publicEvent && !performance && !combatant
+        && !ghostLink && !interactableObject) {
         return Status::invalidBody;
     }
     return Status::ready;

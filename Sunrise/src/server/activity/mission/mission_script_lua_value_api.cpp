@@ -11,9 +11,10 @@
 namespace sunrise::server::activity::mission::lua_vm::detail {
 namespace {
 
-/** The two placement modes the squad Auth lane accepts. Every other encoding has no name. */
+/** Ordinary placement and native transport reservation; other encodings have no name. */
 constexpr std::uint8_t kSquadModeReinforce = 0;
 constexpr std::uint8_t kSquadModeReplace = 2;
+constexpr std::uint8_t kSquadModeReserve = 3;
 
 /** Lua index for a unit scalar: its value and the bounds it was clamped to. */
 [[nodiscard]] int unit_scalar_index(lua_State* state) {
@@ -66,8 +67,10 @@ constexpr std::uint8_t kSquadModeReplace = 2;
         push_squad_mode(state, kSquadModeReinforce);
     } else if (key == "replace") {
         push_squad_mode(state, kSquadModeReplace);
+    } else if (key == "reserve") {
+        push_squad_mode(state, kSquadModeReserve);
     } else if (key == "count") {
-        lua_pushinteger(state, 2);
+        lua_pushinteger(state, 3);
     } else {
         lua_pushnil(state);
     }
@@ -140,6 +143,9 @@ std::string_view squad_mode_name(std::uint8_t mode) noexcept {
     }
     if (mode == kSquadModeReplace) {
         return "replace";
+    }
+    if (mode == kSquadModeReserve) {
+        return "reserve";
     }
     return "unknown";
 }

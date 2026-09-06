@@ -1,16 +1,59 @@
 #include "activity_transaction_notifications.h"
 
+#include <bit>
+#include <algorithm>
+#include "../../../../core/logging/log.h"
+#include "../../../../middleware/secure_channel/runtime.h"
+
 #include "../../../gameplay/gameplay_advertisement.h"
 #include "../push/activity/activity_arrival.h"
 #include "../push/activity/activity_global_state_push.h"
 #include "../push/activity/activity_membership_push.h"
 #include "../push/activity/activity_message_push.h"
+#include "../push/activity/activity_notification_frame.h"
 #include "../push/activity/activity_roster_push.h"
 #include "../push/activity/activity_world_globals_push.h"
 #include "../push/activity/internal.h"
 
 namespace sunrise::server::bap::encrypted::activity_transaction {
 namespace {
+
+/** Publishes the exact abandoned mask with the next entity-slot epoch. */
+[[nodiscard]] bool stage_purge(Session& session, Scratch& scratch,
+                               const activity_message::ActivityPlan& activity,
+                               std::span<const std::byte, state::kAesKeySize> key,
+                               std::array<std::byte, state::kBapNonceSize>& nonce,
+                               std::span<std::byte> response, std::size_t& written) noexcept {
+    namespace control = middleware::bap::activity_message::host_control;
+    if (activity.authorityPurgeGeneration != session.activity.bindingGeneration
+        || activity.sessionId != session.activity.session.sessionId
+        || activity.authorityPurge.epoch != unsigned(session.activity.authorityEpoch) + 1U
+        || written > response.size()) return false;
+    std::array<std::byte, control::kPurgeAuthorityByteCount> body{};
+    std::size_t bodySize{};
+    if (!control::encode_purge_authority(activity.authorityPurge, body, bodySize)) return false;
+    const auto initialWritten = written;
+    const auto initialNonce = nonce;
+    if (!push::activity::append_notification_frame(scratch, activity.sessionId,
+            control::kPurgeAuthorityMessageType, std::span(body).first(bodySize),
+            key, nonce, response, written)) {
+        if (written > initialWritten)
+            std::fill(response.begin() + initialWritten, response.begin() + written, std::byte{});
+        written = initialWritten;
+        nonce = initialNonce;
+        return false;
+    }
+    middleware::secure_channel::advance_nonce(nonce);
+    unsigned slots = 0;
+    for (const auto byte : activity.authorityPurge.slots)
+        slots += std::popcount(std::to_integer<unsigned>(byte));
+    core::log::writef(core::log::Channel::server, core::log::Level::info,
+        "ev=authority_cleanup stage=purge_staged session=%llu epoch=%u reason=%d slots=%u",
+        static_cast<unsigned long long>(activity.sessionId),
+        static_cast<unsigned>(activity.authorityPurge.epoch),
+        static_cast<int>(activity.authorityPurge.reason), slots);
+    return true;
+}
 
 /**
  * Reports whether the citizen advertisement this membership body would carry is still coming.
@@ -176,6 +219,9 @@ bool stage_notifications(Session& session,
                          std::size_t& written) noexcept {
     // Each encoder refuses an absent session itself, so a plan that delivers nothing needs no
     // session at all. Message type 52 is the one that arrives on an unallocated link.
+    if (activity.delivery == activity_message::Delivery::authorityPurgeNotification) {
+        return stage_purge(session, scratch, activity, key, nonce, response, written);
+    }
     if (activity.delivery == activity_message::Delivery::joinNotifications) {
         return push::activity::append_join_notifications(
             scratch, session, activity, key, nonce, response, written);

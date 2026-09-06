@@ -66,6 +66,17 @@ const char* event_name(EventKind kind) noexcept {
         return "player trigger";
     case EventKind::cinematicStarted:
         return "cinematic started";
+    case EventKind::actorPathState:
+        return "actor_path_state";
+    case EventKind::fireteamState: return "fireteam_state";
+    case EventKind::damageState: return "damage_state";
+    case EventKind::objectState: return "object_state";
+    case EventKind::objectInteracted:
+        return "object_interacted";
+    case EventKind::ghostLinkState:
+        return "ghost_link_state";
+    case EventKind::cinematicSkipRequested:
+        return "cinematic skip requested";
     case EventKind::cinematicTerminated:
         return "cinematic terminated";
     }

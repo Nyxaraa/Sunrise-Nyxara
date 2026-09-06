@@ -99,6 +99,15 @@ struct PendingMutation final {
                                      std::int32_t sliceSetIndex,
                                      std::uint32_t sliceSetHash) noexcept;
 
+/** Starts one idempotent native hard wipe on an exact session generation. */
+[[nodiscard]] bool hard_wipe_needs_publish(std::uint64_t sessionId) noexcept;
+
+[[nodiscard]] bool release_hard_wipe(const SessionBinding& binding, std::uint64_t requestKey) noexcept;
+
+[[nodiscard]] bool arm_hard_wipe(const SessionBinding& binding, std::uint64_t requestKey,
+    std::int32_t region, std::uint32_t spawnSetHash) noexcept;
+[[nodiscard]] std::uint32_t checkpoint_spawn_hash(std::uint64_t sessionId, std::int32_t region) noexcept;
+
 /**
  * @param sessionId Joined activity session.
  * @return True while a host-named teleport is armed and unspent.

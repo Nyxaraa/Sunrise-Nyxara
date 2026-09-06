@@ -1,56 +1,34 @@
-# Ember development scripts
+# Ember mission scripts
 
-This controller is a development playtest slice, not complete 1AU. It selects the authored
-arrival-cinematic state (49), activates its bookend when held, and hands off to powerhouse
-state 64 on the matching termination event. The separate arrival reference establishes the
-movie sequence, and the latest playtest confirmed playback and the termination handoff.
+The controller now covers arrival, Powerhouse, Mineral Processing, Sunside, Light's End,
+reactor destruction, fusion-cell overload, escape and both authored ending cinematics.
+This is a reconstructed full-mission candidate. The user has verified the Powerhouse
+combat, bridge, Harvester doors and exit; the later encounters are tested offline and need
+an in-game playthrough.
 
-The landing encounter uses eleven authored Mercury squads with their default counts.
-Bridge devices reset only when the playable region is held. Arrival dialogue waits for spawn
-settlement; combat clear sets the console directive and plays the console-guidance cue.
-Actual Ghost-console activation/bridge extension, later encounters, later dialogue, wipes and
-mission completion still need implementation and in-game verification. See
-[the full squad audit](../MISSION_EMBER_SQUADS.md) and
-[video observations](../MISSION_EMBER_REFERENCE.md).
+Use the matching native DLL and generated SDK together. The final SDK in
+`build/sdk-mission-complete` resolves all162 squad sensors to173 runnable definitions;
+11 Processing sensors have two distinct valid authored rule bindings. The Lua roster
+chooses each sensor once and uses native member counts, placements, combat objectives
+and task costs. No alternate enemy types or hand-entered spawn positions replace them.
 
-Build this branch and regenerate the SDK before installing these scripts. The corrected
-native generator initializes the scenario catalogue before offline extraction and rejects
-cached shards missing container/spatial context. `build/sdk-corrected` has 138 statically
-runnable Ember definitions; 13 sensors have no definition and 11 processing sensors have
-refused alternate spawn-rule bindings. Never substitute arbitrary enemies or coordinates.
+`mission_ember.lua` dispatches the opening/landing and later controllers. Later modules
+are `processing.lua`, `cinder.lua` and `apex.lua`, with shared `route_roster.lua`,
+`route_support.lua`, `carry.lua`, `routes.lua` and `ending.lua`. Progress is transactional
+mission state, and completed encounters retain zero native spawn requests on backtracking.
 
-Copy these scripts to `Sunrise/scripts` beside `Sunrise/sdk/lua`. Enable
-`server.activation.mission_scripting`. For cinematic arrival, the settings override for
-`mission_ember` must use `bubble: 6`, `slice_set: 49` and
-`spawn_set_hash: "0x9C58857A"` (the authored Mercury landing set). Gameplay is selected by
-the script after the cinematic. Use the current native build so the explicit spawn override
-is preserved even when its package is absent from the direct scenario package list.
-Restart after updating arrival settings.
+Navigation uses authored type47 marker references in type68 directives, hidden while the
+relevant encounter is active. Darkness uses the native3/30-second respawn policy and
+all-dead wipe handshake. Checkpoint reset dispatches to the active encounter; actor,
+interaction and damage generations reject stale receipts. Escape and native cinematic
+skip incidents advance the ending only once.
 
-Region-less client deltas preserve encounter ownership. Duplicate events and script reload
-do not repeat the movie, spawn requests, dialogue or bridge reset. Mock-context tests verify
-those conditions; they do not establish visible AI, dialogue or cinematic playback.
+Enable `server.activation.mission_scripting` and SDK generation/Lua declarations in
+settings. Install all modules under `Sunrise/scripts`, beside `Sunrise/sdk/lua`, with the
+matching `Sunrise/activity_sdk.pack`. The installed settings already select cinematic
+arrival; preserve them. The user launches the game manually.
 
-Run local checks from the repository root:
-
-```sh
-lua5.4 tests/mission_ember_encounter_test.lua
-lua5.4 tests/mission_ember_controller_test.lua
-python -m unittest discover -s tests -p 'test_*.py'
-g++ -std=c++23 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
-    tests/squad_reference_scope_test.cpp -lcrypto -o /tmp/ember-squad-reference-test
-ASAN_OPTIONS=detect_leaks=0 /tmp/ember-squad-reference-test
-```
-
-Leak detection is disabled in this command because it cannot run under the sandbox's tracing;
-address and undefined-behavior instrumentation remain enabled. The C++ test uses synthetic
-identities and exercises the production reference resolver. Lua tests model the context API;
-they do not substitute for a live mission run.
-
-Generate a local SDK inventory without committing package data:
-
-```sh
-python tools/inspect_mission_sdk.py /path/to/Sunrise/activity_sdk.pack \
-    --shard /path/to/Sunrise/sdk/scenarios/80B3C09E-HASH.pack \
-    --output /tmp/mission-ember-inventory.json
-```
+See [implementation plan](../MISSION_EMBER_PLAN.md),
+[status and validation](../MISSION_EMBER_STATUS.md), and
+[reference observations](../MISSION_EMBER_REFERENCE.md) for the candidate's limits.
+The build is not a claim of verified retail-equivalent timing or complete hazard behavior.

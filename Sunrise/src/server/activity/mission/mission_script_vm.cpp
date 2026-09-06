@@ -135,7 +135,16 @@ inline constexpr std::array<const char*, host::kEventKindCount> kEventHandlerNam
     "on_event_player_trigger",
     "on_event_cinematic_started",
     "on_event_cinematic_terminated",
+    "on_event_ghost_link_state",
+    "on_event_actor_path_state",
+    "on_event_object_interacted",
+    "on_event_cinematic_skip_requested",
+    "on_event_fireteam_state",
+    "on_event_object_state",
+    "on_event_damage_state",
 }};
+
+static_assert([] { for (const auto* name : kEventHandlerNames) if (name == nullptr) return false; return true; }());
 
 /** Captures immutable callback references while table access remains inside lua_pcall. */
 [[nodiscard]] int capture_program(lua_State* state) {

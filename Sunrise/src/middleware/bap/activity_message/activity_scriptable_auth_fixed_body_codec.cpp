@@ -52,8 +52,13 @@ constexpr std::uint64_t kReservedGeneration = std::numeric_limits<std::uint64_t>
 }
 
 /** Writes one neutral 239-bit authored HUD marker subrecord. */
-[[nodiscard]] bool write_neutral_directive_marker(bits::Writer& writer) noexcept {
-    return write_absent_client_ref(writer) && write_absent_client_ref(writer) && writer.write(0, 32)
+[[nodiscard]] bool write_directive_marker(bits::Writer& writer, const Type2LaneClientRef& target) noexcept {
+    // 100A6E0 copies .0 into the native target; .2's first hash must be the
+    // absent FNV sentinel or the client attempts a second authored-name lookup.
+    return writer.write(target.registryKey, 32)
+           && writer.write(static_cast<std::uint8_t>(target.slotType), kClientRefTypeWidth)
+           && writer.write(static_cast<std::uint32_t>(target.slotIndex + kClientRefIndexBias), kClientRefIndexWidth)
+           && write_absent_client_ref(writer) && writer.write(kClientRefAbsentKey, 32)
            && writer.write(0, 32) && writer.write(0, 32) && writer.write(0, 32)
            && writer.write(0, kBoolWidth);
 }
@@ -62,7 +67,8 @@ constexpr std::uint64_t kReservedGeneration = std::numeric_limits<std::uint64_t>
 [[nodiscard]] bool write_directive_entry(bits::Writer& writer,
                                          std::uint32_t nameHash,
                                          std::int32_t elementIndex,
-                                         std::int8_t state) noexcept {
+                                         std::int8_t state,
+                                         const Type2LaneClientRef& target = {}) noexcept {
     if (!writer.write(nameHash, 32)
         || !writer.write(std::bit_cast<std::uint32_t>(elementIndex) + kSigned32Bias, 32)
         || !writer.write(static_cast<std::uint32_t>(state) + 1U, kDirectiveStateWidth)
@@ -75,11 +81,11 @@ constexpr std::uint64_t kReservedGeneration = std::numeric_limits<std::uint64_t>
         }
     }
     if (!writer.write(1, kDirectiveStateWidth) || !write_absent_client_ref(writer)
-        || !writer.write(1, kDirectiveAuxStateWidth)) {
+        || !writer.write(target.slotIndex >= 0 ? 3U : 1U, kDirectiveAuxStateWidth)) {
         return false;
     }
     for (std::size_t index = 0; index < 4; ++index) {
-        if (!write_neutral_directive_marker(writer)) {
+        if (!write_directive_marker(writer, index == 0 ? target : Type2LaneClientRef{})) {
             return false;
         }
     }
@@ -790,18 +796,25 @@ bool encode_type68(const Type68Preset& preset,
                    std::span<std::byte> output,
                    std::size_t& written) noexcept {
     written = 0;
-    if (output.size() < kType68ByteCount || preset.state < 0 || preset.state > 2
+    if ((preset.audience.slotIndex >= 0 && (preset.audience.slotType != 70
+            || preset.audience.registryKey == 0 || preset.audience.registryKey == kClientRefAbsentKey))
+        || output.size() < kType68ByteCount || preset.state < 0 || preset.state > 2
         || (preset.visible
             && (preset.nameHash == 0 || preset.nameHash == kClientRefAbsentKey
-                || preset.elementIndex < 0))) {
+                || preset.elementIndex < 0))
+        || (preset.navpoint.slotIndex >= 0 && (!preset.visible || preset.state != 0
+            || preset.navpoint.slotType != 47 || preset.navpoint.registryKey == 0
+            || preset.navpoint.registryKey == kClientRefAbsentKey))) {
         return false;
     }
     bits::Writer writer(output.first(kType68ByteCount));
-    bool encoded = write_absent_client_ref(writer) && write_absent_client_ref(writer);
+    bool encoded = (writer.write(preset.audience.registryKey, 32)
+        && writer.write(static_cast<std::uint32_t>(preset.audience.slotType) + 1U, 7)
+        && writer.write(static_cast<std::uint32_t>(preset.audience.slotIndex) + kSigned16Bias, 16)) && write_absent_client_ref(writer);
     for (std::size_t index = 0; encoded && index < kType68EntryCount; ++index) {
         encoded =
             index == 0 && preset.visible
-                ? write_directive_entry(writer, preset.nameHash, preset.elementIndex, preset.state)
+                ? write_directive_entry(writer, preset.nameHash, preset.elementIndex, preset.state, preset.navpoint)
                 : write_directive_entry(writer, kClientRefAbsentKey, 0, -1);
     }
     encoded = encoded && writer.write(preset.visible ? 1U : 0U, kDirectiveActiveIndexWidth);

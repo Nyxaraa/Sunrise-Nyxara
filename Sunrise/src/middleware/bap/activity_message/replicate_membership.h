@@ -13,16 +13,16 @@ namespace sunrise::middleware::bap::activity_message::replicate_membership {
 
 /** Membership snapshots use activity message type 12. */
 inline constexpr std::uint32_t kMessageType = 12;
-/** One local player and no remote replication member is 30,045 meaningful bits. */
-inline constexpr std::size_t kMeaningfulBitCount = 30'045;
-/** The one-member snapshot is 3,756 bytes, the last carrying three zero padding bits. */
-inline constexpr std::size_t kEncodedSize = 3'756;
+/** One local player and no remote replication member is 30,077 meaningful bits. */
+inline constexpr std::size_t kMeaningfulBitCount = 30'077;
+/** The one-member snapshot is 3,760 bytes, the last carrying three zero padding bits. */
+inline constexpr std::size_t kEncodedSize = 3'760;
 /** A remote row adds its channel, process identity, view identity, and player snapshot. */
 inline constexpr std::size_t kRemoteMemberBitDelta = 3'044;
-/** The complete two-member body carries 33,089 meaningful bits. */
-inline constexpr std::size_t kRemoteHostMeaningfulBitCount = 33'089;
+/** The complete two-member body carries 33,121 meaningful bits. */
+inline constexpr std::size_t kRemoteHostMeaningfulBitCount = 33'121;
 /** Byte extent of the two-member body, including its seven zero padding bits. */
-inline constexpr std::size_t kRemoteHostEncodedSize = 4'137;
+inline constexpr std::size_t kRemoteHostEncodedSize = 4'141;
 /** One filled descriptor makes its record 1,024 bits longer and shifts every later field. */
 inline constexpr std::size_t kDescriptorBitCount = gameplay::descriptor::kDescriptorSize * 8U;
 /** Byte size once one record carries a descriptor. */
@@ -141,6 +141,12 @@ inline constexpr std::uint32_t kRemoteMemberMask = 1U << 1U;
 [[nodiscard]] constexpr std::uint32_t
 occupied_member_mask(const MembershipSnapshot& snapshot) noexcept {
     return kLocalMemberMask | (snapshot.remoteViewMember.present ? kRemoteMemberMask : 0U);
+}
+
+/** Native membership mask_6 enables entity transmission to the advertised host. */
+[[nodiscard]] constexpr std::uint32_t
+entity_replication_member_mask(const MembershipSnapshot& snapshot) noexcept {
+    return snapshot.remoteViewMember.present ? kRemoteMemberMask : 0U;
 }
 
 /** @return Bits the local member's present region legs add. */

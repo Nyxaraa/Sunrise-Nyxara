@@ -97,6 +97,7 @@ void discard_staged_replication_epoch(Session& session) noexcept {
 void commit_staged_replication_epoch(Session& session) noexcept {
     ReplicationEpochPublication& request = session.activityReplicationEpoch;
     if (request.staged && request.bindingGeneration == session.activity.bindingGeneration) {
+        session.activity.replicationEpoch = request.generation;
         request.pending = false;
     }
     request.staged = false;
@@ -436,7 +437,8 @@ bool consume_activity_keepalive(Session& session,
     // arm stops counting as armed once the client reports the region, which ends this.
     const bool needsRepublish =
         (advertisedRegionReady
-         || state::activity::membership::host_teleport_armed(session.activity.session.sessionId))
+         || state::activity::membership::host_teleport_armed(session.activity.session.sessionId)
+         || state::activity::membership::hard_wipe_needs_publish(session.activity.session.sessionId))
         && state::activity::membership::acknowledged(session.activity.session.sessionId);
     bool preparedRepublish = needsRepublish
                              && state::activity::membership::prepare_republish(

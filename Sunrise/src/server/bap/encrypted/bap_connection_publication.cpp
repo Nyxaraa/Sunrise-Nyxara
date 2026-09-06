@@ -120,6 +120,10 @@ ConnectionFields connection_fields(const ServiceOutcome& outcome) noexcept {
         fields.patchEpoch = plan->patchEpoch;
         fields.retainsPatchEpoch = true;
     }
+    if (plan->delivery == activity_message::Delivery::authorityPurgeNotification) {
+        fields.authorityPurgeGeneration = plan->authorityPurgeGeneration;
+        fields.authorityPurgeEpoch = plan->authorityPurge.epoch;
+    }
     fields.receivesClientIdentity =
         plan->mutationDomain == activity_message::MutationDomain::membership
         && plan->membershipMutation.kind == state::activity::membership::MutationKind::identity;
@@ -160,6 +164,11 @@ void publish_connection_fields(Session& session,
         session.activityMemberKey = fields.joinMemberKey;
         session.activityJoinGeneration = session.activity.bindingGeneration;
         session.activityCharacterSoid = fields.joinCharacterSoid;
+    }
+    if (fields.authorityPurgeGeneration != 0
+        && fields.authorityPurgeGeneration == session.activity.bindingGeneration
+        && fields.authorityPurgeEpoch == unsigned(session.activity.authorityEpoch) + 1U) {
+        session.activity.authorityEpoch = fields.authorityPurgeEpoch;
     }
     if (fields.retainsPatchEpoch) {
         session.activityPatchEpoch.value = fields.patchEpoch;

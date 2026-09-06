@@ -69,6 +69,27 @@ struct SpawnState final {
     std::uint64_t opaqueValue{};
 };
 
+// Native E51D80: host1 starts the hard-wipe machine; client4 awaits host4
+// before restoring play. Client0 with the latched token acknowledges completion.
+struct HardWipeState final {
+    SpawnState host{};
+    std::uint64_t requestKey{};
+    std::uint32_t spawnSetHash{};
+    std::int32_t region{-1};
+    bool active{};
+    bool resetReady{};
+    bool clientWaiting{};
+    void release() noexcept {
+        resetReady = true;
+        if (active && clientWaiting) host.state = 4;
+    }
+    void observe(const SpawnState& client) noexcept {
+        if (!active || client.opaqueByte!=host.opaqueByte) return;
+        if (client.state==4) { clientWaiting = true; if (resetReady) host.state=4; }
+        else if (host.state==4 && client.state==0) active=false;
+    }
+};
+
 /** Teleport state kept for the current activity host, in no wire form. */
 struct TeleportState final {
     std::int8_t state{};
@@ -139,6 +160,7 @@ struct MembershipState final {
      */
     TeleportState hostTeleport{};
     bool hasHostTeleport{};
+    HardWipeState hardWipe{};
     /** Region of the slice set the client holds; -1 while it holds none. */
     RegionState currentRegion{};
     /** Pending region leg as last reported; -1 once a transition has completed. */

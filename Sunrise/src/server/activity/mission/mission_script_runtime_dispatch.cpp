@@ -7,6 +7,7 @@
 
 #include "../../../state/activity/membership/activity_membership_query.h"
 #include "../../../state/build_data/runtime.h"
+#include "../../../state/build_data/spawn_sets/spawn_set_catalog.h"
 #include "../activity_sdk_device_runtime.h"
 #include "../activity_sdk_lifetime_runtime.h"
 #include "../activity_sdk_mission_runtime.h"
@@ -310,6 +311,34 @@ void dispatch_intent(RuntimeInstance& instance, std::uint64_t now) noexcept {
         // unfindable. Arming the host teleport is the only mid-activity move.
         arm_state_region_teleport(instance, selected.plan);
         static_cast<void>(complete_local_effect(instance, "state_selected"));
+        return;
+    }
+    case lua_vm::IntentKind::restartCheckpoint: {
+        if (intent.checkpointReleaseRequest) {
+            if (::sunrise::state::activity::membership::release_hard_wipe(instance.view.binding,
+                    intent.checkpointReleaseRequest))
+                static_cast<void>(complete_local_effect(instance,"checkpoint_reset_ready"));
+            else refuse_delivery(instance,"checkpoint_refused","wipe_not_active",host::EffectOutcome::refused);
+            return;
+        }
+        namespace data=::sunrise::state::build_data;
+        const auto& destination=instance.view.binding.destination;
+        const std::string_view package(reinterpret_cast<const char*>(destination.packageName.data()),
+            destination.packageNameLength);
+        data::scenarios::Definition layout{};
+        data::spawn_sets::NameHash spawn{};
+        if (instance.publicTarget || !instance.lastFireteamLife.all_dead()
+            || instance.activeRegion!=intent.effectiveRegion
+            || !data::find_scenario_layout(package,layout)
+            || !data::spawn_sets::find_hash({layout.spawnStem.data(),layout.spawnStemLength},
+                intent.checkpointSpawnHash,spawn) || !spawn.pointCount) {
+            refuse_delivery(instance,"checkpoint_refused","party_or_spawn_unavailable",host::EffectOutcome::refused);
+            return;
+        }
+        if (::sunrise::state::activity::membership::arm_hard_wipe(instance.view.binding,
+                intent.requestKey,intent.effectiveRegion,intent.checkpointSpawnHash))
+            static_cast<void>(complete_local_effect(instance,"checkpoint_wipe_armed"));
+        else refuse_delivery(instance,"checkpoint_refused","membership_busy",host::EffectOutcome::refused);
         return;
     }
     case lua_vm::IntentKind::placeSquad: {

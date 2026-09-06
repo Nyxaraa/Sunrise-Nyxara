@@ -14,6 +14,7 @@ constexpr std::uint32_t kTypeBias = 1, kIndexBias = 32768;
 constexpr std::uint32_t kDevice = 0x80804F47U, kScene = 0x8080626AU;
 constexpr std::uint32_t kSquad = 0x80807ECCU, kObjective = 0x80807F04U;
 constexpr std::uint32_t kOccupancy = 0x80809531U;
+constexpr std::uint32_t kGhostLink = 0x80804D3EU;
 constexpr std::uint32_t kObject = 0x8080992EU;
 constexpr std::uint32_t kObjectSpawnMask = 0x80809E1BU, kObjectReplies = 0x80809AEAU;
 constexpr std::uint32_t kSceneEvents = 0x808094DFU, kSceneList = 0x808094E1U;
@@ -416,8 +417,26 @@ real_value(std::uint64_t raw, std::uint8_t width, std::uint32_t maximumBits) noe
     const auto at = static_cast<std::uint32_t>(reader.position());
     if (!reader.read(2, count)) return NativeStatus::malformed;
     values.put(kObjectReplies, 0, 0, at, 2, ValueKind::unsignedInteger, count, 0, 0.0F, true);
-    // Reply elements carry per-schema registered bodies with no authored layout here.
-    return count == 0 ? NativeStatus::complete : NativeStatus::unsupported;
+    for (std::uint32_t index = 0; index < count; ++index) {
+        std::uint64_t exists = 0, schema = 0;
+        if (!reader.read(1, exists)) return NativeStatus::malformed;
+        if (!exists) continue;
+        if (!reader.read(32, schema)) return NativeStatus::malformed;
+        // F32220 publishes the interaction latch and revision through this registered child.
+        if (schema == 0x80804FB7U) {
+            if (!read_bool(reader, values, 0x80804FB7U, 0, false, index)
+                || !read_signed(reader, values, 0x80804FB7U, 1, 32, 32,
+                    (std::numeric_limits<std::int32_t>::min)(), false, index))
+                return NativeStatus::malformed;
+        } else if (schema == 0x80809ACCU) {
+            // Runtime flags 0x21 mean exact + custom codec, not optional (0x02).
+            // Native 9F0750 always writes the packed owner key, including zero when unheld.
+            if (!read_bool(reader, values, 0x80809ACCU, 0, false, index)
+                || !read_unsigned(reader, values, 0x80809ACCU, 1, 64, false, index))
+                return NativeStatus::malformed;
+        } else return NativeStatus::unsupported;
+    }
+    return NativeStatus::complete;
 }
 /**
  * Decodes the combatant block: the accepted spawn and event generations, the atom runner's lane
@@ -472,6 +491,53 @@ real_value(std::uint64_t raw, std::uint8_t width, std::uint32_t maximumBits) noe
     }
     return NativeStatus::complete;
 }
+/** Type13 participation: authored field tables80804F2F/808094E4. In particular,
+ * F9CC60 publishes .0.5 from a dead player with a valid Ghost, not a missing actor
+ * during region loading. Decode the complete body before accepting that evidence. */
+[[nodiscard]] NativeStatus decode_player(Reader& reader, Values& values) noexcept {
+    constexpr auto signedBias = (std::numeric_limits<std::int32_t>::min)();
+    if (!read_signed(reader,values,0x808094E4,0,32,32,signedBias,true)
+        || !read_unsigned(reader,values,0x808094E4,1,32,true)) return NativeStatus::malformed;
+    for (unsigned i=2;i<=5;++i)
+        if (!read_bool(reader,values,0x808094E4,i,false)) return NativeStatus::malformed;
+    if (!read_signed(reader,values,0x808094E4,6,3,8,1,false)
+        || !read_signed(reader,values,0x808094E4,7,2,8,1,false)) return NativeStatus::malformed;
+    std::uint64_t count{};
+    if (!reader.read(3,count)) return NativeStatus::malformed;
+    if (count>4) return NativeStatus::unsafeCount;
+    for (unsigned i=0;i<count;++i)
+        if (!read_unsigned(reader,values,0x80804F39,0,32,false,i)
+            || !read_real(reader,values,0x80804F39,1,32,false,i)) return NativeStatus::malformed;
+    if (!read_real(reader,values,0x80804F35,1,32,false)
+        || !read_signed(reader,values,0x80804F35,2,5,32,1,false)
+        || !read_signed(reader,values,0x80804F35,3,32,32,signedBias,true)) return NativeStatus::malformed;
+    for (unsigned i=4;i<=6;++i)
+        if (!read_bool(reader,values,0x80804F35,i,false)) return NativeStatus::malformed;
+    if (!read_unsigned(reader,values,0x808094DD,0,64,true)
+        || !read_unsigned(reader,values,0x808094DD,1,5,false)
+        || !read_signed(reader,values,0x808094DD,2,6,8,3,false)) return NativeStatus::malformed;
+    if (!reader.read(6,count)) return NativeStatus::malformed;
+    if (count>32) return NativeStatus::unsafeCount;
+    for (unsigned i=0;i<count;++i)
+        if (!read_unsigned(reader,values,0x808094DF,0,32,false,i)) return NativeStatus::malformed;
+    if (!reader.read(6,count)) return NativeStatus::malformed;
+    if (count>32) return NativeStatus::unsafeCount;
+    for (unsigned i=0;i<count;++i)
+        if (!read_unsigned(reader,values,0x808094E3,0,32,true,i)
+            || !read_unsigned(reader,values,0x808094E3,1,64,true,i)) return NativeStatus::malformed;
+    if (!read_bool(reader,values,0x80804F31,0,false)
+        || !read_unsigned(reader,values,0x80804F31,1,4,false)
+        || !read_unsigned(reader,values,0x80804F31,2,16,true)
+        || !read_unsigned(reader,values,0x80804F31,3,16,true)) return NativeStatus::malformed;
+    bool exists{};
+    if (!present(reader,true,exists)) return NativeStatus::malformed;
+    if (exists && !read_unsigned(reader,values,0x80804F34,0,32,false)) return NativeStatus::malformed;
+    return read_bool(reader,values,0x80804F31,5,false)
+        && read_signed(reader,values,0x80804F31,6,8,8,128,false)
+        && read_signed(reader,values,0x80804F2F,4,32,32,signedBias,false)
+        ? NativeStatus::complete : NativeStatus::malformed;
+}
+
 /** Decodes one root body of the given schema; the status names how far it got. */
 [[nodiscard]] NativeStatus
 decode_body(std::uint32_t schema, Reader& reader, Values& values) noexcept {
@@ -479,6 +545,24 @@ decode_body(std::uint32_t schema, Reader& reader, Values& values) noexcept {
     if (!reader.read(1, root)) return NativeStatus::malformed;
     if (root == 0) return NativeStatus::complete;
     switch (schema) {
+    case 0x80804F2F:
+        return decode_player(reader, values);
+    case 0x80809562U:
+        // Reflected flags 0x21: mandatory raw floats (optional is bit 0x02).
+        // Native A774B0 publishes health/shield/revision as a fixed 12-byte state.
+        return read_real(reader, values, schema, 0, 32, false)
+            && read_real(reader, values, schema, 1, 32, false)
+            && read_signed(reader, values, schema, 2, 32, 32,
+                (std::numeric_limits<std::int32_t>::min)(), false)
+            ? NativeStatus::complete : NativeStatus::malformed;
+    case kGhostLink:
+        // Native E4A590 publishes all three fields: active, elapsed/duration,
+        // and the accepted Auth generation. None has an optional presence bit.
+        return read_bool(reader, values, kGhostLink, 0, false)
+                       && read_real(reader, values, kGhostLink, 1, 32, false)
+                       && read_signed(reader, values, kGhostLink, 2, 32, 32,
+                                      (std::numeric_limits<std::int32_t>::min)(), false)
+                   ? NativeStatus::complete : NativeStatus::malformed;
     case kDevice:
         return decode_device(reader, values);
     case kScene:

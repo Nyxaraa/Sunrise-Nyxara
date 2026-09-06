@@ -72,6 +72,69 @@ bool arm_host_teleport(std::uint64_t sessionId,
     return changed;
 }
 
+bool arm_hard_wipe(const SessionBinding& binding, std::uint64_t requestKey,
+    std::int32_t region, std::uint32_t spawnSetHash) noexcept {
+    if (!requestKey || region<0 || !spawnSetHash || spawnSetHash==UINT32_MAX) return false;
+    bool accepted=false;
+    AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
+    ActivityState& state=runtime::storage::g_state.activity;
+    const auto target=activity::transactions::find_session(state,binding.sessionId);
+    if (target!=kInvalidSessionSlot && state.sessions[target].createdRevision==binding.createdRevision) {
+        auto& membership=state.sessions[target].membership;
+        auto& wipe=membership.hardWipe;
+        if (wipe.requestKey==requestKey) accepted=true;
+        else if (!wipe.active && !membership.hasHostTeleport) {
+            wipe.requestKey=requestKey;wipe.region=region;wipe.spawnSetHash=spawnSetHash;
+            wipe.host={};wipe.host.state=1;
+            wipe.host.opaqueByte=static_cast<std::uint8_t>(membership.spawn.opaqueByte+1U);
+            wipe.active=true;wipe.resetReady=false;wipe.clientWaiting=false;accepted=true;
+        }
+    }
+    ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+    return accepted;
+}
+
+bool hard_wipe_needs_publish(std::uint64_t sessionId) noexcept {
+    bool pending = false;
+    AcquireSRWLockShared(&runtime::storage::g_stateLock);
+    const auto& state = runtime::storage::g_state.activity;
+    const auto target = activity::transactions::find_session(state, sessionId);
+    if (target != kInvalidSessionSlot) {
+        const auto& member = state.sessions[target].membership;
+        const auto& wipe = member.hardWipe;
+        pending = wipe.active && (wipe.host.state == 4
+            || member.spawn.opaqueByte != wipe.host.opaqueByte || member.spawn.state < 1);
+    }
+    ReleaseSRWLockShared(&runtime::storage::g_stateLock);
+    return pending;
+}
+
+bool release_hard_wipe(const SessionBinding& binding, std::uint64_t requestKey) noexcept {
+    bool accepted = false;
+    AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
+    ActivityState& state = runtime::storage::g_state.activity;
+    const auto target = activity::transactions::find_session(state, binding.sessionId);
+    if (target != kInvalidSessionSlot && state.sessions[target].createdRevision == binding.createdRevision) {
+        auto& wipe = state.sessions[target].membership.hardWipe;
+        if (wipe.active && wipe.requestKey == requestKey) { wipe.release(); accepted = true; }
+    }
+    ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+    return accepted;
+}
+
+std::uint32_t checkpoint_spawn_hash(std::uint64_t sessionId, std::int32_t region) noexcept {
+    std::uint32_t result{};
+    AcquireSRWLockShared(&runtime::storage::g_stateLock);
+    const ActivityState& state=runtime::storage::g_state.activity;
+    const auto target=activity::transactions::find_session(state,sessionId);
+    if (target!=kInvalidSessionSlot) {
+        const auto& wipe=state.sessions[target].membership.hardWipe;
+        if (wipe.requestKey && wipe.region==region) result=wipe.spawnSetHash;
+    }
+    ReleaseSRWLockShared(&runtime::storage::g_stateLock);
+    return result;
+}
+
 /** Reports whether a host-named teleport is still waiting for the client to move. */
 bool host_teleport_armed(std::uint64_t sessionId) noexcept {
     if (sessionId == kAbsentSessionId) {

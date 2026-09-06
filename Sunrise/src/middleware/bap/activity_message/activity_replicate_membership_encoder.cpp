@@ -28,7 +28,11 @@ bool encode_replicate_membership(const MembershipSnapshot& snapshot,
                          && writer.write(1, 1) && write_region_block(writer, snapshot)
                          && writer.write(1, 1) && writer.write(occupied_member_mask(snapshot), 32)
                          && writer.write(1, 1) && writer.write(occupied_member_mask(snapshot), 32)
-                         && writer.write(0, 1) && writer.write(0, 1) && writer.write(0, 1);
+                         // Field 6 drives native view +178 (entity send enabled). An absent
+                         // delta preserves zero and strands every deletion awaiting this host.
+                         && writer.write(1, 1)
+                         && writer.write(entity_replication_member_mask(snapshot), 32)
+                         && writer.write(0, 1) && writer.write(0, 1);
     std::size_t encodedSize = 0;
     const std::size_t meaningfulBits = meaningful_bit_count(snapshot);
     if (!encoded || writer.bit_count() != meaningfulBits || !writer.finish(encodedSize)

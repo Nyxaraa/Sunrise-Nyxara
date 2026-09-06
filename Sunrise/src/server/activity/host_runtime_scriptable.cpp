@@ -4,7 +4,14 @@
 #include <new>
 
 #include "../../middleware/bap/activity_message/sensor_auth_update.h"
+#include "../../middleware/bap/activity_message/mission_auth_patch.h"
+#include "../../middleware/bap/activity_message/squad_objective_auth.h"
+#include "../../middleware/bap/activity_message/combatant_path_auth.h"
+#include "../../middleware/bap/activity_message/combatant_action_auth.h"
+#include "../../middleware/bap/activity_message/combatant_delivery_auth.h"
+#include "../../middleware/bap/activity_message/combatant_retire_auth.h"
 #include "../../state/activity/mission/runtime.h"
+#include "../../core/logging/log.h"
 #include "../../state/activity/runtime.h"
 #include "host_runtime_internal.h"
 
@@ -190,6 +197,22 @@ valid_state_local_group(const ScriptableTarget& target,
     }
     if (pending.byteCount == 0 || pending.byteCount > pending.body.size()) {
         return false;
+    }
+    // Record the exact transported Ember ship body, including path revision and manifest.
+    // Four fixed targets and short bodies keep this diagnostic bounded during flight.
+    if (pending.target.registryKey == 0xF6FFB59EU && pending.target.slotType == 2
+        && (pending.target.slotIndex == 22 || pending.target.slotIndex == 28
+            || pending.target.slotIndex == 30 || pending.target.slotIndex == 32)
+        && pending.byteCount <= 128) {
+        std::array<char,257> hex{};
+        constexpr char digits[] = "0123456789abcdef";
+        for (std::size_t i=0;i<pending.byteCount;++i) {
+            const auto byte=std::to_integer<unsigned>(pending.body[i]);
+            hex[i*2]=digits[byte>>4]; hex[i*2+1]=digits[byte&15];
+        }
+        core::log::writef(core::log::Channel::server,core::log::Level::info,
+            "ev=ember_transport stage=auth_staged slot=%u bits=%u body=%s",
+            static_cast<unsigned>(pending.target.slotIndex),static_cast<unsigned>(pending.bitCount),hex.data());
     }
     PendingScriptableOverride owned = pending;
     if (owned.expectedActivityClientGeneration == 0) {
@@ -520,6 +543,36 @@ void apply_scriptable_control(const ScriptableRequest& request, std::uint64_t no
         std::copy_n(request.authBody.begin(), written, pending.body.begin());
     } else {
         encoded = false;
+    }
+    // These mission APIs emit root-field patches; native overrides are complete Auth
+    // replacements. Keep the last transported state before publishing another command.
+    namespace message = middleware::bap::activity_message;
+    const auto patch = std::span(pending.body).first(written);
+    const bool missionPatch = encoded && (request.kind == ScriptableOverrideKind::squad
+        || (request.kind == ScriptableOverrideKind::sdkAuth
+            && ((request.target.slotType == 1 && request.target.authSchema == squad::kSchema
+                 && message::squad_objective::validate(patch, pending.bitCount))
+                || (request.target.slotType == 2 && request.target.authSchema == 0x80807DA1U
+                    && (message::combatant_path::validate(patch, pending.bitCount)
+                        || message::combatant_delivery::validate(patch, pending.bitCount)
+                        || message::combatant_action::validate(patch, pending.bitCount)
+                        || message::combatant_retire::validate(patch, pending.bitCount))))));
+    if (missionPatch) {
+        std::span<const std::byte> previous{};
+        std::size_t previousBits=0;
+        // A tail cannot contain the same ClientRef as another pending body, so its
+        // predecessor is always in the transported estate, not an uncommitted row.
+        for (const auto& retained : instance->scriptableAuthEstate) {
+            if (same_client_ref(retained.target, request.target)) {
+                previous=std::span(retained.body).first(retained.byteCount);
+                previousBits=retained.bitCount;
+                break;
+            }
+        }
+        std::size_t composedBits{};
+        encoded=message::mission_auth_patch::compose(request.target.authSchema,
+            previous,previousBits,patch,pending.bitCount,pending.body,written,composedBits);
+        if (encoded) pending.bitCount=static_cast<std::uint16_t>(composedBits);
     }
     if (!encoded || written > (std::numeric_limits<std::uint16_t>::max)()) {
         ++g_refusedControls;
@@ -989,7 +1042,6 @@ bool request_squad_override(const state::activity::SessionBinding& binding,
                             std::optional<std::uint32_t> nameHash,
                             const ScriptableOutputReservation* reservation,
                             std::array<std::int8_t, 4> authoredProfile) noexcept {
-    const auto rawMode = static_cast<std::uint8_t>(mode);
     if (target.slotType != squad::kSlotType || target.authSchema != squad::kSchema
         || (target.stateLocalRoster
                 ? stateLocalRosterGroup == nullptr
@@ -998,8 +1050,7 @@ bool request_squad_override(const state::activity::SessionBinding& binding,
         || requestedCounts.size() < squad::kMinimumRequestedCountLength
         || requestedCounts.size() > squad::kMaximumRequestedCountLength
         || expectedActivityClientGeneration == 0
-        || (rawMode != static_cast<std::uint8_t>(squad::Mode::mode0)
-            && rawMode != static_cast<std::uint8_t>(squad::Mode::mode2))
+        || !squad::valid_mode(mode)
         || !std::ranges::all_of(requestedCounts, [](std::int32_t count) { return count >= 0; })) {
         return false;
     }

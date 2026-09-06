@@ -97,7 +97,10 @@ static void cinematic_handoff() {
     catalog::Slot slot{};
     slot.slotType = 6;
     world.slots.push_back(slot);
-    for (const auto target : {cinematic::kStartedTarget, cinematic::kTerminatedTarget}) {
+    for (const auto target : {cinematic::kStartedTarget, cinematic::kTerminatedTarget, cinematic::kSkipTarget}) {
+        cinematic::Signal signal{};
+        assert(cinematic::signal_for_target(target, signal));
+        if (target == cinematic::kSkipTarget) assert(signal == cinematic::Signal::skipRequested);
         incident::Incident input{};
         input.primaryTarget = target;
         input.payloadLength = body.size();

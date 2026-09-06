@@ -210,6 +210,11 @@ bool commit(ServiceOutcome& outcome, Publication& publication, const char*& reas
             reason = "authority_reset";
             return plan->authorityReset.pending;
         }
+        if (plan->mutationDomain == activity_message::MutationDomain::authorityPurge) {
+            reason = "authority_purge";
+            return plan->authorityPurgeGeneration != 0
+                   && state::activity::binding_matches(plan->targetBinding);
+        }
         // The retained patch epoch is connection state, so it commits nothing here.
         reason = "mutation_domain";
         return plan->mutationDomain == activity_message::MutationDomain::patchEpoch;

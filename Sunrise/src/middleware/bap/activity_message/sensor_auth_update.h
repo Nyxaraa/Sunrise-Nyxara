@@ -167,6 +167,9 @@ struct Snapshot final {
     bool hasGrant{};
     bool hasRegion{};
     bool hasSpawnOverride{};
+    /** SDK darkness policy; lifetime +12 stores a bubble, not the slice-set index. */
+    bool hasDarknessPolicy{};
+    bool darknessEnabled{};
     /** Hold the client's spawn while it loads by emitting `awaiting_client_sync`. */
     bool awaitClientSync{};
     /** Register the groups and seed no object. Separates no components from no auth state. */

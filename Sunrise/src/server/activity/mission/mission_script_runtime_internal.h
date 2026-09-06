@@ -1,3 +1,5 @@
+#include "mission_script_squad_sense.h"
+#include "mission_script_actor_path_sense.h"
 #pragma once
 
 #include <array>
@@ -15,6 +17,9 @@
 #include "../../../state/activity_sdk/runtime.h"
 #include "../host_runtime.h"
 #include "mission_script_vm.h"
+#include "mission_script_ghost_sense.h"
+#include "mission_script_object_sense.h"
+#include "mission_script_player_sense.h"
 
 // What the four mission-runtime translation units share. One owns the instance table and the
 // service slice. One runs the delivery state machine. One fans one intent out to its adapter. One
@@ -50,7 +55,7 @@ constexpr std::size_t kSquadObservationCapacity = 160;
 /** Watched authored scenes retained per instance. */
 constexpr std::size_t kSceneObservationCapacity = 32;
 /** Watched objective sensors retained per instance. */
-constexpr std::size_t kObjectiveObservationCapacity = 8;
+constexpr std::size_t kObjectiveObservationCapacity = 32;
 /** One objective sensor carries this many objective blocks. */
 constexpr std::size_t kObjectiveCapacity = 24;
 /** One objective block carries this many task counters. */
@@ -70,7 +75,34 @@ struct TriggerOccupancy final {
 };
 
 /** Last squad counters seen for one watched object, so only a change raises an event. */
+struct ActorPathObservation final {
+    ActorPathLevel level{};
+    std::uint32_t registryKey{}, objectTag{};
+    std::uint16_t slotIndex{};
+    bool used{};
+};
+struct DamageObservation final {
+    std::uint32_t registryKey{}, objectTag{};
+    std::uint16_t slotIndex{};
+    std::int32_t revision{};
+    float health{-1.0F}, shield{-1.0F};
+    bool used{};
+};
+struct ObjectInteractionObservation final {
+    ObjectInteractionLevel level{};
+    std::uint32_t registryKey{}, objectTag{};
+    std::uint16_t slotIndex{};
+    bool used{};
+};
+struct GhostObservation final {
+    GhostLevel level{};
+    std::uint32_t registryKey{};
+    std::uint32_t objectTag{};
+    std::uint16_t slotIndex{};
+    bool used{};
+};
 struct SquadObservation final {
+    SquadObjectiveCosts objectiveCosts{};
     std::array<std::int32_t, host::kSquadSlotCapacity> slotCounts{};
     std::uint32_t registryKey{};
     std::uint32_t objectTag{};
@@ -138,10 +170,18 @@ struct RuntimeInstance final {
     std::uint64_t nextTimerAttempt{};
     std::array<TriggerOccupancy, kTriggerOccupancyCapacity> triggerOccupancy{};
     std::array<SquadObservation, kSquadObservationCapacity> squadObservations{};
+    std::array<GhostObservation, 8> ghostObservations{};
+    std::array<DamageObservation, 8> damageObservations{};
+    std::array<ObjectInteractionObservation, 64> objectInteractionObservations{};
+    std::array<ActorPathObservation, 64> actorPathObservations{};
     std::array<SceneObservation, kSceneObservationCapacity> sceneObservations{};
     std::array<ObjectiveObservation, kObjectiveObservationCapacity> objectiveObservations{};
     // The table is exactly as large as the session table, so it can never overflow.
     std::array<SessionRosterWatch, state::activity::kSessionCapacity> sessionRoster{};
+    std::array<PlayerLifeObservation, 16> playerLife{};
+    std::uint64_t playerLifeGeneration{};
+    FireteamLife lastFireteamLife{};
+    bool fireteamLifePublished{};
     /** Dynamically sized host-state reports waiting for this script, in arrival order. */
     std::vector<host::Event> scriptEvents{};
     std::uint64_t firstScriptEventAttempt{};
@@ -160,6 +200,10 @@ struct RuntimeInstance final {
     DeliveryStage deliveryStage{DeliveryStage::idle};
     /** The player key the bound link's message 5 binds, read at attach. */
     std::uint64_t playerKey{};
+    /** Bounded diagnostic budget for Ember bridge and console Sense fields. */
+    std::uint16_t emberInteractionReports{};
+    std::array<std::uint64_t, 64> emberInteractionValues{};
+    std::uint64_t emberInteractionSeen{};
     bool publicTarget{};
     bool missionStateBound{};
     bool missionStarted{};
@@ -192,6 +236,11 @@ void push_trigger_edges(RuntimeInstance& instance,
 void push_player_trigger(RuntimeInstance& instance, const host::Event& incident) noexcept;
 /** Raises one exact Type-6 start/finish edge from a decoded schema-0x808087BF msg-19 payload. */
 void push_cinematic(RuntimeInstance& instance, const host::Event& incident) noexcept;
+void push_actor_path_edges(RuntimeInstance& instance, const host::SenseObservationSnapshot& sense) noexcept;
+void push_damage_edges(RuntimeInstance& instance, const host::SenseObservationSnapshot& sense) noexcept;
+void push_object_interaction_edges(RuntimeInstance& instance, const host::SenseObservationSnapshot& sense) noexcept;
+void push_ghost_edges(RuntimeInstance& instance,
+                      const host::SenseObservationSnapshot& sense) noexcept;
 /** Raises the squad state, spawn and death events derived from one msg 6 body. */
 void push_squad_edges(RuntimeInstance& instance,
                       const host::SenseObservationSnapshot& sense) noexcept;

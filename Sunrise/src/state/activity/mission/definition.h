@@ -7,8 +7,8 @@
 
 namespace sunrise::state::activity::mission {
 
-/** One activity generation retains at most sixty-four script variables. */
-inline constexpr std::size_t kVariableCapacity = 64;
+/** One activity generation retains at most 512 script variables. */
+inline constexpr std::size_t kVariableCapacity = 512;
 /** One activity generation retains at most thirty-two authoritative timers. */
 inline constexpr std::size_t kTimerCapacity = 32;
 /** Durable variable and timer names contain at most sixty-three bytes. */
@@ -75,6 +75,7 @@ enum class IntentKind : std::uint8_t {
     bindCombatantToSquad,
     actorCommand,
     playPerformance,
+    restartCheckpoint,
 };
 
 /** One object a mission omits, named the way a roster group is: its tag and its registry key. */
@@ -105,6 +106,8 @@ struct TypedIntent final {
     std::uint32_t authSchema{};
     /** SDK-selected actor-command selector, never a wire constant owned by Mission State. */
     std::uint32_t actorCommandSelector{};
+    std::uint32_t checkpointSpawnHash{};
+    std::uint64_t checkpointReleaseRequest{};
     /** Authored effective region selected by the generated mission-state table. */
     std::int32_t effectiveRegion{-1};
     std::int32_t entryIndex{};

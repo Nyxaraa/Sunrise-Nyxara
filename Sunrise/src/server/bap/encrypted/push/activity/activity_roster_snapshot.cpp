@@ -1,3 +1,4 @@
+#include "../../../../../middleware/bap/activity_message/darkness_zone_auth.h"
 #include <Windows.h>
 
 #include <algorithm>
@@ -1227,7 +1228,6 @@ build_roster_snapshot(Session& session,
     if (!pendingAddsGroup && pendingStateLocal && pendingGroupIndex < lease.groupCount) {
         pendingGroupPosition = retainedGroupPositions[pendingGroupIndex];
     }
-    bool pendingInstalled = false;
     for (std::size_t index = 0; retainedSquad && index < lease.authCount; ++index) {
         message::AuthOverride retainedAuth{};
         if (!retained_squad_auth(lease, index, retainedAuth)) {
@@ -1253,7 +1253,6 @@ build_roster_snapshot(Session& session,
                                    effectiveStateLocal)) {
             return refuse_override("retained_auth_install");
         }
-        pendingInstalled = pendingInstalled || replace;
     }
     // Message 5 resets every registered Auth slot before applying its bodies, so the complete
     // latest-per-ClientRef estate is re-emitted and a later action cannot erase an earlier one.
@@ -1340,7 +1339,10 @@ build_roster_snapshot(Session& session,
             }
         }
     }
-    if (authOverride != nullptr && !pendingInstalled
+    // The estate may contain an older SDK objective update for a squad that was
+    // also installed through its lease above. Apply the pending body last even
+    // for that target; otherwise the older body silently wins this packet.
+    if (authOverride != nullptr
         && !install_auth_override(layout,
                                   region,
                                   scratch,
@@ -1362,6 +1364,17 @@ build_roster_snapshot(Session& session,
                                    queued.rosterSlotOffset,
                                    queued.stateLocalRosterTarget)) {
             return refuse_override("tail_auth_apply");
+        }
+    }
+    // Use the final merged estate, so a pending disable wins over retained enable.
+    namespace darkness=middleware::bap::activity_message::darkness_zone;
+    for (const auto& value : snapshot.authOverrides) {
+        bool enabled{};
+        if (value.sdkCompiled&&value.present&&value.slotType==darkness::kSlotType
+            &&value.authSchema==darkness::kSchema&&value.byteCount<=value.body.size()
+            &&darkness::decode(std::span(value.body).first(value.byteCount),value.bitCount,enabled)) {
+            snapshot.hasDarknessPolicy=true;
+            snapshot.darknessEnabled=enabled;
         }
     }
     // Staging runs before the connection field is published, so a body answering message 52 has to
@@ -1392,6 +1405,11 @@ build_roster_snapshot(Session& session,
         region.index >= 0 ? static_cast<std::uint32_t>(region.index) : region.arrival;
     snapshot.spawnSetHash =
         state::activity::destination::attachable_spawn_set_hash(selection, fallback.spawnSetHash);
+    // A genuine wipe selects the authored darkness checkpoint, not the mission's
+    // initial arrival override. Keep it in this region while the player respawns.
+    if (const auto checkpoint=state::activity::membership::checkpoint_spawn_hash(
+            session.activity.source.sessionId,region.index); checkpoint!=0)
+        snapshot.spawnSetHash=checkpoint;
     snapshot.hasSpawnOverride =
         snapshot.spawnSetHash != 0 && snapshot.spawnSetHash != message::kAbsentSpawnSetHash;
     advance_region_epoch(session, refresh);

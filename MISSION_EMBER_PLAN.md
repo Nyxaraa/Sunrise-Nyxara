@@ -1,90 +1,79 @@
-# 1AU / mission_ember implementation plan
+# 1AU remaining mission implementation plan
 
-Prepared 2026-09-04. Scope: restore the complete mission through Lua using the installed generated SDK, with package-backed identifiers and authored resources.
+Authorized on 2026-09-06: finish navigation/wipes, then plan and implement the remaining
+mission without further approval. The user launches the game manually. Install completed
+candidates only while it is closed; preserve settings/save and make rollback backups.
 
-## Evidence reviewed
+## Evidence and implementation rules
 
-- Reference video: https://www.youtube.com/watch?v=PqurUhqC2CE — The Videogame Library, “Destiny 2 (Xbox One) The Red War: Mission 16 - 1AU (No Commentary Longplay)”, duration 36:42. Reviewed all nine available storyboard sheets, sampling the timeline every ten seconds. This establishes broad visual order; it is not continuous playback or an audio review. Exact dialogue timing, brief interactions and damage timings remain to be verified. The recording begins in gameplay and includes subsequent story cinematics and a later mission launch; those are not all necessarily controlled by Ember.
-- Generated mission: `/home/millie/Games/Sunrise/bin/x64/Sunrise/sdk/lua/missions/mission_ember_80b3c09e.lua`.
-- Campaign activity: `mission_ember_38f926b2.lua`, display name `1AU`, activity index 281. Daily Heroic variant: `mission_ember_231dd291.lua`, index 54. Both point to activity root `0x80B3C07D` and scenario `0x80B3C09E`.
-- SDK manifest: schema `sunrise-activity-sdk-v8`, format 37, build ID `sha256:26b80ec22191c2f87d9079ef1dc90707cf26b10e5299962304aac4e7a9e8c47a`.
-- Installed packages: `/home/millie/Games/Sunrise/packages`. Read package directories and checked 154 distinct content references from the mission's slot IDs and content-tag fields: all resolved to nonempty entries across nine package families. This verifies presence, not complete semantic decoding of each payload. Runtime schema constants were excluded from the content-reference check.
-- Primary family: `w64_cabal_ship_activities_019e_{0,1,2,3,5}.pkg`, with 8,192 directory entries in the latest installed directory. Root entry: 72 bytes; scenario entry: 1,773 bytes.
-- Scenario SDK pack: `sdk/scenarios/80B3C09E-446ac6892dd45476cc8b91f8e3a654d92b14eaa6ed4d272f14e93cc43a927082.pack`.
-- Lua references: sibling `SunriseMissions`, especially `lib/mission_lib.lua` and the regional dispatch in `tangled_shore_freeroam.lua`. Its README describes the examples as WIP, so each pattern needs checking against this branch's runtime.
+Reference video: https://www.youtube.com/watch?v=PqurUhqC2CE ; saved copy
+`/tmp/ember-reference/1au.mp4`. Opening cutscene reference:
+https://www.youtube.com/watch?v=IUmUYHELJAY . Existing timestamp observations are in
+`MISSION_EMBER_REFERENCE.md`. SDK topology, compact inventories and subsequent frame
+inspection are recorded in `build/full-mission-audit/`.
 
-## What the generated SDK already contains
+Use authored squad identities, spawn rules/anchors, combat objectives, devices, objects,
+navpoints, scenes, triggers and dialogue. Video timestamps describe event ordering;
+progression must follow gameplay receipts rather than the recording's elapsed time.
+Keep completed encounters complete across backtracking and streaming. A deliberate wipe
+resets only its checkpoint, with new object/ship generations and stale-event protection.
+A copied SDK declaration is not evidence that its native interaction already works.
 
-| Resource | Count / finding |
-| --- | --- |
-| State records | 8; effective region indices 0, 1, 2, 40, 48, 49, 56, 64 |
-| Named slots | 2,051 |
-| Squad sensors / richer squad definitions | 162 / 31 |
-| Device sensors | 69 |
-| Objective sensors / directive entries | 28 / 26 |
-| Player trigger sensors / trigger volumes | 127 / 211 |
-| Scenes / sequence sensors / cinematic sensors | 10 / 9 / 3 |
-| Dialogue cue selectors | 55; definition mappings exist for a subset |
-| Task targets / performance states | Both generated tables are empty |
+## Execution result
 
-Specific assets include `sunburn_damage_object`, `security_placed_interceptor_object`, bridge machinery, east/west reactor clamshell devices and damage sensors, the coffin damage sensor, reactor shield, explosion scenes, escape ship and three cinematic bookend sensors. Directive descriptions explicitly identify the grinder, solar-exposure cover mechanic, bridge controls, energy stream, Interceptor, cooling vents, fusion cell and escape.
+All seven work packages reached an installed full-route candidate on2026-09-06.
+The SDK audit and controller/wire regressions passed; the complete route, checkpoint
+reset policies and ending are implemented. The native thermal/exposure and timed
+escape-failure policies remain incomplete, and actual gameplay has deliberately not been
+launched. See `MISSION_EMBER_STATUS.md` for exact limits and installation evidence.
+The work order below records the plan used to build the candidate.
 
-These findings support an SDK-first implementation. They do not yet prove every required runtime operation works. In particular, the difference between squad sensors and richer squad definitions must be explained before choosing how each encounter is activated. An empty task table means we cannot assume an `advance_task` target exists for every objective.
+## Work order
 
-## Implementation sequence
+1. **Landing navigation and wipe foundation — candidate installed.** Native directive
+   target references, visible normal/darkness respawn policy, death evidence, three-second
+   all-dead countdown and native membership wipe. Reset at Mercury before rescanning;
+   retain completed approach and lever. Offline regressions passed. Native HUD/fade and
+   co-op presentation await the user's live test.
+2. **Complete the package audit before wiring later populations.** Resolve the SDK's
+   ambiguous Processing spawn-rule edges and missing access/ready-room definitions.
+   Extract each combat objective's task-group bounds. Map region ownership and objects
+   to their native entry/model, interaction/destruction/carried state, and paired devices.
+   Verify progression gates against closer video samples.
+3. **Mineral Processing / link, region56 (~05:30–11:00).** Entry squads and shutters;
+   obstructed grinder discovery; fusion-cell pickup, carry and receptacle; activation and
+   defend waves; clearing debris and opening the exit. Include machinery/klaxon/lighting,
+   dialogue and forward guidance. Give the defense its own retry checkpoint.
+4. **Sunside / cinder, region40 (~11:00–20:50).** Exterior solar-exposure behavior and
+   authored cover/route; Sunside squads and retreat scenes; ready rooms, tumbler,
+   chamber/ascent/meat-grinder route; Foundry/Bruiser and exit machinery. Load interactable
+   and environmental objects when their area becomes active. Preserve staged waves and
+   their objectives; checkpoint each contained encounter. Finish at the energy-stream exit.
+5. **Light's End / apex, region0 (~21:00–27:45).** Access and security squads, Interceptor
+   availability, reactor east/west/core encounters. Cycle authored vent devices and expose
+   the corresponding destructible targets; count actual target destruction. Progress from
+   two side exchangers to the core, then fusion-cell pickup and reservoir deposit. Add
+   enemy reinforcements, dialogue, objective counters, navigation and checkpoint cleanup.
+6. **Escape and ending (~27:45–35:27).** Overload scene, escape route and authored ship
+   handoff; identify and sequence the two final cinematic states, including native skip
+   incidents. Complete Ember exactly once. Chosen gameplay after~35:54 is a separate
+   mission and is outside this script.
+7. **End-to-end verification and installation.** Run the mission controller against an
+   SDK-backed simulated event stream: normal route, skipped narrow triggers, deaths and
+   retries, duplicate receipts, carried-object recovery, streaming/backtracking, and final
+   completion. Validate every referenced slot/squad/state and objective task bound. Build
+   native code, run relevant wire/decoder regressions, install and SHA-verify the complete
+   candidate with a backup. Record remaining live-only checks honestly.
 
-1. **Build the mission mapping and prove the SDK bindings.**
-   - Create a stage table mapping each encounter to its owning region/state, entry and exit triggers, squads, devices, objective/directive, dialogue cues, scenes and reset behavior.
-   - Use stable generated identifiers. Distinguish identical display names with different slot identities. State values are all zero here: use their region-qualified identities rather than treating the values as global phase IDs.
-   - Trace ambiguous mappings through the SDK catalog/scenario data and targeted package payloads. Determine whether squads absent from the richer table are scene-owned, activated through existing sensor state, or need an SDK export correction.
-   - Verify the generated module, branch runtime and installed runtime agree. Exercise the existing APIs for state selection, squad placement, device transitions, triggers, directives, dialogue, cinematics and lifetime state.
-   - Deliverable: an encounter map with confirmed bindings and an explicit list of unresolved operations.
+## Initial audit findings
 
-2. **Implement and test the opening encounter as a complete slice.**
-   - Add `scripts/mission_ember.lua` and focused modules under `scripts/mission_ember/`; include the required shared helpers in the same deployable tree.
-   - Bind the campaign activity first. Resolve the correct entry state, publish its entities, activate its encounter and show its authored directive.
-   - Prove an actual player trigger, a combat completion condition, the first gate transition and the following region load.
-   - Handle duplicate events, death/reset and region re-entry before expanding the controller.
-   - Exit criterion: launch, play the first encounter, progress, reset and replay without manual entity spawning or forced phase advancement.
+The generated SDK has 2,051 slot declarations, 162 squad sensors and160 squad definitions;
+138 definitions pass its existing exactness/profile checks. Processing's11 defense
+sensors each have two rule candidates with unresolved association;13 sensors in later
+access/ready-room content have no generated squad definition. These require package
+investigation before claiming every later squad is supported. One shared valid directive
+and dialogue sensor carries the mission's authored text/cues across its gameplay states.
 
-3. **Implement the traversal and combat sequence in order.**
-
-   | Section | Required behavior |
-   | --- | --- |
-   | Opening / mineral processing | Correct combat groups, entrances/exits, navigation, objectives and dialogue; determine any launch bookend from package ownership. |
-   | Ore tunnels and grinder | Investigation and activation interaction, defend while clearing the obstruction, completion gate and onward route. |
-   | Sunlit deck | Enable the authored solar hazard and cover behavior; activate the correct encounters and remove section-specific effects on exit/reset. |
-   | Interior chambers and machinery | Encounter waves, moving devices, doors, bridge controls and region transitions. Confirm the exact placement of each bridge against trigger ownership. |
-   | Fuel stream and Interceptor route | Energy-stream traversal, vehicle availability/boarding, enemy placement and the transition into the reactor section. |
-   | Reactor sabotage | East/west vent exposure and destruction, linked objectives and scenes, subsequent core/fusion-cell interaction, shield and route changes. Confirm authored ordering and thresholds from data. |
-   | Escape | Explosion sequence, navigation to the getaway ship, escape trigger, terminal mission state and the relevant cinematic handoff. |
-
-   - Progress from actual trigger, interaction, damage, squad and scene events. Use timers where supported by authored behavior; do not copy this player's video duration into encounter gates.
-   - Distinguish stage entry from stage resume. Only activate entities belonging to the appropriate loaded region.
-   - Exit criterion for each section: it can be reached naturally, completed and replayed after failure.
-
-4. **Complete presentation and mission lifecycle behavior.**
-   - Pair each directive and dialogue cue with its actual event; handle alternate cues and avoid repeating one-shot lines on re-entry.
-   - Restore sequences, music transitions, destruction scenes and cinematic start/termination handling using existing SDK surfaces.
-   - Establish which ending scenes belong to Ember and which belong to campaign progression. Do not launch the later mission merely because it appears at the end of the video.
-   - Verify completion is recorded by the supported activity/campaign path, with expected rewards and subsequent progression where applicable. A final Lua phase or a cinematic alone is not proof of completion.
-
-5. **Make recovery and repeated play reliable.**
-   - Implement the authored checkpoint/wipe behavior using the available runtime state and sensors; first confirm which state survives death, region transit and script reload.
-   - Reset devices, hazards, damage targets, objectives, vehicles, encounter state and timers to the checkpoint's expected state.
-   - Guard one-shot actions against duplicate/stale events. Keep regional timers and callbacks tied to the region that owns them.
-   - Test backtracking, rapid trigger crossings, repeated interaction, death during animations, vehicle loss and escape failure.
-   - Verify fireteam synchronization and late joins if supported by the mission's intended play mode. Test the Daily Heroic binding after campaign behavior is stable.
-
-6. **Validate the complete mission.**
-   - Check Lua loading and every referenced SDK symbol before deployment.
-   - Add focused event-sequence checks for progression, duplicate events, reset and terminal completion where the available harness supports them.
-   - Play from a fresh launch through the ending, with no developer intervention. Compare encounters, objectives, hazards, vehicle section and cinematics with the reference.
-   - Repeat with checkpoint deaths and a fresh second launch. Review runtime logs for unresolved references, rejected operations, stale handles and missed transitions.
-   - Record any remaining behavior differences explicitly. Completion requires functional gameplay and lifecycle behavior, not just reaching the final room.
-
-## Working approach
-
-Keep authored Lua in the `mission-ember` branch and use the installed SDK as generated input. Start with its existing capabilities. Make a targeted runtime/export fix only after a concrete required operation is shown to be unavailable or broken. Initial work should produce the encounter map and playable opening; the full mission then grows section by section using that verified approach.
-
-No gameplay code, installed game files or runtime settings were changed during this planning pass.
+The existing landing behavior and user-confirmed Harvester doors/exit are the regression
+baseline. New code must preserve the verified initial spawn, optional lever gate, pre-bridge
+Ghost requirements, troop delivery delay, and first-section darkness completion.
