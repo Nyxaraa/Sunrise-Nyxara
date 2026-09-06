@@ -265,7 +265,7 @@ for _,side in ipairs({'east','west'})do for _,wave in ipairs({'entry','reinforce
 assert(vars['ember.music.section']==22)
 timer('ember.apex.explain.');assert(vars['ember.r.cue.41'] and vars['ember.music.section']==23)
 assert(timers['ember.apex.vents.1']==14000)
-assert(timers['ember.apex.surge_audio.1']==8000,'audio pre-roll must lead the unchanged visual surge by six seconds')
+assert(timers['ember.apex.surge_audio.1']==4000,'audio pre-roll must lead the unchanged visual surge by ten seconds')
 local beforeAudio=#calls
 timer('ember.apex.surge_audio.')
 assert(vars['ember.apex.vent_step']=='closed' and not vars['ember.apex.surge'],'audio pre-roll changed visual timing')

@@ -172,9 +172,9 @@ return function(m, a, ending)
         c:cancel_timer(surge_audio_timer(s))
         if step == "closed" then
             -- Playtest: requesting the sequence at surge start made its sound land at
-            -- cooling-door opening, one six-second window late. Pre-roll audio only;
-            -- the verified visual/exposure clock remains unchanged.
-            c:start_timer(surge_audio_timer(s), 8000)
+            -- cooling-door opening. The next playtest requested four more seconds
+            -- of lead: pre-roll ten seconds before the unchanged visual surge.
+            c:start_timer(surge_audio_timer(s), 4000)
         end
         c:start_timer(vent_timer(s), ({closed = 14000, warning = 6000, open = 10000})[step])
     end
