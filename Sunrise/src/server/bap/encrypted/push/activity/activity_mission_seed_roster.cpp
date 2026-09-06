@@ -372,9 +372,17 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
     const state::activity::membership::ClientPlacement placement =
         client_placement(session, refresh);
     const std::int32_t heldRegion = state::activity::membership::instantiated_region(placement);
-    const bool pendingRegionHeld =
-        heldRegion >= 0 && static_cast<std::uint32_t>(heldRegion) == lease.plan.effectiveRegion;
-    if (!adopting && lease.regionArrivalPending && pendingRegionHeld) {
+    // The window closes on arrival, and also when no arrival can ever be reported because the
+    // pending region is a sibling state of the slice set the client already holds. Leaving it open
+    // there is fatal rather than cautious: the roster refuses to commit a published revision while
+    // it is set, so the lease never publishes, every scene lease on the new state reports a
+    // pending mission seed, and the selection's own gate is skipped so nothing else notices.
+    if (!adopting && lease.regionArrivalPending
+        && mission_seed_arrival_window_closed(
+            heldRegion,
+            lease.plan.effectiveRegion,
+            lease.plan.sliceSetIndex,
+            middleware::content::packages::tables::kSliceSetIndexFactor)) {
         lease.regionArrivalPending = false;
     }
     const bool arrivalWindow = !adopting && lease.regionArrivalPending;

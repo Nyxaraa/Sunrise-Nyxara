@@ -33,4 +33,34 @@ mission_seed_region_change_replaces_world(std::uint32_t currentSliceSetIndex,
            && currentSliceSetIndex != selectedSliceSetIndex;
 }
 
+/**
+ * Checks whether a pending region arrival can still be reported by the client.
+ *
+ * The arrival window exists so a publication does not register the new region's groups into a
+ * world the client is tearing down. It closes when the client reports holding the pending region.
+ * A sibling state never produces that report: its content lives in the slice set the client
+ * already holds, and the current region leg only advances on a slice-set switch. Leaving the
+ * window open there is not cautious, it is fatal -- the roster refuses to commit a published
+ * revision while it is set, so the lease never publishes and every scene lease on the new state
+ * reports a pending mission seed forever.
+ *
+ * @param heldRegion Region the client reports holding, or negative when it holds none.
+ * @param pendingEffectiveRegion Authored region the pending plan selects.
+ * @param pendingSliceSetIndex Slice set that plan belongs to.
+ * @param sliceSetFactor Regions per slice set; slice-set indices are multiples of it.
+ * @return True once the window must close, either by arrival or because none can occur.
+ */
+[[nodiscard]] constexpr bool
+mission_seed_arrival_window_closed(std::int32_t heldRegion,
+                                   std::uint32_t pendingEffectiveRegion,
+                                   std::uint32_t pendingSliceSetIndex,
+                                   std::uint32_t sliceSetFactor) noexcept {
+    if (heldRegion < 0 || sliceSetFactor == 0) {
+        return false;
+    }
+    const auto held = static_cast<std::uint32_t>(heldRegion);
+    return held == pendingEffectiveRegion
+           || held - (held % sliceSetFactor) == pendingSliceSetIndex;
+}
+
 } // namespace sunrise::server::bap::encrypted::push::activity

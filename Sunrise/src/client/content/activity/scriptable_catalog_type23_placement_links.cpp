@@ -6,8 +6,11 @@
 #include <limits>
 #include <span>
 #include <utility>
+#include <array>
+#include <cstdio>
 #include <vector>
 
+#include "../../../core/logging/log.h"
 #include "../../../middleware/content/packages/tables/type23_placement_identifier_reader.h"
 #include "../../../state/build_data/scriptables/scriptable_catalog.h"
 
@@ -110,6 +113,61 @@ descriptor_object(const catalog::Snapshot& source, const catalog::Descriptor& de
         }
     }
     return count;
+}
+
+/**
+ * Records every type-23 device whose placement link did not resolve to one exact placement.
+ *
+ * A device that resolves to no exact placement is never drawn and has nothing in the world to
+ * drive, so its Auth is accepted and does nothing. Nothing surfaced that before: the browser
+ * shows such a row as "context only" whenever its owning object has context positions, which
+ * hides the failed join behind the object's own count. The builder already counts every way the
+ * match can fail, so this reports the counters once and then names the unresolved rows.
+ */
+void report_unresolved_links(const catalog::Snapshot& output) noexcept {
+    const auto& diagnostics = output.type23PlacementDiagnostics;
+    std::array<char, 224> line{};
+    int written = std::snprintf(
+        line.data(),
+        line.size(),
+        "ev=type23_placement stage=summary links=%zu complete=%d unread=%llu zero_identity=%llu "
+        "multi_identity=%llu zero_active=%llu multi_active=%llu scenario_resolved=%llu",
+        output.type23PlacementLinks.size(),
+        diagnostics.complete ? 1 : 0,
+        static_cast<unsigned long long>(diagnostics.unreadIdentifiers),
+        static_cast<unsigned long long>(diagnostics.zeroIdentityMatches),
+        static_cast<unsigned long long>(diagnostics.multipleIdentityMatches),
+        static_cast<unsigned long long>(diagnostics.zeroActiveCandidates),
+        static_cast<unsigned long long>(diagnostics.multipleActiveCandidates),
+        static_cast<unsigned long long>(diagnostics.scenarioResolvedCandidates));
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+    std::size_t reported = 0;
+    for (const catalog::Type23PlacementLink& link : output.type23PlacementLinks) {
+        if (link.join == catalog::ReferenceJoin::exact || reported >= 32) {
+            continue;
+        }
+        ++reported;
+        written = std::snprintf(line.data(),
+                                line.size(),
+                                "ev=type23_placement stage=unresolved slot=%u identifier=%llu "
+                                "identity_matches=%u candidates=%u active=%u complete=%d join=%d",
+                                link.slotRow,
+                                static_cast<unsigned long long>(link.placementIdentifier),
+                                link.identityMatchCount,
+                                link.candidateCount,
+                                link.activeCandidateCount,
+                                link.complete ? 1 : 0,
+                                static_cast<int>(link.join));
+        if (written > 0) {
+            core::log::write(core::log::Channel::client,
+                             core::log::Level::info,
+                             {line.data(), static_cast<std::size_t>(written)});
+        }
+    }
 }
 
 /** Appends one descriptor link and every retained exact identifier match. */
@@ -281,6 +339,7 @@ bool append_type23_placement_links(catalog::Snapshot& output,
                 return false;
             }
         }
+        report_unresolved_links(output);
         return !cancelled(cancel);
     } catch (...) {
         output.type23PlacementDiagnostics.complete = false;

@@ -76,6 +76,34 @@ void decision_is_available_at_compile_time() {
     static_assert(seed::mission_seed_region_change_replaces_world(40, 40, 0, 0));
 }
 
+void arrival_window_closes_when_no_arrival_can_be_reported() {
+    constexpr std::uint32_t factor = 8;
+    // Ember's ending: apex gameplay held, region 1 pending, both slice set 0. No slice-set switch
+    // happens, so the client never reports region 1 and the window must close on its own.
+    assert(seed::mission_seed_arrival_window_closed(kApexRegion, kFirstMovieRegion,
+                                                    kApexSliceSet, factor));
+    assert(seed::mission_seed_arrival_window_closed(kFirstMovieRegion, kSecondMovieRegion,
+                                                    kApexSliceSet, factor));
+    // The ordinary case still closes on the arrival itself.
+    assert(seed::mission_seed_arrival_window_closed(kPowerhouseRegion, kPowerhouseRegion,
+                                                    kPowerhouseSliceSet, factor));
+}
+
+void arrival_window_stays_open_across_a_real_slice_set_change() {
+    constexpr std::uint32_t factor = 8;
+    // Holding Cinder while Apex is pending is a genuine teardown: the window must stay open or
+    // the publication registers the new region's groups into the world being torn down.
+    assert(!seed::mission_seed_arrival_window_closed(kCinderRegion, kApexRegion,
+                                                     kApexSliceSet, factor));
+    assert(!seed::mission_seed_arrival_window_closed(kPowerhouseRegion, kLinkRegion,
+                                                     kLinkSliceSet, factor));
+    // Holding nothing yet is not an arrival.
+    assert(!seed::mission_seed_arrival_window_closed(-1, kApexRegion, kApexSliceSet, factor));
+    // A zero factor would make the slice-set test meaningless; it must not close the window.
+    assert(!seed::mission_seed_arrival_window_closed(kApexRegion, kFirstMovieRegion,
+                                                     kApexSliceSet, 0));
+}
+
 } // namespace
 
 int main() {
@@ -83,5 +111,7 @@ int main() {
     slice_set_changes_replace_the_world();
     reselecting_the_same_state_is_never_a_replacement();
     decision_is_available_at_compile_time();
+    arrival_window_closes_when_no_arrival_can_be_reported();
+    arrival_window_stays_open_across_a_real_slice_set_change();
     return 0;
 }
