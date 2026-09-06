@@ -689,6 +689,50 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
         return refuse_seed("scene_install");
     }
 
+
+    if (adopting) {
+        lease = {};
+        lease.plan = plan;
+        lease.bindingGeneration = session.activity.bindingGeneration;
+        lease.revision = revision;
+        // The peer registers this state's groups now, so a later selection must keep carrying them.
+        lease.registeredRegions[0] = plan.effectiveRegion;
+        lease.registeredRegionCount = 1;
+        lease.configured = true;
+        std::array<char, core::log::kLineCapacity> line{};
+        const int written = std::snprintf(line.data(),
+                                          line.size(),
+                                          "ev=activity stage=mission_seed result=adopted region=%u "
+                                          "occurrences=%u groups=%u unreplicated=%u incomplete=%u "
+                                          "scenes=%zu",
+                                          static_cast<unsigned>(plan.effectiveRegion),
+                                          static_cast<unsigned>(summary.occurrenceCount),
+                                          static_cast<unsigned>(summary.groupCount),
+                                          static_cast<unsigned>(summary.unreplicatedObjectCount),
+                                          static_cast<unsigned>(summary.incompleteObjectCount),
+                                          sceneSeedCount);
+        if (written > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::info,
+                             {line.data(), static_cast<std::size_t>(written)});
+        }
+    }
+    lease.fullSetPublished = lease.fullSetPublished || !transitionPublication;
+    return MissionSeedRosterResult::ready;
+}
+
+/** Classify removal only after retained squads and authored Scene groups are assembled. */
+MissionSeedRosterResult finalize_mission_retirement(Session& session, Scratch& scratch,
+    message::Snapshot& snapshot, const RefreshReport* refresh) noexcept {
+    auto& lease = session.activityMissionSeed;
+    if (!lease.configured) return MissionSeedRosterResult::inactive;
+    const auto catalog = sdk::snapshot();
+    sdk::BoundView view{};
+    const sdk::Selection selection{session.activity.session, 1, session.activity.bindingGeneration};
+    if (!catalog || sdk::resolve(catalog, selection, view) != sdk::Status::ready)
+        return refuse_seed("retirement_sdk_resolve");
+    const auto heldRegion = state::activity::membership::instantiated_region(client_placement(session, refresh));
+    const bool arrivalWindow = lease.regionArrivalPending;
     // Ember bookends replace Apex inside the same bubble. Retire its local roster while
     // it still owns the world; the state dispatcher waits for native group removal.
     const auto activities = view.catalog->activities();
@@ -760,34 +804,6 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
         }
     }
 
-    if (adopting) {
-        lease = {};
-        lease.plan = plan;
-        lease.bindingGeneration = session.activity.bindingGeneration;
-        lease.revision = revision;
-        // The peer registers this state's groups now, so a later selection must keep carrying them.
-        lease.registeredRegions[0] = plan.effectiveRegion;
-        lease.registeredRegionCount = 1;
-        lease.configured = true;
-        std::array<char, core::log::kLineCapacity> line{};
-        const int written = std::snprintf(line.data(),
-                                          line.size(),
-                                          "ev=activity stage=mission_seed result=adopted region=%u "
-                                          "occurrences=%u groups=%u unreplicated=%u incomplete=%u "
-                                          "scenes=%zu",
-                                          static_cast<unsigned>(plan.effectiveRegion),
-                                          static_cast<unsigned>(summary.occurrenceCount),
-                                          static_cast<unsigned>(summary.groupCount),
-                                          static_cast<unsigned>(summary.unreplicatedObjectCount),
-                                          static_cast<unsigned>(summary.incompleteObjectCount),
-                                          sceneSeedCount);
-        if (written > 0) {
-            core::log::write(core::log::Channel::server,
-                             core::log::Level::info,
-                             {line.data(), static_cast<std::size_t>(written)});
-        }
-    }
-    lease.fullSetPublished = lease.fullSetPublished || !transitionPublication;
     if (ember) {
         for (const auto& block : snapshot.roster.bubbleSubBlocks) {
             if (block.bubble != 0) continue;

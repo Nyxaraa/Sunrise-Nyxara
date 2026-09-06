@@ -45,6 +45,16 @@ New candidate after this failure:
 
 Remaining differences from the full Omega contract: exact cinematic resource/owner readiness and controller-revision-qualified completion are still not implemented. Current movie guards use typed native incidents and exact arrival. The teleport hash still uses the existing scenario lookup; its bookend spawn-set semantics need checking if arrival fails. Do not claim full ending playback is fixed until a live test reaches both movies. The new checks specifically address the observed teardown boundary.
 
+## Live retirement refusal and correction (17:21 run)
+
+Installed commit 48815f9 reached the escape trigger at t=273816, queued retirement at t=273924, and refused the intent at t=275663 with `native roster cleanup did not complete`. No native travel or ending playback started. The simulation continued, matching the reported black loading screen with world audio. Captures are in `build/first-encounter-audit/bookend-live-20260906-172136.log` and `reactor-runtime-20260906-172514`.
+
+A read-only capture of the retirement request showed failed status 4, source region 0, and zero requested keys. The native registry still contained nine groups: one scenario-wide service and eight Apex-local groups. The cleanup list was assembled during initial mission seeding, before runtime squads, authored authority and Scene groups were appended. This was an empty request, not proof of a native cleanup timeout.
+
+The correction finalizes retirement after the entire roster is assembled. It also keeps the current world's loading/spawn gate open while bookend retirement is pending and native travel has not been armed. Selecting a destination alone must not black out the screen if cleanup is refused. A new request log records source region, key count, status and lease revision. The next test should demonstrate a nonempty request (eight local keys for this captured roster), baseline observation, native removal, qualified travel, and then movie startup in that order. This run's refused Lua ending request does not retry automatically; testing the correction requires a fresh run.
+
+The corrected build and the same 23 portable tests and five Lua suites pass. Native retirement and ending playback still require live confirmation.
+
 ## Package evidence correction
 
 Config 80B3D494 (ship) and 80B3D497 (sunburn) share fallback resource 80BFDDC2 at offset 0x538. Their actual placed entries at 0x580 are 80B71228 and 80B82486. Ship model 80B71228 includes device component 80C70C0E and animation component 80B71226; placement 42BF7017F2901B45 matches its device. Component references have 12-byte stride. Do not infer ship capabilities from the fallback model.
@@ -54,3 +64,7 @@ Config 80B3D494 (ship) and 80B3D497 (sunburn) share fallback resource 80BFDDC2 a
 Release build, all 23 portable tests and all five mission Lua suites pass. Route peak: 238 variables, 61 intents per event, four timers, 13,000 Lua instructions including mock. Coverage includes exact bookend arrival, stale native incidents, skip/finish ordering, audio pre-roll, cooling order, startup deduplication single-source escape scorch, native retirement qualification, preserved wire ordinals, absent retired authority bodies, and exact teleport tuple matching.
 
 The full-screen surge effect is still unresolved. The new guide points to authored Scene inputs/source bindings; no arbitrary Omega event hash or substitute damage effect has been added.
+
+## Follow-up scorch correction
+
+The user still observes doubled scorch with the rail burn enabled and the sunburn object disabled. Deposit now explicitly disables the pipe hop-on, waits 250 ms, then attaches the rail burn. Hazard mode is idempotent, so repeated callbacks do not issue additional attachment revisions. This addresses a possible overlapping attachment during an enabled-to-enabled filter change; the native cause and damage rate still require visual confirmation. The sunburn object remains disabled.

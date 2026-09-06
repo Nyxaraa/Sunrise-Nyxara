@@ -390,6 +390,12 @@ assert(vars['ember.carry.apex.done'] and not vars['ember.carry.apex.held'])
 local before=#calls;use('MOTHER_BRAIN_INTERACT_OBJECT');assert(#calls==before)
 call(R.dispatch,'object',c,s,event('MOTHER_BRAIN_CARRY_OBJECT',{generation=3,present=false,alive=false}))
 assert(not timers['ember.carry.recover.apex.3'],'consumed final cell respawned')
+-- Deposit must publish a disabled revision before the delayed rail attachment.
+local detachedBeforeRail=false
+for i=depositStart+1,#calls do
+    if calls[i][1]=='set_mission_effect' and calls[i][3].enabled==false then detachedBeforeRail=true end
+end
+assert(detachedBeforeRail,'deposit must detach the pipe burn before applying escape scorch')
 -- Escape replaces the climb attachment with one scoped burn and disables the other source.
 timer('ember.apex.hazards')
 local escapeEffect
@@ -398,6 +404,9 @@ for i=#calls,1,-1 do
 end
 assert(escapeEffect and escapeEffect.enabled==true and escapeEffect.filter~=nil,
     'escape must attach the rail burn after deposit')
+local afterRail=#calls
+call(R.dispatch,'timer',c,s,{timer_name='ember.apex.hazards'})
+assert(#calls==afterRail,'duplicate hazard callback must not reattach scorch')
 local sunburnState
 for i=depositStart+1,#calls do
     if calls[i][1]=='set_object_active' and calls[i][2]==slotDefs[m.Slot.SUNBURN_DAMAGE_OBJECT].name then

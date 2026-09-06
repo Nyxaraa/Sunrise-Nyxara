@@ -103,6 +103,9 @@ return function(m, a, ending)
     -- removes the previous attachment (native 9EF8A0/9F1F10) before attaching the new filter.
     local function rail_filter(c) return {players = true, inside = a.slot(c, "SLOT_019E")} end
     local function hazards(c, s, mode)
+        local wanted = mode or "off"
+        if s:variable("ember.apex.hazard_mode") == wanted then return end
+        c:set_variable("ember.apex.hazard_mode", wanted)
         if mode == "climb" then
             -- The five narrow authored pipe volumes on the way up to the deposit; their heights
             -- track the climb the mother-brain dialogue volumes walk through, from z~172 at
@@ -120,7 +123,8 @@ return function(m, a, ending)
                     a.slot(c, "SLOT_0005_80B3C09F"), a.slot(c, "SLOT_0006_80B3C09F"),
                     a.slot(c, "SLOT_0008_80B3C09F")}}, true)
         elseif mode == "escape" then
-            -- Replace the climb attachment with one rail-scoped burn. The sunburn prop
+            -- The deposit callback already detached the climb burn on an earlier tick.
+            -- Attach one rail-scoped burn. The sunburn prop
             -- alone did not deliver damage in the live test; do not run both sources.
             a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
                 "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), true)
@@ -212,7 +216,10 @@ return function(m, a, ending)
         function(c, s)
             if phase(s) ~= 5 then return end
             set(c, 6)
-            c:start_timer("ember.apex.hazards", 1)
+            -- Deliver an explicit detach before publishing the rail attachment. A direct
+            -- enabled-to-enabled filter change can leave the previous burn attached.
+            hazards(c, s, nil)
+            c:start_timer("ember.apex.hazards", 250)
             a.checkpoint(c, 0, 0x45920385, "escape")
             a.device(c, "MOTHER_BRAIN_CONSOLE_DEVICE", true)
             a.device(c, "MOTHER_BRAIN_ENGINE_LEFT_DEVICE", true)

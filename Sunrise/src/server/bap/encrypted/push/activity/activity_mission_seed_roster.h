@@ -45,4 +45,8 @@ append_initial_mission_seed(Session& session,
                             std::size_t canonicalGroupCount,
                             const RefreshReport* refresh) noexcept;
 
+/** Retire against the final roster, including runtime-added squads and Scene groups. */
+[[nodiscard]] MissionSeedRosterResult finalize_mission_retirement(Session& session,
+    Scratch& scratch, message::Snapshot& snapshot, const RefreshReport* refresh) noexcept;
+
 } // namespace sunrise::server::bap::encrypted::push::activity

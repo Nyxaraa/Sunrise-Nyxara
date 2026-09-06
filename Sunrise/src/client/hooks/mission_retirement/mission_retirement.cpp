@@ -2,6 +2,7 @@
 #include <Windows.h>
 #include <array>
 #include <cstring>
+#include <cstdio>
 #include "../../../core/logging/log.h"
 #include "../../patterns/image_scan.h"
 #include "../../patterns/signature_text.h"
@@ -67,6 +68,12 @@ Status prepare(RequestId id, std::int32_t sourceRegion,
             g_count = keys.size();
             std::memcpy(g_keys.data(), keys.data(), keys.size_bytes());
         }
+        std::array<char, 192> line{};
+        std::snprintf(line.data(), line.size(),
+            "ev=mission_retirement result=requested source=%d keys=%zu status=%u revision=%llu",
+            sourceRegion, keys.size(), static_cast<unsigned>(g_progress.value),
+            static_cast<unsigned long long>(id.revision));
+        report(line.data());
     }
     const auto result = g_progress.value;
     ReleaseSRWLockExclusive(&g_lock);
