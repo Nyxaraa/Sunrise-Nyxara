@@ -26,7 +26,19 @@ int main() {
     static_assert(movies::movie_resource_kind==1);
     assert((movies::movie_metadata(0x80BCA001)==std::array<std::uint32_t,4>{0x80BCA001,0x80BCA000,0x80B9EB33,0x80BCA032}));
     assert((movies::movie_metadata(0x80BCA003)==std::array<std::uint32_t,4>{0x80BCA003,0x80BCA002,0x80B9EB34,0x80BCA032}));
-    assert((movies::movie_metadata(0x80BCA034)==std::array<std::uint32_t,4>{})); // never pin raw video
+    assert((movies::movie_metadata(0x80BCA034)==std::array<std::uint32_t,4>{})); // media is not a wrapper
+    assert(movies::movie_stream(0x80BCA001)==0x80BCA034);
+    assert(movies::movie_stream(0x80BCA003)==0x80C7C000);
+    assert(movies::movie_stream(0x80BCA000)==0xFFFFFFFF);
+    // The 13f07ee capture: metadata was loaded, but the video stream still held a
+    // free-list entry (FEFE0035, 0, location 0). Native CRI entered error state 7.
+    assert(!movies::movie_stream_ready(0xFEFE0035,0,0));
+    assert(movies::movie_stream_ready(0xE80779A0,0x41363B,0x10000005));
+    assert(!movies::movie_stream_ready(0xC0000000,0x41363B,0x10000005));
+    assert(!movies::movie_stream_ready(0x280779A0,0x41363B,0x10000005));
+    assert(!movies::movie_stream_ready(0xE80779A0,0x40103B,0x10000005));
+    assert(!movies::movie_stream_ready(0xE80779A0,0x41363B,0));
+    assert(!movies::movie_stream_ready(0xE80779A0,0x41363B,0x100000005ULL));
     // Captured crash: registered movie tags contain free-list entries, not resident headers.
     assert(!movies::movie_resources_ready(1,0x80BCA001,false,0,false,0xFFFFFFFF));
     assert(!movies::movie_resources_ready(2,0x80BCA001,false,0x80BCA000,true,0x80BCA034));

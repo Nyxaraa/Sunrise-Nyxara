@@ -69,12 +69,10 @@ return function(m, a, ending)
     -- `ring_device_sense` in the log carries their native position and power.
     local structure_objects = {"SPECOPS_APEX_RING_CORE_OBJECT", "SPECOPS_APEX_RING_RING_OBJECT"}
     local beam_devices = {"SPECOPS_APEX_RING_LASER_DEVICE", "SPECOPS_APEX_RING_RING_DEVICE"}
-    -- These carry the same inverted pose as the landing and clamshell bridges, where the
-    -- authored position-0 lane is the driven end rather than the resting one. Confirmed in game:
-    -- the resting drive rendered as the surge and the driven end as the weapon's normal state,
-    -- so resting is `open` and the surge drives to `close`.
+    -- The latest live test establishes the beam's poses: close is normal, open is surge.
+    -- Keep this mapping separate from the encounter clock and shutter cooling state.
     local function beam_pose(c, surging, snap)
-        for _, name in ipairs(beam_devices) do a.device(c, name, not surging, snap) end
+        for _, name in ipairs(beam_devices) do a.device(c, name, surging, snap) end
     end
     -- Firing: the beam is present and both of its devices are powered.
     local function beam(c, s, firing, snap)

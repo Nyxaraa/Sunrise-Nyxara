@@ -1,6 +1,20 @@
 # 1AU: movie loader, surge audio and escape explosions
 
-## Current status
+## Latest playtest: metadata ready, stream missing
+
+The user confirms `13f07ee` no longer freezes, but neither ending plays. The log records movie 1 resources ready and playback submitted at t=256404, decoder state 1 at t=256487, state 7 at t=256527, then failure and resource release at t=256598. The escape trigger and movie dispatch are working; the native decoder never reaches playing state 5.
+
+A read-only capture after the failure found stream tag `80BCA034` still in a free-list state: datum `FEFE0035 / type_info 0`, decoding to location 0. The movie headers were resident. Native video I/O `41A160` consumes the media datum through `3597C0` (open package/patch) and `357DA0` (file offset and length). The previous bridge explicitly requested four metadata records but omitted this stream mapping.
+
+The native load job `3591B0`, branch `3592C6`, handles `(type_info & 30000) == 10000` by publishing **offset | patch id** and **length | C0000000** with `351D00`, then returning before the ordinary allocation/read branch. Requesting the media tag initializes this compact mapping; it does **not** allocate a buffer for the full movie. The prior assumption that omitting this request was needed to preserve streaming was wrong.
+
+Both movies now include their exact media tag as a fifth kind-1 root request: STM `80BCA034`, CNN `80C7C000`. Playback additionally requires the video-family/type bits, an encoded nonzero length and valid package location. The mapping is never dereferenced as a CPU pointer. The resource root holds it until native playback releases its reference. Tests cover the captured free-list datum, wrong types, empty lengths and invalid locations, and the native/package check verifies this stream initialization branch and both authored media entries.
+
+The user's same test establishes the opposite beam pose mapping from the prior implementation: **close = normal, open = surge**. Both beam devices now follow that mapping at entry, warning, cooling and shutdown. The encounter clock and alarm's surge callback remain unchanged.
+
+Evidence: `build/first-encounter-audit/13f07ee-decoder-failure.log`. The latest change is compiled and checked offline; successful rendered playback is still awaiting the next run.
+
+## Previous correction and validation
 
 The latest changes address the captured `bc3e912` movie-loader crash, couple the alarm request to the beam surge, and forward escape triggers into the authored explosion scene. Release compilation, 24 portable tests, all five Lua mission suites, native ABI/package checks, and scene schema/content checks pass. **Rendered ending playback, audible alignment and visible explosions still require a fresh game test.** Offline verification does not establish those outcomes.
 
@@ -19,7 +33,7 @@ Native `426920` derives the correct request kind from each package entry: kind 2
 | `80B9EB33`, `80B9EB34` subtitle metadata | `80809A88` | `1019` | 1 |
 | `80BCA032` shared movie metadata | `80806B8F` | `103B` | 1 |
 
-The correction creates one native asynchronous root and adds the selected wrapper, its header, its subtitle metadata and `80BCA032`, each using `{1, tag}`. It retains that root through playback. The large media entry is streamed by the native player, not loaded wholesale into the root.
+The correction creates one native asynchronous root and adds the selected wrapper, its header, its subtitle metadata and `80BCA032`, each using `{1, tag}`. It retains that root through playback. The media mapping must also be included, as corrected above; its loader path preserves native streaming.
 
 Playback requires native root state 2, matching resident wrapper/header classes, the expected subtitle reference and resident metadata, and a present media reference. Only then call the original acquire/play pair. Both native completion and Escape stopping must finish before releasing the root. Pending roots are polled; the frame never invokes a global I/O drain. Failed or timed-out preparation never completes the mission.
 

@@ -40,6 +40,13 @@ target(0x426920, 0x4F, 0x433050)
 # Kind 2 is routed to root+10; ordinary metadata belongs in root+20.
 assert data[0x4313CD:0x4313E2] == bytes.fromhex(
     '83 3f 02 b9 10 00 00 00 8b 57 04 41 b8 20 00 00 00 44 0f 44 c1')
+# For stream type_info & 30000 == 10000, the load job maps offset|patch and
+# size|C0000000 directly. It bypasses the ordinary allocation/read branch.
+assert data[0x3592C6:0x3592EB] == bytes.fromhex(
+    '8b c3 c1 e8 10 83 e0 03 83 f8 01 75 2f 41 0f b7 4d 20 41 81 cf 00 00 00 c0 8b 55 50 45 8b c7 48 0b d1 8b 4d 48')
+target(0x3591B0, 0x13B, 0x351D00)
+target(0x41A160, 0x16, 0x3597C0)  # native video I/O opens this mapped package/patch
+target(0x41A160, 0x2C, 0x357DA0)  # then obtains offset and byte length
 movie = 'Sunrise/src/client/hooks/ember_movies/ember_movies.cpp'
 start, stop, busy = (signature(movie, name) for name in ('startSig', 'stopSig', 'busySig'))
 for offset, expected in [(0x72, 0x41B040), (0x7A, 0x41A3C0), (0x8E, 0x41CD20)]:
@@ -64,7 +71,8 @@ if len(sys.argv) > 2:
     for tag, expected in [(0x80BCA001, 0x80808495), (0x80BCA003, 0x80808495),
                           (0x80BCA000, 0x80808499), (0x80BCA002, 0x80808499),
                           (0x80B9EB33, 0x80809A88), (0x80B9EB34, 0x80809A88),
-                          (0x80BCA032, 0x80806B8F)]:
+                          (0x80BCA032, 0x80806B8F),
+                          (0x80BCA034, 0xFFFFFFFF), (0x80C7C000, 0xFFFFFFFF)]:
         # Tag package IDs include the bank: 80BCAxxx belongs to package 01E5.
         package = (tag >> 13) & 0x3FF
         _, path, header = latest[package]
@@ -75,7 +83,9 @@ if len(sys.argv) > 2:
             reference, type_info, _ = struct.unpack('<IIQ', stream.read(16))
         assert reference == expected, (hex(tag), hex(reference), path)
         assert type_info & 0xF000 != 0x2000, (hex(tag), hex(type_info))
-    print('Installed movie metadata classes and ordinary (kind 1) package types verified.')
+        if expected == 0xFFFFFFFF:
+            assert (type_info & 0x30000) == 0x10000 and (type_info >> 6) & 0x3F == 24
+    print('Installed movie metadata, compact video streams and kind-1 package types verified.')
 attach = signature('Sunrise/src/client/hooks/bootflow/ember_sunburn.cpp', 'sig')
 assert attach == 0x9F2760
 # Native attach dereferences the runtime relative template, then passes it to the child factory.

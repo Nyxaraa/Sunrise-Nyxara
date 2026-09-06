@@ -213,7 +213,7 @@ timer('ember.apex.setup.')
 for _,name in ipairs({'SPECOPS_APEX_RING_LASER_OBJECT','SPECOPS_APEX_RING_RING_OBJECT'}) do
     call(R.dispatch,'object',c,s,event(name,{generation=1,present=true,alive=true}))
 end
-assert(transition('SPECOPS_APEX_RING_LASER_DEVICE',true).transition=='open')
+assert(transition('SPECOPS_APEX_RING_LASER_DEVICE',true).transition=='close')
 assert(transition('SPECOPS_APEX_RING_LASER_DEVICE',true).snap==false, 'startup must run effect events instead of seeking past them')
 local primedCalls=#calls
 call(R.dispatch,'object',c,s,event('SPECOPS_APEX_RING_LASER_OBJECT',{generation=1,present=true,alive=true}))
@@ -279,7 +279,7 @@ local beamMoved=false
 for i=beforeAudio+1,#calls do
     local row=calls[i]
     if row[1]=='transition' and row[2]==slotDefs[m.Slot.SPECOPS_APEX_RING_LASER_DEVICE].name then
-        beamMoved=row[3].transition=='close'
+        beamMoved=row[3].transition=='open'
     end
     if row[1]=='play_sequence' then
         assert(beamMoved,'alarm was requested before the surge state changed')
@@ -291,11 +291,10 @@ assert(vars['ember.apex.vent_step']=='warning' and timers['ember.apex.vents.1']=
 -- The weapon fires continuously through the fight; the exposure cycle must not blink it.
 -- The surge is the authored device drive of a beam that stays present and powered.
 assert(vars['ember.apex.beam']==true,'the weapon must keep firing across the cycle')
--- Inverted pose, as on the landing and clamshell bridges: resting is open, the surge drives
--- to close. The opposite mapping rendered the surge as the weapon's normal state.
+-- Live-confirmed pose: close is normal; open is surge. Shutter timing stays independent.
 assert(vars['ember.apex.surge']==true,'the warning must drive the beam')
-assert(transition('SPECOPS_APEX_RING_LASER_DEVICE', true).transition=='close')
-assert(transition('SPECOPS_APEX_RING_RING_DEVICE', true).transition=='close')
+assert(transition('SPECOPS_APEX_RING_LASER_DEVICE', true).transition=='open')
+assert(transition('SPECOPS_APEX_RING_RING_DEVICE', true).transition=='open')
 assert(transition('REACTOR_CLAMSHELL_EAST_DOOR_A_DEVICE').transition=='close')
 local coolingStart=#calls
 timer('ember.apex.vents.')
@@ -307,7 +306,7 @@ for i=coolingStart+1,#calls do
     local row=calls[i]
     if row[1]=='transition' then
         for _,name in ipairs({'SPECOPS_APEX_RING_LASER_DEVICE','SPECOPS_APEX_RING_RING_DEVICE'}) do
-            if row[2]==slotDefs[m.Slot[name]].name and row[3].transition=='open' then restored[name]=true end
+            if row[2]==slotDefs[m.Slot[name]].name and row[3].transition=='close' then restored[name]=true end
         end
         if row[2]==slotDefs[m.Slot.REACTOR_CLAMSHELL_EAST_DOOR_A_DEVICE].name and row[3].transition=='open' then
             assert(restored.SPECOPS_APEX_RING_LASER_DEVICE and restored.SPECOPS_APEX_RING_RING_DEVICE,
@@ -428,7 +427,7 @@ assert(#calls==afterRail,'duplicate hazard callback must not reattach scorch')
 -- ring objects would take the beam and its surrounding structure out of the world entirely.
 assert(vars['ember.apex.beam']==false,'the beam must stop firing after the deposit')
 assert(vars['ember.apex.surge']==false,'the drive must return to its baseline with the power')
-assert(transition('SPECOPS_APEX_RING_LASER_DEVICE', true).transition=='open',
+assert(transition('SPECOPS_APEX_RING_LASER_DEVICE', true).transition=='close',
     'a dark weapon rests in its normal pose, not the surge')
 local poweredOff=false
 for _,row in ipairs(calls)do

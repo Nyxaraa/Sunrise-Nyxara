@@ -54,17 +54,27 @@ std::uintptr_t row(std::uint32_t handle) {
     const auto table=read<std::uintptr_t>(head);
     return table ? table+64*pool : 0;
 }
-void* blob(std::uint32_t handle,std::uint32_t expectedClass=0) {
-    const auto pool=row(handle);if (!pool) return nullptr;
+std::uintptr_t datum(std::uint32_t handle) {
+    const auto pool=row(handle);if (!pool) return 0;
     const auto storage=read<std::uintptr_t>(pool+8);
     const auto stride=read<std::uint32_t>(pool+48);
-    if (!storage || !stride) return nullptr;
-    const auto item=storage+stride*static_cast<std::uintptr_t>(handle&0x1FFFU);
+    if (!storage || !stride) return 0;
+    return storage+stride*static_cast<std::uintptr_t>(handle&0x1FFFU);
+}
+void* blob(std::uint32_t handle,std::uint32_t expectedClass=0) {
+    const auto item=datum(handle);if (!item) return nullptr;
     // Unloaded package entries contain FEFE free-list markers, not a definition.
     if (expectedClass && read<std::uint32_t>(item)!=expectedClass) return nullptr;
-    const auto mask=static_cast<std::uintptr_t>(static_cast<std::intptr_t>(read<std::int32_t>(pool+52)));
+    const auto mask=static_cast<std::uintptr_t>(static_cast<std::intptr_t>(read<std::int32_t>(row(handle)+52)));
     const auto at=item-(read<std::uintptr_t>(item+8)&mask);
     return reinterpret_cast<void*>(at);
+}
+bool stream_ready(std::uint32_t handle) {
+    const auto item=datum(handle);if (!item) return false;
+    const auto mask=static_cast<std::uintptr_t>(static_cast<std::intptr_t>(read<std::int32_t>(row(handle)+52)));
+    // Never dereference this value: it encodes the file offset and patch id.
+    const auto location=item-(read<std::uintptr_t>(item+8)&mask);
+    return movie_stream_ready(read<std::uint32_t>(item),read<std::uint32_t>(item+4),location);
 }
 }
 bool sunburn_resident() noexcept {
@@ -79,15 +89,17 @@ bool MovieResource::begin(std::uint32_t asset) noexcept {
     create(mgr,&root_,8,2,0,"mission_ember_movie");
     if (!held()) return false;
     auto* root=blob(root_);if (!root) return false;
-    // Explicitly retain the small metadata records dereferenced by 41A810 and
-    // the subtitle reader. Native playback streams the 640MB video entry itself.
+    // Retain metadata plus the compact stream mapping consumed by 41A160.
+    // Its native kind-1 load initializes file offset/patch/size without copying the movie.
     for (const auto tag : movie_metadata(asset)) {
         const std::uint32_t request[]{movie_resource_kind,tag};
         add(root,request);
     }
+    const std::uint32_t streamRequest[]{movie_resource_kind,movie_stream(asset)};
+    add(root,streamRequest);
     submit(mgr,root_);asset_=asset;
     core::log::writef(core::log::Channel::client,core::log::Level::info,
-        "ev=ember_movie result=resource_requested asset=%08X root=%08X kind=1 metadata=4",asset_,root_);
+        "ev=ember_movie result=resource_requested asset=%08X root=%08X kind=1 metadata=4 stream=%08X",asset_,root_,movie_stream(asset_));
     return true;
 }
 int MovieResource::state() const noexcept {
@@ -106,8 +118,9 @@ bool MovieResource::ready() const noexcept {
         const auto metadata=movie_metadata(asset_);
         if (read<std::uint32_t>(reinterpret_cast<std::uintptr_t>(wrapper)+12)!=metadata[2]
             || !blob(metadata[2],0x80809A88U) || !blob(metadata[3],0x80806B8FU)) return false;
-        return movie_resources_ready(2,asset_,true,header,info!=nullptr,
-            info ? read<std::uint32_t>(reinterpret_cast<std::uintptr_t>(info)+0x18) : 0xFFFFFFFFU);
+        const auto media=info ? read<std::uint32_t>(reinterpret_cast<std::uintptr_t>(info)+0x18) : 0xFFFFFFFFU;
+        return movie_resources_ready(2,asset_,true,header,info!=nullptr,media)
+            && media==movie_stream(asset_) && stream_ready(media);
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 bool MovieResource::release() noexcept {
