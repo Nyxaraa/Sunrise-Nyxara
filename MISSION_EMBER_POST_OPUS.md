@@ -37,3 +37,9 @@ Installed DLL SHA-256: `be4ea67c9399c4f08c41eac25f9ed2f27152dff9876b449e8d0d60e7
 ## Scope correction
 
 Loading suppression is now limited to 1AU using the native loading activity reader above. The corrected Release DLL built successfully, and offline signature/call validation passed. Installation was deferred because the game was running; the installed DLL still has the earlier global override until this build is copied after the game closes. The scope-only installer is `/tmp/install-ember-loading-scope.py` and preserves settings, saves and scripts.
+
+## Lime regression and rollback — 15:42
+
+The attempted Message 1 state-ordinal change in a312bdc is INVALID for this client. Live logs explicitly reject world creation with `slice-set state > 1 chosen`, then `Failed to instantiate world and start game` / `Failed to change world to mission_ember`. Do not reinstate the assumption that cinematic ordinals 1/2 belong in the per-bubble Message 1 field. The byte-bias unit tests checked our invented mapping, not the client's accepted semantics.
+
+Reverted a312bdc in 7440f06, rebuilt successfully and passed all 22 portable tests. Installed the rollback while the game was closed, with backup and hash verification. The 1AU-only C24490 suppression guard remains; no game launch, settings or save changes. Ending playback and the beam screen pulse remain unresolved. Log evidence is archived in `build/lime-20260906/sunrise.log`.
