@@ -208,7 +208,10 @@ for _,name in ipairs({'SPECOPS_APEX_RING_LASER_OBJECT','SPECOPS_APEX_RING_RING_O
     call(R.dispatch,'object',c,s,event(name,{generation=1,present=true,alive=true}))
 end
 assert(transition('SPECOPS_APEX_RING_LASER_DEVICE',true).transition=='open')
-assert(transition('SPECOPS_APEX_RING_LASER_DEVICE',true).snap==true)
+assert(transition('SPECOPS_APEX_RING_LASER_DEVICE',true).snap==false, 'startup must run effect events instead of seeking past them')
+local primedCalls=#calls
+call(R.dispatch,'object',c,s,event('SPECOPS_APEX_RING_LASER_OBJECT',{generation=1,present=true,alive=true}))
+assert(#calls==primedCalls,'duplicate laser presence restarted its drive')
 assert(vars['ember.apex.beam'] and not vars['ember.apex.surge'],'entry must light the resting beam')
 assert(transition('CLAMSHELL_TO_COFFIN_EAST_BRIDGE_DEVICE', true).transition=='open')
 assert(transition('CLAMSHELL_TO_COFFIN_WEST_BRIDGE_DEVICE', true).transition=='open')
@@ -262,6 +265,13 @@ for _,side in ipairs({'east','west'})do for _,wave in ipairs({'entry','reinforce
 assert(vars['ember.music.section']==22)
 timer('ember.apex.explain.');assert(vars['ember.r.cue.41'] and vars['ember.music.section']==23)
 assert(timers['ember.apex.vents.1']==14000)
+assert(timers['ember.apex.surge_audio.1']==8000,'audio pre-roll must lead the unchanged visual surge by six seconds')
+local beforeAudio=#calls
+timer('ember.apex.surge_audio.')
+assert(vars['ember.apex.vent_step']=='closed' and not vars['ember.apex.surge'],'audio pre-roll changed visual timing')
+local alarms=0
+for i=beforeAudio+1,#calls do if calls[i][1]=='play_sequence' then alarms=alarms+1 end end
+assert(alarms==2,'both surviving clamshells must pre-roll their authored audio')
 timer('ember.apex.vents.') -- Surge precedes any target exposure.
 assert(vars['ember.apex.vent_step']=='warning' and timers['ember.apex.vents.1']==6000)
 -- The weapon fires continuously through the fight; the exposure cycle must not blink it.
@@ -277,6 +287,7 @@ local coolingStart=#calls
 timer('ember.apex.vents.')
 assert(timers['ember.apex.vents.1']==10000)
 assert(vars['ember.apex.surge']==false,'cooling shutters opened during the surge')
+for i=coolingStart+1,#calls do assert(calls[i][1]~='play_sequence','opening the shutters must not restart surge audio') end
 local restored={}
 for i=coolingStart+1,#calls do
     local row=calls[i]
@@ -426,16 +437,29 @@ trigger('APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER')
 -- held region. Both the selection and activation must be queued in this callback.
 -- No teleport is armed for a sibling state, so no further client report arrives. The movie
 -- must be queued with its own selection or it never starts.
-assert(vars['ember.ending']==1 and vars['ember.ending.playing']==1,'first movie never started')
-local started=false
+assert(vars['ember.ending']==1 and not vars['ember.ending.playing'],'offer is not native playback')
+local offered=false
 for _,row in ipairs(calls)do
     if row[1]=='set_cinematic_active' and row[2]=='pf_cinematic_bookend_stm._cinematic'
-        and row[3].active then started=true end
+        and row[3].active then offered=true end
 end
-assert(started,'first bookend was never activated')
-call(R.terminated,c,s,event('PF_CINEMATIC_BOOKEND_STM_CINEMATIC'))
-assert(vars['ember.ending']==2 and vars['ember.ending.playing']==2,'second movie never started')
-call(R.terminated,c,s,event('PF_CINEMATIC_BOOKEND_CNN_CINEMATIC'))
+assert(offered,'first bookend was never offered')
+local first=event('PF_CINEMATIC_BOOKEND_STM_CINEMATIC',{runtime_object_id='9007199254740993'})
+local second=event('PF_CINEMATIC_BOOKEND_CNN_CINEMATIC',{runtime_object_id='9007199254740994'})
+local beforeStart=#calls
+call(R.terminated,c,s,first);call(R.skip,c,s,first)
+assert(#calls==beforeStart and vars['ember.ending']==1,'unstarted movie advanced the ending')
+call(R.started,c,s,second);assert(not vars['ember.ending.playing'],'wrong controller claimed playback')
+call(R.started,c,s,first);assert(vars['ember.ending.playing']==1)
+call(R.terminated,c,s,event('PF_CINEMATIC_BOOKEND_STM_CINEMATIC',{runtime_object_id='stale'}))
+assert(vars['ember.ending']==1,'stale runtime object advanced the movie')
+call(R.skip,c,s,first)
+assert(vars['ember.ending']==1 and not vars['ember.complete'],'skip must wait for native termination')
+local stoppingCalls=#calls;call(R.skip,c,s,first);assert(#calls==stoppingCalls,'repeated skip republished stop')
+call(R.terminated,c,s,first)
+assert(vars['ember.ending']==2 and not vars['ember.ending.playing'],'second movie is only offered')
+call(R.terminated,c,s,first);assert(vars['ember.ending']==2,'old movie completion advanced its successor')
+call(R.started,c,s,second);call(R.terminated,c,s,second)
 assert(vars['ember.complete'])
 local objective=vars['ember.r.guidance']
 region(56);region(40);assert(vars['ember.r.guidance']==objective,'backtracking reset the forward objective')

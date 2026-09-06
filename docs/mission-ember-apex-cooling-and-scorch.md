@@ -20,3 +20,19 @@ The 15:52:37 stalled-run capture contains 491 allocated sync records and no type
 The roster's transitionPublication predicate still compared heldRegion directly against selectedRegion. Thus held Apex region 0 / selected bookend region 1 withheld state-local groups even after the separate arrival-window check accepted the shared world. Apply the shared-world arrival rule to the roster subset too. Both bookends may then publish while the player holds Apex; genuine world changes and unknown held-world state still defer local records.
 
 This is isolated from the reverted global-message state-byte experiment. Global state encoding is unchanged. Release build and all 22 portable tests pass, including the production subset predicate. Native movie creation and playback need a live test; do not treat server cinematic_staged as proof of playback.
+
+## Follow-up from IKORA-ANIMATION-AND-ENDING.md and live screenshots
+
+Read contributor guide `/home/millie/Documents/Sunrise-docs/MissionDocs/IKORA-ANIMATION-AND-ENDING.md`. Its current implementation distinguishes native retirement, travel arrival, exact resource/owner readiness, offered authority, revision-qualified active playback, and inactive completion. Scene VFX require the correct source bindings and retained authored external inputs; Omega event hashes are not transferable to Ember.
+
+Prepared Lua changes:
+
+- Beam startup: a presence receipt followed only by a snap to position 1 still reproduced the incomplete beam. The live device reported position/power 1. On the first laser presence for each generation, seek the driven endpoint, then animate to the resting endpoint so animation events have an opportunity to run. This is a candidate fix requiring visual confirmation against the user's second screenshot (thin continuous beam). Duplicate presence and post-deposit presence cannot restart it.
+- Surge audio: user confirms visuals and mechanics now align, but the sound arrives when cooling doors open. Request the authored alarm sequences at 8 seconds into the unchanged 14-second closed window, six seconds before the visual surge. This is playtest-based compensation, not a recovered native six-second delay parameter. Preserve the 6-second surge and 10-second exposure. Cancel pending audio on reset/core destruction/deposit, and guard region, phase and generation.
+- Ending lifecycle: publishing play is now an offer; only the exact controller's started incident records playing. Retain its runtime object identity as a string. Skip requests stop authority and waits for the matching terminated incident. Ignore unstarted, wrong-controller and stale-object completion. The native controller revision/resource-owner bridge described by Omega is still not implemented; these incident guards are not equivalent to that full contract.
+
+New stalled-ending evidence after installed 7ff004d: capture `build/first-encounter-audit/reactor-runtime-20260906-162023` has 479 allocated records and no type 6. Fixing roster subset publication was insufficient to instantiate the bookend. Investigate native travel/resource loading before adding more play revisions.
+
+Native Lime evidence: `436530` explicitly rejects a nonnegative per-bubble state byte >=1. It registers alternate entries through a separate path (`4C8E40`) in the subsequent loop. The global message-1 byte is not the route to selecting Ember bookend ordinal 1/2. Keep its encoding unchanged. Compare Ember's message-12 transit against the guide: local code labels the hash a slice-set hash and advances a world-transition token, while the guide identifies a spawn-set hash and separately echoes native transition tokens. Those differences require instruction/packet verification before changing travel behavior.
+
+All five Lua suites passed after the lifecycle/startup changes; the route suite also passes the audio follow-up (237 variables, 61 intents per event, four timers). No live verification of these follow-ups yet.

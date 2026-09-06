@@ -30,6 +30,7 @@ return function(m, a, ending)
     local function generation(s) return s:variable("ember.apex.generation") or 1 end
     local function dead(s, target) return s:variable("ember.apex.dead." .. target) == true end
     local function vent_timer(s) return "ember.apex.vents." .. generation(s) end
+    local function surge_audio_timer(s) return "ember.apex.surge_audio." .. generation(s) end
     local function lane(c, name, transition, snap)
         a.slot(c, name):transition{transition = c.sdk.device_transitions[transition], snap = snap or false}
     end
@@ -158,11 +159,6 @@ return function(m, a, ending)
         c:set_variable("ember.apex.vents_open", step == "open")
         if step == "warning" then
             beam_surge(c, s, true)
-            if phase(s) == 3 then
-                for _, side in ipairs(sides) do
-                    if not dead(s, side) then a.slot(c, "REACTOR_CLAMSHELL_" .. side .. "_ALARM_SEQUENCE"):play_sequence{} end
-                end
-            else a.slot(c, "REACTOR_COFFIN_ALARM_SEQUENCE"):play_sequence{} end
         else
             -- Exposure is the cooling window: stop the surge before moving the shutters.
             beam_surge(c, s, false)
@@ -172,6 +168,13 @@ return function(m, a, ending)
                 coffin_doors(c, step == "open", snap)
                 if step == "open" then a.cue(c, s, 46) end
             end
+        end
+        c:cancel_timer(surge_audio_timer(s))
+        if step == "closed" then
+            -- Playtest: requesting the sequence at surge start made its sound land at
+            -- cooling-door opening, one six-second window late. Pre-roll audio only;
+            -- the verified visual/exposure clock remains unchanged.
+            c:start_timer(surge_audio_timer(s), 8000)
         end
         c:start_timer(vent_timer(s), ({closed = 14000, warning = 6000, open = 10000})[step])
     end
@@ -224,6 +227,7 @@ return function(m, a, ending)
             -- opened both devices here, which left it running through the whole escape.
             beam(c, s, false, true)
             c:cancel_timer(vent_timer(s))
+            c:cancel_timer(surge_audio_timer(s))
             a.scene(c, "MOTHER_BRAIN_HOLE_EXPLOSION_SCENE")
             arm_escape(c)
             a.cue(c, s, 51); A.guidance(c, s)
@@ -319,6 +323,7 @@ return function(m, a, ending)
         else
             set(c, 5)
             c:cancel_timer(vent_timer(s)); c:cancel_timer("ember.apex.explain." .. generation(s))
+            c:cancel_timer(surge_audio_timer(s))
             coffin_doors(c, true)
             -- The weapon keeps firing until the cell goes in.
             beam(c, s, true)
@@ -345,6 +350,18 @@ return function(m, a, ending)
         destroyed(c, s, which)
     end
     function A.timer(c, s, e)
+        if e.timer_name == surge_audio_timer(s) then
+            if s:variable("ember.region") == 0 and s:variable("ember.apex.vent_step") == "closed" then
+                if phase(s) == 3 then
+                    for _, side in ipairs(sides) do
+                        if not dead(s, side) then
+                            a.slot(c, "REACTOR_CLAMSHELL_" .. side .. "_ALARM_SEQUENCE"):play_sequence{}
+                        end
+                    end
+                elseif phase(s) == 4 then a.slot(c, "REACTOR_COFFIN_ALARM_SEQUENCE"):play_sequence{} end
+            end
+            return true
+        end
         if e.timer_name == "ember.apex.hazards" then
             -- The climb pipes burn while the cell is being carried up (phase 5), well before
             -- the deposit. Escape (phase 6) uses its separate native sunburn object, so
@@ -409,6 +426,7 @@ return function(m, a, ending)
             a.darkness(c, s, true)
         else
             c:cancel_timer(vent_timer(s)); c:cancel_timer("ember.apex.core." .. generation(s))
+            c:cancel_timer(surge_audio_timer(s))
             c:cancel_timer("ember.apex.explain." .. generation(s)); c:cancel_timer("ember.apex.setup." .. generation(s))
             a.reset(c, reactor); carry.reset(c, s)
             c:set_variable("ember.apex.generation", generation(s) + 2)
@@ -462,13 +480,16 @@ return function(m, a, ending)
     function A.object(c, s, e)
         carry.state(c, s, e)
         if e.present and e.alive then
-            for i, name in ipairs({"SPECOPS_APEX_RING_LASER_OBJECT", "SPECOPS_APEX_RING_RING_OBJECT"}) do
-                if a.matches(c, e, name) and s:variable("ember.apex.beam") == true then
-                    -- Reapply the current pose when native creation finishes. The initial
-                    -- setup can precede creation; waiting for the first surge left it dark.
-                    unlock(c, beam_devices[i])
-                    a.device(c, beam_devices[i], s:variable("ember.apex.surge") ~= true, true)
-                end
+            if a.matches(c, e, "SPECOPS_APEX_RING_LASER_OBJECT")
+                and s:variable("ember.apex.beam") == true
+                and s:variable("ember.apex.beam_primed") ~= e.generation then
+                c:set_variable("ember.apex.beam_primed", e.generation)
+                for _, name in ipairs(beam_devices) do unlock(c, name) end
+                -- Seeking directly to the resting endpoint left the emitter dark until
+                -- its first animated cycle. Traverse the authored drive once on creation
+                -- so its effect events run, then leave normal surge timing in charge.
+                beam_pose(c, true, true)
+                if s:variable("ember.apex.surge") ~= true then beam_pose(c, false, false) end
             end
             if a.matches(c, e, "REACTOR_GETAWAY_SHIP_OBJECT") and phase(s) == 6
                 and not s:variable("ember.apex.ship_started") then

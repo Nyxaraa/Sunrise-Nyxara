@@ -48,5 +48,7 @@ return function(m)
         active.reset(c, s, s:variable("ember.checkpoint.name"))
     end
     R.terminated = ending.terminated
+    R.started = ending.started
+    R.skip = ending.skip
     return R
 end

@@ -22,7 +22,9 @@ return function(m)
     local function play(c, index)
         local row = assert(movies[index])
         c:set_variable("ember.ending", index)
-        c:set_variable("ember.ending.playing", index)
+        c:clear_variable("ember.ending.playing")
+        c:clear_variable("ember.ending.runtime")
+        c:clear_variable("ember.ending.stopping")
         c:select_state(assert(row.state))
         c:slot(assert(row.slot)):set_cinematic_active{active = true}
     end
@@ -31,12 +33,32 @@ return function(m)
         music.update(c, s)
         play(c, 1)
     end
-    function E.terminated(c, s, e)
+    local function matched(c, s, e)
         local index = s:variable("ember.ending")
         local row = index and movies[index]
-        if not row or s:variable("ember.ending.playing") ~= index then return end
+        if not row then return end
         local slot = c:slot(row.slot)
         if e.registry_key ~= slot.registry_key or e.slot_type ~= slot.slot_type or e.slot_index ~= slot.slot_index then return end
+        return index, slot
+    end
+    function E.started(c, s, e)
+        local index = matched(c, s, e)
+        if not index or s:variable("ember.ending.playing") or type(e.runtime_object_id) ~= "string" then return end
+        c:set_variable("ember.ending.playing", index)
+        c:set_variable("ember.ending.runtime", e.runtime_object_id)
+    end
+    function E.skip(c, s, e)
+        local index, slot = matched(c, s, e)
+        if not index or s:variable("ember.ending.playing") ~= index
+            or e.runtime_object_id ~= s:variable("ember.ending.runtime")
+            or s:variable("ember.ending.stopping") then return end
+        c:set_variable("ember.ending.stopping", true)
+        slot:set_cinematic_active{active = false}
+    end
+    function E.terminated(c, s, e)
+        local index, slot = matched(c, s, e)
+        if not index or s:variable("ember.ending.playing") ~= index
+            or e.runtime_object_id ~= s:variable("ember.ending.runtime") then return end
         slot:set_cinematic_active{active = false}
         if movies[index + 1] then play(c, index + 1)
         else

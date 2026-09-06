@@ -20,7 +20,13 @@ end
 return {
     initial_state = opening.initial_state,
     on_event_cinematic_terminated = terminated,
-    on_event_cinematic_skip_requested = terminated,
+    on_event_cinematic_started = function(c, s, e)
+        if routes then routes.started(c, s, e) end
+    end,
+    on_event_cinematic_skip_requested = function(c, s, e)
+        opening.terminated(c, s, e)
+        if routes then routes.skip(c, s, e) end
+    end,
     on_event_client_state_changed = function(context, state, event)
         wipe.client_state(context, state, event)
         opening.client_state(context, state, event)
