@@ -10,7 +10,8 @@ return function(m)
     controllers[0] = require("mission_ember.apex")(m, a, ending)
     local R = {}
     function R.client(c, s, e)
-        ending.client(c, s, e)
+        -- Once the ending owns the mission the route stops driving anything. The bookends
+        -- need no client report: they are queued with their own state selection.
         if s:variable("ember.ending") then return end
         local active = controllers[s:variable("ember.region")]
         if not active then return end

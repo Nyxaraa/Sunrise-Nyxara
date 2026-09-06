@@ -258,9 +258,8 @@ timer('ember.apex.explain.');assert(vars['ember.r.cue.41'] and vars['ember.music
 assert(timers['ember.apex.vents.1']==14000)
 timer('ember.apex.vents.') -- Surge precedes any target exposure.
 assert(vars['ember.apex.vent_step']=='warning' and timers['ember.apex.vents.1']==6000)
--- The baseline is a running weapon, not a dark one, so the surge is a drive change.
-assert(vars['ember.apex.beam']==2,'warning must surge the beam')
-assert(transition('SPECOPS_APEX_RING_LASER_DEVICE', true).transition=='open')
+-- The weapon fires continuously through the fight; the exposure cycle must not blink it.
+assert(vars['ember.apex.beam']==true,'the weapon must keep firing across the cycle')
 assert(transition('SPECOPS_APEX_RING_LASER_DEVICE').transition=='power_on')
 assert(transition('REACTOR_CLAMSHELL_EAST_DOOR_A_DEVICE').transition=='close')
 timer('ember.apex.vents.')
@@ -344,13 +343,16 @@ end
 assert(escapeFilter=='aod_reactor_rail_top_object_filter','escape hazard must use the rail top')
 -- The weapon is dead once the cell is in: powered off, but still installed. Deactivating the
 -- ring objects would take the beam and its surrounding structure out of the world entirely.
-assert(vars['ember.apex.beam']==0,'beam must be powered off after the deposit')
-local ringRemoved=false
+assert(vars['ember.apex.beam']==false,'the beam must stop firing after the deposit')
+-- Only the laser is the beam. Removing the core or ring would take the weapon's structure,
+-- and everything built around it, out of the world.
 for _,row in ipairs(calls)do
-    if row[1]=='set_object_active' and row[3] and row[3].active==false
-        and tostring(row[2]):find('specops_apex_ring',1,true) then ringRemoved=true end
+    if row[1]=='set_object_active' and row[3] and row[3].active==false then
+        local n=tostring(row[2])
+        assert(not (n:find('specops_apex_ring.core',1,true) or n:find('specops_apex_ring.ring',1,true)),
+            'the weapon structure must never be deactivated: '..n)
+    end
 end
-assert(not ringRemoved,'the weapon structure must never be deactivated')
 -- Each authored explosion set is armed so it can fire as the player reaches it.
 for _,set in ipairs({'A','B','C','D'})do
     local name='ember_apex_explosion_sequence_prefab.explosion_set_'..set:lower()..'_player_trigger'
@@ -362,16 +364,22 @@ for _,set in ipairs({'A','B','C','D'})do
 end
 reset_check('escape',function()
     assert(vars['ember.apex.phase']==6 and vars['ember.apex.dead.COFFIN'])
-    assert(vars['ember.apex.beam']==0,'escape restart must leave the beam powered off')
+    assert(vars['ember.apex.beam']==false,'escape restart must leave the beam off')
 end)
 trigger('APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER')
 -- Regions 0, 1 and 2 are sibling states of one slice set, so the client never reports a new
 -- held region. The bookend is activated on a later callback, never in the selecting one.
-assert(vars['ember.ending']==1 and not vars['ember.ending.playing'],'movie played in its own selection')
-region(0);assert(vars['ember.ending.playing']==1,'first movie never started')
+-- No teleport is armed for a sibling state, so no further client report arrives. The movie
+-- must be queued with its own selection or it never starts.
+assert(vars['ember.ending']==1 and vars['ember.ending.playing']==1,'first movie never started')
+local started=false
+for _,row in ipairs(calls)do
+    if row[1]=='set_cinematic_active' and row[2]=='pf_cinematic_bookend_stm._cinematic'
+        and row[3].active then started=true end
+end
+assert(started,'first bookend was never activated')
 call(R.terminated,c,s,event('PF_CINEMATIC_BOOKEND_STM_CINEMATIC'))
-assert(vars['ember.ending']==2 and vars['ember.ending.playing']==1)
-region(0);assert(vars['ember.ending.playing']==2,'second movie never started')
+assert(vars['ember.ending']==2 and vars['ember.ending.playing']==2,'second movie never started')
 call(R.terminated,c,s,event('PF_CINEMATIC_BOOKEND_CNN_CINEMATIC'))
 assert(vars['ember.complete'])
 local objective=vars['ember.r.guidance']

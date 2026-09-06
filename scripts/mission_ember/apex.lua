@@ -50,26 +50,24 @@ return function(m, a, ending)
         end
         a.device(c, "REACTOR_SHIELD_DEVICE", open, snap)
     end
-    -- The three placed ring objects ARE the weapon's structure and stay active for the whole
-    -- mission: deactivating them removes the beam and everything built around it, rather than
-    -- dimming it. The two devices are its lanes, so the beam has three authored states:
-    --   off   -- present but dead: powered off, the pose the weapon holds once the cell is in.
-    --   idle  -- powered and running, the beam's baseline between exposures.
-    --   surge -- powered and driven open, the intensification before the shutters expose a target.
-    local ring_objects = {"SPECOPS_APEX_RING_LASER_OBJECT", "SPECOPS_APEX_RING_CORE_OBJECT",
-        "SPECOPS_APEX_RING_RING_OBJECT"}
-    local BEAM_OFF, BEAM_IDLE, BEAM_SURGE = 0, 1, 2
-    local function beam(c, s, mode, snap)
-        -- Idempotent: the cycle re-asserts the same pose every step, and each redundant
-        -- publication would spend intents from the callback's native budget.
-        if s:variable("ember.apex.beam") == mode then return end
-        c:set_variable("ember.apex.beam", mode)
-        local powered = mode ~= BEAM_OFF
+    -- Both ring devices are ordinary type-23s -- their configs carry the same class refs as a
+    -- working clamshell door -- and driving their position or power changes nothing visible.
+    -- Presence of the placed objects is the only lever that moves this beam, and the three
+    -- objects split by role: the core and ring models carry solid geometry with full LOD tables,
+    -- while the laser model carries the emitter's own effect components and no geometry LODs.
+    -- So the core and ring are the structure the weapon is built from and stay for the whole
+    -- mission, and the laser is the beam itself. Firing it off leaves the weapon installed but
+    -- dark, rather than deleting it and everything around it.
+    local structure_objects = {"SPECOPS_APEX_RING_CORE_OBJECT", "SPECOPS_APEX_RING_RING_OBJECT"}
+    local function beam(c, s, firing, snap)
+        -- Idempotent: redundant publications would spend intents from the callback's budget.
+        if s:variable("ember.apex.beam") == firing then return end
+        c:set_variable("ember.apex.beam", firing)
+        a.objects(c, {"SPECOPS_APEX_RING_LASER_OBJECT"}, firing)
+        -- The authored device lanes still follow, so the weapon's own state matches what is
+        -- drawn even though the beam is not rendered from them.
         for _, name in ipairs({"SPECOPS_APEX_RING_LASER_DEVICE", "SPECOPS_APEX_RING_RING_DEVICE"}) do
-            a.device(c, name, mode == BEAM_SURGE, snap)
-            -- FX power is independent of mechanical position, so the weapon can stay
-            -- installed and lit, installed and dark, or driven wide open.
-            lane(c, name, powered and "power_on" or "power_off", snap)
+            lane(c, name, firing and "power_on" or "power_off", snap)
         end
     end
     -- `REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON` and `FOUNDRY_THERMAL_DOT_HOP_ON` both reference
@@ -132,14 +130,12 @@ return function(m, a, ending)
         c:set_variable("ember.apex.vent_step", step)
         c:set_variable("ember.apex.vents_open", step == "open")
         if step == "warning" then
-            beam(c, s, BEAM_SURGE)
             if phase(s) == 3 then
                 for _, side in ipairs(sides) do
                     if not dead(s, side) then a.slot(c, "REACTOR_CLAMSHELL_" .. side .. "_ALARM_SEQUENCE"):play_sequence{} end
                 end
             else a.slot(c, "REACTOR_COFFIN_ALARM_SEQUENCE"):play_sequence{} end
         else
-            if step == "closed" then beam(c, s, BEAM_IDLE, snap) end
             if phase(s) == 3 then
                 for _, side in ipairs(sides) do if not dead(s, side) then doors(c, side, step == "open", snap) end end
             elseif phase(s) == 4 then
@@ -161,7 +157,8 @@ return function(m, a, ending)
         lane(c, "MOTHER_BRAIN_DOOR_DEVICE", "lock")
         unlock(c, "SPECOPS_APEX_RING_LASER_DEVICE")
         unlock(c, "SPECOPS_APEX_RING_RING_DEVICE")
-        beam(c, s, BEAM_IDLE, true)
+        -- The weapon is firing at the sun from the moment the area comes up.
+        beam(c, s, true, true)
     end
     local function start_reactor(c, s)
         if phase(s) >= 3 then return end
@@ -190,7 +187,7 @@ return function(m, a, ending)
             -- The weapon is dead once the cell is in: powered off but still installed, so
             -- the beam and everything built around it stay in the world. The previous code
             -- opened both devices here, which left it running through the whole escape.
-            beam(c, s, BEAM_OFF, true)
+            beam(c, s, false, true)
             c:cancel_timer(vent_timer(s))
             a.scene(c, "MOTHER_BRAIN_HOLE_EXPLOSION_SCENE")
             arm_escape(c)
@@ -208,9 +205,8 @@ return function(m, a, ending)
         a.device(c, "ACCESS_DOOR_OUTER_DEVICE", true)
         a.device(c, "SECURITY_DOOR_DEVICE", false, true)
         a.slot(c, "SECURITY_PLACED_INTERCEPTOR_OBJECT"):set_interactable_object{generation = 1}
-        -- The weapon's structure is placed once and stays for the whole mission; `beam()`
-        -- only changes its power and drive.
-        a.objects(c, ring_objects, true)
+        -- The weapon's structure is placed once and is never taken back out of the world.
+        a.objects(c, structure_objects, true)
         for _, side in ipairs(sides) do
             doors(c, side, false, true)
             a.device(c, "CLAMSHELL_PIPES_" .. side .. "_DEVICE", false, true)
@@ -289,9 +285,8 @@ return function(m, a, ending)
             set(c, 5)
             c:cancel_timer(vent_timer(s)); c:cancel_timer("ember.apex.explain." .. generation(s))
             coffin_doors(c, true)
-            -- The weapon keeps running until the cell goes in; the exposure cycle is over,
-            -- so it settles back to its baseline rather than holding the surge.
-            beam(c, s, BEAM_IDLE)
+            -- The weapon keeps firing until the cell goes in.
+            beam(c, s, true)
             -- Arm the climb scorch now: the pipes burn while the cell is carried up.
             c:start_timer("ember.apex.hazards", 1)
             unlock(c, "MOTHER_BRAIN_DOOR_DEVICE")
@@ -374,7 +369,7 @@ return function(m, a, ending)
             set(c, 6)
             -- The weapon is already dead at this checkpoint: restoring it must leave the
             -- beam off and re-arm the escape's own progress triggers.
-            beam(c, s, BEAM_OFF, true)
+            beam(c, s, false, true)
             arm_escape(c)
             a.darkness(c, s, true)
         else
