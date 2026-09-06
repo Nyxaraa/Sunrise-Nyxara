@@ -52,6 +52,7 @@ return function(m, a)
         if phase(s) > 0 then return end
         set(c, 1)
         a.objects(c, {"CORE_WEAPON_LASER_BEAM_OBJECT_80B3C22D"}, true)
+        a.enable_device(c, "CINDER_CORE_WEAPON_LASER_BEAM_DEVICE")
         -- This is the entrance to Ready Room 1; its defenders are beyond the hatch.
         a.device(c, "TUMBLER_HATCH_DOOR_DEVICE", true)
         a.slot(c, "TUMBLER_HATCH_DOOR_KLAXON_AUDIO_SEQUENCE"):play_sequence{}

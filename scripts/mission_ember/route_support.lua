@@ -69,6 +69,16 @@ return function(mission, on_clear)
         api.slot(c, name):transition{transition = open and c.sdk.device_transitions.open or c.sdk.device_transitions.close,
             snap = snap or false}
     end
+    -- Position is only one of a type-23's three lanes; power and lock are the others, and a
+    -- device that is never unlocked and powered stays inert however its position is driven.
+    function api.lane(c, name, transition, snap)
+        api.slot(c, name):transition{transition = c.sdk.device_transitions[transition], snap = snap or false}
+    end
+    -- The Almighty's weapon beam is an object AND the device that drives it. Placing the object
+    -- alone leaves a dead prop, so every region that shows the beam enables its device too.
+    function api.enable_device(c, name)
+        api.lane(c, name, "unlock"); api.lane(c, name, "power_on")
+    end
     function api.objects(c, names, active)
         -- Each is an exact type-4 entry at its package transform, including native components.
         for _, name in ipairs(names) do api.slot(c, name):set_object_active{active = active} end

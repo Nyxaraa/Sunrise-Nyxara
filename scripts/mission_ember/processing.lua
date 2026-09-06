@@ -41,6 +41,7 @@ return function(m, a)
         a.objects(c, {"MERCURY_HOLOGRAM_OBJECT", "DEVICE_DOOR_HATCH_ONE_OBJECT", "DEVICE_DOOR_HATCH_TWO_OBJECT",
             "DEVICE_DOOR_HATCH_THREE_OBJECT", "DEVICE_DOOR_HATCH_FOUR_OBJECT",
             "CORE_WEAPON_LASER_BEAM_OBJECT_80B3C8F7"}, true)
+        a.enable_device(c, "CORE_WEAPON_LASER_BEAM_DEVICE")
         a.device(c, "LINK_ENTRY_DOOR_DEVICE", true)
         a.device(c, "TUMBLER_DOOR_DEVICE", true, true)
         a.device(c, "CONTROL_CONSOLE_SCREEN_DEVICE", false, true)

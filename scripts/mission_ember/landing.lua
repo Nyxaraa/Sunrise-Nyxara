@@ -184,6 +184,13 @@ return function(mission)
         context:slot(door):transition{transition = context.sdk.device_transitions.close, snap = true}
         context:slot(lever_device):transition{transition = context.sdk.device_transitions.close, snap = true}
         context:slot(lever):set_interactable_object{generation = 1}
+        -- The Almighty's weapon is firing at the sun for the whole mission, and every region
+        -- that shows the beam owns the device that drives it. Placing the beam without
+        -- unlocking and powering its device leaves a dead prop.
+        local beam = required(mission.Slot.POWERHOUSE_CORE_WEAPON_LASER_BEAM_DEVICE,
+                              "powerhouse core weapon laser beam device")
+        context:slot(beam):transition{transition = context.sdk.device_transitions.unlock}
+        context:slot(beam):transition{transition = context.sdk.device_transitions.power_on}
     end
 
     return {

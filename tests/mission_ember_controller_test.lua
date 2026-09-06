@@ -45,7 +45,11 @@ local navpoints = {}
 local flights, deliveries, retiredShips = {}, {}, 0
 local exitActions = {}
 local darkness = {}
+local beamLanes = {}
 mission.Slot.HARD_WIPE_GLOBALS = "darkness"
+-- The Almighty's weapon beam is placed in every region that shows it, and its type-23 device
+-- must be unlocked and powered or the beam is left a dead prop.
+mission.Slot.POWERHOUSE_CORE_WEAPON_LASER_BEAM_DEVICE = "powerhouse_beam"
 local timers, timerStarts, now = {}, 0, 0
 for index, letter in ipairs({"A", "B", "C", "D"}) do
     local prefix = "BRIDGE_CROSSING_DROPSHIP_" .. letter
@@ -109,7 +113,7 @@ local state = {variable = function(_, key) return vars[key] end}
 local closed, resets, movies, cues = {}, 0, {}, {}
 local ghost, door, extended = {}, {}, 0
 local leverAnimation = {}
-local context = {sdk = {squad_modes = {replace = "replace", reserve = "reserve"}, device_transitions = {close = "close", open = "open"}}}
+local context = {sdk = {squad_modes = {replace = "replace", reserve = "reserve"}, device_transitions = {close = "close", open = "open", unlock = "unlock", lock = "lock", power_on = "power_on", power_off = "power_off"}}}
 function context:start_timer(name, delay)
     assert(delay == (name:find("depart", 1, true) and 4000 or 6000),
            "unload adds three seconds to the prior three-second settle; departure holds four seconds")
@@ -194,6 +198,9 @@ function context:slot(name)
     if name == "ghost" then
         return {registry_key = 12, slot_type = 65, slot_index = 60,
             set_ghost_link = function(_, args) ghost[#ghost + 1] = args end}
+    end
+    if name == "powerhouse_beam" then
+        return {transition = function(_, args) beamLanes[#beamLanes + 1] = args.transition end}
     end
     if name == "lever_device" then
         return {transition = function(_, args) leverAnimation[#leverAnimation+1] = args end}
@@ -422,6 +429,14 @@ assert(placements == 42 and #flights == 8 and #deliveries == 2,
        "duplicate path and scan receipts cannot respawn ships or passengers")
 region(64); cleared()
 assert(#ghost == 2 and extended == 6)
+do
+    local unlocked, powered = false, false
+    for _, lane in ipairs(beamLanes) do
+        unlocked = unlocked or lane == "unlock"
+        powered = powered or lane == "power_on"
+    end
+    assert(unlocked and powered, "the powerhouse weapon beam device must be enabled, not just placed")
+end
 print("cinematic handoff, 42-squad route, skipped volumes, exact triggers, dialogue and reload checks passed")
 
 for _, group in ipairs({"catwalk_entry", "catwalk_mid", "pipe", "mercury", "mercury_bonus", "bridge", "passengers", "sun", "helipad"}) do
