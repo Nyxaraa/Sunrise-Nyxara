@@ -69,10 +69,10 @@ return function(m, a, ending)
     -- `ring_device_sense` in the log carries their native position and power.
     local structure_objects = {"SPECOPS_APEX_RING_CORE_OBJECT", "SPECOPS_APEX_RING_RING_OBJECT"}
     local beam_devices = {"SPECOPS_APEX_RING_LASER_DEVICE", "SPECOPS_APEX_RING_RING_DEVICE"}
-    -- The latest live test establishes the beam's poses: close is normal, open is surge.
-    -- Keep this mapping separate from the encounter clock and shutter cooling state.
+    -- Restore the pre-6540584 mapping requested after the failed inversion test:
+    -- normal uses open; the surge uses close. Keep the encounter/audio clock unchanged.
     local function beam_pose(c, surging, snap)
-        for _, name in ipairs(beam_devices) do a.device(c, name, surging, snap) end
+        for _, name in ipairs(beam_devices) do a.device(c, name, not surging, snap) end
     end
     -- Firing: the beam is present and both of its devices are powered.
     local function beam(c, s, firing, snap)

@@ -1,5 +1,14 @@
 # 1AU: movie loader, surge audio and escape explosions
 
+## Playback report after `6540584`
+
+The user confirms immediate ending audio, but the picture stays black with gameplay HUD visible throughout. Both native players reached decoder state 5. STM subsequently stopped and completed after Escape (t=384298–384404); CNN also reached state 5 (t=384750) and completed after Escape (t=385250–385356). This establishes decoding/playback state and skip sequencing, **not visible video**. The archived log is `build/first-encounter-audit/6540584-black-video.log`.
+
+The failed beam inversion from `6540584` has been reverted at the user's request: normal uses `open`, surge uses `close`. Audio remains tied to the surge callback; shutter mechanics are unchanged. The restored mission route and all 24 portable tests pass.
+
+The picture investigation separates CPU extraction (`41D140`), fullscreen UI command production (`132B890` → `1278FF0`, command `1B`), GPU Y/U/V upload (`41D7B0`), and the final video draw (`1159CE0`, global shader index `B4`). Shader `80B35981` is resident in the captured process. The idle UI manager at `(RIP target of 132BD5C) & ~15 = 142F4EE30` has the expected `+1E4 = -1`, `+1EC = 0`. These **post-skip** readings do not identify the during-playback failure; an active picture/command-buffer capture is pending.
+
+
 ## Latest playtest: metadata ready, stream missing
 
 The user confirms `13f07ee` no longer freezes, but neither ending plays. The log records movie 1 resources ready and playback submitted at t=256404, decoder state 1 at t=256487, state 7 at t=256527, then failure and resource release at t=256598. The escape trigger and movie dispatch are working; the native decoder never reaches playing state 5.
