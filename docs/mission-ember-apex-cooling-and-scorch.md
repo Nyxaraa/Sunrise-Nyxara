@@ -1,3 +1,5 @@
+> Current correction: the native damage-object-only escape test did not burn the player. The new implementation uses one player attachment of the authored sunburn effect and keeps that object disabled. See [final corrections](mission-ember-final-corrections.md) for evidence, scope and current validation; earlier experiments below are historical.
+
 # 1AU Apex and ending corrections — 6 September 2026
 
 ## Current implementation

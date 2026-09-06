@@ -1,5 +1,6 @@
 #include "ember_movies.h"
 #include "playback_rules.h"
+#include "resources.h"
 #include <Windows.h>
 #include <array>
 #include <atomic>
@@ -24,6 +25,7 @@ unsigned movie{};
 Status state{};
 bool acquired{}, stopRequested{}, attempted{}, escapeHeld{};
 Playback playback{};
+MovieResource resource{};
 void* decoderOwner{};
 int lastDecoderState{-1};
 thread_local bool inPoll{};
@@ -80,7 +82,7 @@ void fail(const char* reason) {
             api.stop(api.manager());
         release();
     }
-    state=Status::failed; watching.store(false); report(reason);
+    state=Status::failed; watching.store(!resource.release()); report(reason);
 }
 }
 bool request(Owner next, std::uint64_t nextKey, unsigned index, bool stop) noexcept {
@@ -93,7 +95,7 @@ bool request(Owner next, std::uint64_t nextKey, unsigned index, bool stop) noexc
         }
     } else if (next==owner && nextKey==key && index==movie) {
         accepted=state!=Status::failed;
-    } else if (!acquired && state!=Status::queued && state!=Status::preparing && state!=Status::playing) {
+    } else if (!acquired && !resource.held() && state!=Status::queued && state!=Status::preparing && state!=Status::playing) {
         owner=next; key=nextKey; movie=index; state=Status::queued; began=GetTickCount64();
         stopRequested=false; playback={}; decoderOwner=nullptr; lastDecoderState=-1;
         escapeHeld=(GetAsyncKeyState(VK_ESCAPE)&0x8000)!=0;
@@ -114,6 +116,7 @@ void poll(std::int32_t region, std::int32_t step) noexcept {
     struct Reset { ~Reset() { inPoll=false; } } reset;
     AcquireSRWLockExclusive(&lock);
     if (state!=Status::queued && state!=Status::preparing && state!=Status::playing) {
+        watching.store(!resource.release());
         ReleaseSRWLockExclusive(&lock); return;
     }
     const auto now=GetTickCount64();
@@ -124,10 +127,21 @@ void poll(std::int32_t region, std::int32_t step) noexcept {
     auto* decoder=api.decoder();
     if (!manager || !decoder) { fail("player_unavailable"); ReleaseSRWLockExclusive(&lock); return; }
     if (state==Status::queued) {
+        if (!resource.held() && !resource.begin(assets[movie-1])) {
+            fail("resource_request_failed"); ReleaseSRWLockExclusive(&lock); return;
+        }
+        if (resource.state()==3 || resource.state()<0) {
+            fail("resource_load_failed"); ReleaseSRWLockExclusive(&lock); return;
+        }
+        if (!resource.ready()) {
+            if (now-began>30000) fail("resource_ready_timeout");
+            ReleaseSRWLockExclusive(&lock); return;
+        }
         if (api.busy(manager)) {
             if (now-began>30000) fail("player_busy_timeout");
         } else {
             // Same acquire/play pairing as the authored pre-rendered component.
+            report("resource_ready");
             decoderOwner=decoder; api.acquire(manager); acquired=true;
             api.play(manager,assets[movie-1],0); state=Status::preparing; began=now;
             report("submitted");
@@ -152,7 +166,7 @@ void poll(std::int32_t region, std::int32_t step) noexcept {
     if (stopRequested && asset==assets[movie-1]) {
         api.stop(manager); stopRequested=false; report("stop_requested",decoderState);
     }
-    if (observed==Status::complete) { release(); state=observed; watching.store(false); report("complete",decoderState); }
+    if (observed==Status::complete) { release(); state=observed; watching.store(!resource.release()); report("complete",decoderState); }
     else if (observed==Status::failed) fail("decoder_failed_or_replaced");
     else state=observed;
     if ((state==Status::preparing && now-began>30000)

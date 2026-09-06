@@ -271,7 +271,7 @@ for _,side in ipairs({'east','west'})do for _,wave in ipairs({'entry','reinforce
 assert(vars['ember.music.section']==22)
 timer('ember.apex.explain.');assert(vars['ember.r.cue.41'] and vars['ember.music.section']==23)
 assert(timers['ember.apex.vents.1']==14000)
-assert(timers['ember.apex.surge_audio.1']==4000,'audio pre-roll must lead the unchanged visual surge by ten seconds')
+assert(timers['ember.apex.surge_audio.1']==1,'request the sound four seconds earlier without moving the visual clock')
 local beforeAudio=#calls
 timer('ember.apex.surge_audio.')
 assert(vars['ember.apex.vent_step']=='closed' and not vars['ember.apex.surge'],'audio pre-roll changed visual timing')
@@ -396,34 +396,26 @@ assert(vars['ember.carry.apex.done'] and not vars['ember.carry.apex.held'])
 local before=#calls;use('MOTHER_BRAIN_INTERACT_OBJECT');assert(#calls==before)
 call(R.dispatch,'object',c,s,event('MOTHER_BRAIN_CARRY_OBJECT',{generation=3,present=false,alive=false}))
 assert(not timers['ember.carry.recover.apex.3'],'consumed final cell respawned')
--- Deposit disables the scripted climb burn; native sunburn alone owns escape damage.
-local detachedBeforeRail=false
+-- Deposit moves the ONE burn attachment from pipes to the escape rail.
+local burnSlot=slotDefs[m.Slot.REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON].name
+local escapeAttachments=0
+local sunburnState
 for i=depositStart+1,#calls do
-    if calls[i][1]=='set_mission_effect' and calls[i][3].enabled==false then detachedBeforeRail=true end
+    local row=calls[i]
+    if row[1]=='set_mission_effect' and row[3].enabled then
+        assert(row[2]==burnSlot,'escape created a second independent damage source')
+        assert(row[3].filter==c:slot(m.Slot.AOD_REACTOR_RAIL_TOP_OBJECT_FILTER))
+        escapeAttachments=escapeAttachments+1
+    end
+    if row[1]=='set_object_active' and row[2]==slotDefs[m.Slot.SUNBURN_DAMAGE_OBJECT].name then
+        sunburnState=row[3].active
+    end
 end
-assert(detachedBeforeRail,'deposit must detach the pipe burn before escape')
--- No scripted rail burn is attached during escape.
-call(R.dispatch,'timer',c,s,{timer_name='ember.apex.hazards'})
-local escapeEffect
-for i=#calls,1,-1 do
-    if calls[i][1]=='set_mission_effect' then escapeEffect=calls[i][3];break end
-end
-assert(escapeEffect and escapeEffect.enabled==false,
-    'escape must leave the additional scripted burn disabled')
-for i=depositStart+1,#calls do
-    assert(not (calls[i][1]=='set_mission_effect' and calls[i][3].enabled),
-        'deposit must not add a second damage attachment')
-end
+assert(escapeAttachments==1,'deposit must move the existing burn to the escape filter exactly once')
+assert(sunburnState==false,'native damage volume would stack with the player attachment')
 local afterRail=#calls
 call(R.dispatch,'timer',c,s,{timer_name='ember.apex.hazards'})
 assert(#calls==afterRail,'duplicate hazard callback must not reattach scorch')
-local sunburnState
-for i=depositStart+1,#calls do
-    if calls[i][1]=='set_object_active' and calls[i][2]==slotDefs[m.Slot.SUNBURN_DAMAGE_OBJECT].name then
-        sunburnState=calls[i][3].active
-    end
-end
-assert(sunburnState==true,'escape must activate its authored sunburn object')
 -- The weapon is dead once the cell is in: powered off, but still installed. Deactivating the
 -- ring objects would take the beam and its surrounding structure out of the world entirely.
 assert(vars['ember.apex.beam']==false,'the beam must stop firing after the deposit')

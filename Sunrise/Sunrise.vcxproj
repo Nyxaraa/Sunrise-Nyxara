@@ -280,7 +280,9 @@
     <ClCompile Include="src\client\hooks\bootflow\profile_setup_skip.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\world_step.cpp" />
     <ClCompile Include="src\client\hooks\ember_movies\ember_movies.cpp" />
+    <ClCompile Include="src\client\hooks\ember_movies\resources.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\ember_movie_tick.cpp" />
+    <ClCompile Include="src\client\hooks\bootflow\ember_sunburn.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\spawn_hold.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\fade_release.cpp" />
     <ClCompile Include="src\client\hooks\bootflow\spawn\spawn_gate_probe.cpp" />
@@ -1213,6 +1215,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\client\hooks\ember_movies\ember_movies.h" />
+    <ClInclude Include="src\client\hooks\ember_movies\resources.h" />
+    <ClInclude Include="src\client\hooks\ember_movies\readiness_rules.h" />
+    <ClInclude Include="src\client\hooks\ember_movies\sunburn_rules.h" />
     <ClInclude Include="src\client\hooks\ember_movies\playback_rules.h" />
     <ClInclude Include="resources\resource.h" />
     <ClInclude Include="src\core\logging\log.h" />

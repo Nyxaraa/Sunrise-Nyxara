@@ -1,5 +1,7 @@
 #include <array>
 #include <cassert>
+#include "../Sunrise/src/client/hooks/ember_movies/readiness_rules.h"
+#include "../Sunrise/src/client/hooks/ember_movies/sunburn_rules.h"
 #include "../Sunrise/src/client/hooks/ember_movies/playback_rules.h"
 #include "../Sunrise/src/client/hooks/mission_retirement/mission_retirement.h"
 #include "../Sunrise/src/middleware/bap/activity_message/roster_presence.h"
@@ -20,6 +22,23 @@ static void expect(Reader& reader, unsigned width, std::uint64_t expected) {
 }
 int main() {
     namespace movies=sunrise::client::hooks::ember_movies;
+    // Captured crash: registered movie tags contain free-list entries, not resident headers.
+    assert(!movies::movie_resources_ready(1,0x80BCA001,false,0,false,0xFFFFFFFF));
+    assert(!movies::movie_resources_ready(2,0x80BCA001,false,0x80BCA000,true,0x80BCA034));
+    assert(!movies::movie_resources_ready(2,0x80BCA001,true,0x80BCA000,false,0x80BCA034));
+    assert(!movies::movie_resources_ready(2,0x80BCA001,true,0x80BCA002,true,0x80BCA034));
+    assert(!movies::movie_resources_ready(3,0x80BCA001,true,0x80BCA000,true,0x80BCA034));
+    assert(!movies::movie_resources_ready(2,0x80BCA001,true,0x80BCA000,true,0xFFFFFFFF));
+    assert(movies::movie_resources_ready(2,0x80BCA001,true,0x80BCA000,true,0x80BCA034));
+    assert(movies::movie_resources_ready(2,0x80BCA003,true,0x80BCA002,true,0x80C7C000));
+    assert(!movies::resource_can_release(0) && !movies::resource_can_release(1));
+    assert(movies::resource_can_release(2) && movies::resource_can_release(3));
+    // Only Ember slot 43 may borrow sunburn. The global Foundry effect and rail shock stay distinct.
+    assert(movies::ember_burn_source(0x80B3C0C6,0x80809540,0xAC8,0x80C1D9E0));
+    assert(!movies::ember_burn_source(0x80BEB26F,0x80809540,0xAC8,0x80C1D9E0));
+    assert(!movies::ember_burn_source(0x80B3C0C6,0x8080953F,0xAC8,0x80C1D9E0));
+    assert(!movies::ember_burn_source(0x80B3C0C6,0x80809540,0xAC0,0x80C1D9E0));
+    assert(!movies::ember_burn_source(0x80B3C0C6,0x80809540,0xAC8,0x80C1D389));
     movies::Playback playback;
     assert(playback.observe(false,5,true)==movies::Status::preparing);
     assert(playback.observe(true,0,false)==movies::Status::preparing);

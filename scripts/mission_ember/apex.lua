@@ -96,18 +96,15 @@ return function(m, a, ending)
         c:set_variable("ember.apex.surge", on)
         beam_pose(c, on, false)
     end
-    -- `REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON` and `FOUNDRY_THERMAL_DOT_HOP_ON` both reference
-    -- effect resource 80C1D9E0 -- the burn already working in the Foundry. The hot-pipe and
-    -- rail-top hop-ons carry 80B82484 and 80C1D389 instead, which is why contact read as a
-    -- shock rather than a scorch. Use the authored scorch for the climb pipes. A new revision
-    -- removes the previous attachment (native 9EF8A0/9F1F10) before attaching the new filter.
+    -- Native slot 43 substitutes the actual sunburn attachment 80B82489 for the
+    -- Foundry thermal resource. One slot owns climb/escape damage: a filter revision
+    -- detaches the old child before attaching the new one. Never combine it with the volume object.
     local function rail_filter(c) return {players = true, inside = a.slot(c, "SLOT_019E")} end
     local function hazards(c, s, mode)
         local wanted = mode or "off"
         if s:variable("ember.apex.hazard_mode") == wanted then return end
         c:set_variable("ember.apex.hazard_mode", wanted)
-        -- The placed native sunburn object owns escape damage and its authored bounds.
-        a.objects(c, {"SUNBURN_DAMAGE_OBJECT"}, mode == "escape")
+        a.objects(c, {"SUNBURN_DAMAGE_OBJECT"}, false)
         if mode == "climb" then
             -- The five narrow authored pipe volumes on the way up to the deposit; their heights
             -- track the climb the mother-brain dialogue volumes walk through, from z~172 at
@@ -125,9 +122,9 @@ return function(m, a, ending)
                     a.slot(c, "SLOT_0005_80B3C09F"), a.slot(c, "SLOT_0006_80B3C09F"),
                     a.slot(c, "SLOT_0008_80B3C09F")}}, true)
         else
-            -- End the climb attachment; never add a second rail-wide damage effect.
+            -- Reuse the same attachment owner on the authored escape rail volume.
             a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
-                "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), false)
+                "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), mode == "escape")
         end
     end
     -- Activate the authored explosion scene once, then arm its own four progress triggers
@@ -171,10 +168,9 @@ return function(m, a, ending)
         end
         c:cancel_timer(surge_audio_timer(s))
         if step == "closed" then
-            -- Playtest: requesting the sequence at surge start made its sound land at
-            -- cooling-door opening. The next playtest requested four more seconds
-            -- of lead: pre-roll ten seconds before the unchanged visual surge.
-            c:start_timer(surge_audio_timer(s), 4000)
+            -- The live cue still landed four seconds late with a 4s request delay.
+            -- Queue on the next event, retaining the 14s closed / 6s surge / 10s cooling clock.
+            c:start_timer(surge_audio_timer(s), 1)
         end
         c:start_timer(vent_timer(s), ({closed = 14000, warning = 6000, open = 10000})[step])
     end
