@@ -31,7 +31,7 @@ return function(m)
                 c:set_variable("ember.ending", 3)
                 c:set_variable("ember.complete", true)
                 -- The movie bridge observes this native lifetime receipt after both movies,
-                -- allows the completion banner, then commits a guarded return to orbit.
+                -- then immediately commits a guarded return to orbit without a banner delay.
                 c.lifetime:set{state = c.sdk.lifetime_states:at(6)}
                 c:set_phase(100)
             end

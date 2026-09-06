@@ -108,12 +108,11 @@ void poll(int region,int step) noexcept {
     if (ready) api.activity(&selected);
     const bool ember=exact && selected==link.binding.destination.activityIndex;
     const bool complete=exact && api.lifetime()==6;
-    const auto before=progress.stage;
     const auto action=progress.observe(GetTickCount64(),{exact,ember,selected==0,complete,ready,
         region,step,manager?field<int>(manager,0x3A0):-1,sameWorld});
-    if (before!=OrbitStage::banner && progress.stage==OrbitStage::banner) report("completion_accepted");
     switch(action) {
     case OrbitAction::select:
+        report("completion_accepted");
         if (select_orbit()) report("selection_queued");
         else { progress.stage=OrbitStage::finished;report("orbit_selection_unavailable"); }
         break;

@@ -2,7 +2,7 @@
 #include <cstdint>
 namespace sunrise::client::hooks::ember_movies {
 enum class OrbitAction { none, select, cleanup, orbitSetup, canceled, timedOut };
-enum class OrbitStage { idle, completion, banner, selection, leaving, finished };
+enum class OrbitStage { idle, completion, selection, leaving, finished };
 struct OrbitObservation {
     bool exactOwner{}, emberSelected{}, orbitSelected{}, complete{}, ready{};
     int region{-1}, step{-1}, pendingStep{-1};
@@ -10,20 +10,18 @@ struct OrbitObservation {
 };
 struct OrbitReturn {
     OrbitStage stage{OrbitStage::idle};
-    std::uint64_t began{}, bannerAt{};
-    void arm(std::uint64_t now) { stage=OrbitStage::completion; began=now; bannerAt=0; }
+    std::uint64_t began{};
+    void arm(std::uint64_t now) { stage=OrbitStage::completion; began=now; }
     bool active() const { return stage!=OrbitStage::idle && stage!=OrbitStage::finished; }
     OrbitAction observe(std::uint64_t now, const OrbitObservation& s) {
         if (!active()) return OrbitAction::none;
         auto end=[this](OrbitAction a) { stage=OrbitStage::finished; return a; };
         if (now-began>90000) return end(OrbitAction::timedOut);
-        if (stage==OrbitStage::completion || stage==OrbitStage::banner) {
+        if (stage==OrbitStage::completion) {
             if (!s.exactOwner || !s.emberSelected || s.region!=0 || s.step!=38)
                 return end(OrbitAction::canceled);
-            if (!s.complete) return OrbitAction::none;
-            if (stage==OrbitStage::completion) { stage=OrbitStage::banner; bannerAt=now; }
-            // Let the accepted mission-complete presentation show before leaving.
-            if (now-bannerAt<8000 || !s.ready || s.pendingStep!=38) return OrbitAction::none;
+            // Return on the first ready frame after completion, with no banner delay.
+            if (!s.complete || !s.ready || s.pendingStep!=38) return OrbitAction::none;
             stage=OrbitStage::selection;
             return OrbitAction::select;
         }

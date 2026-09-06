@@ -31,19 +31,17 @@ int main() {
     orbit.arm(1000);
     assert(orbit.observe(9000,inApex)==OA::none); // Host must actually publish completion.
     inApex.complete=true;
-    assert(orbit.observe(10000,inApex)==OA::none);
-    assert(orbit.observe(17999,inApex)==OA::none); // Full banner window.
-    assert(orbit.observe(18000,inApex)==OA::select);
-    assert(orbit.observe(18001,inApex)==OA::none); // No duplicate commit.
+    assert(orbit.observe(10000,inApex)==OA::select); // First completion frame: no banner delay.
+    assert(orbit.observe(10001,inApex)==OA::none); // No duplicate commit.
     auto inOrbit=inApex; inOrbit.emberSelected=false;inOrbit.orbitSelected=true;
     inOrbit.exactOwner=false; // Committing orbit may already retire the old ActivityClient link.
-    assert(orbit.observe(18002,inOrbit)==OA::cleanup); // Requires destination readback.
-    assert(orbit.observe(18003,inOrbit)==OA::none); // No repeated cleanup request.
+    assert(orbit.observe(10002,inOrbit)==OA::cleanup); // Requires destination readback.
+    assert(orbit.observe(10003,inOrbit)==OA::none); // No repeated cleanup request.
     movies::OrbitObservation betweenWorlds{};betweenWorlds.step=28;
-    assert(orbit.observe(18004,betweenWorlds)==OA::none);
+    assert(orbit.observe(10004,betweenWorlds)==OA::none);
     assert(orbit.active());
     inOrbit.step=29;
-    assert(orbit.observe(18100,inOrbit)==OA::orbitSetup);
+    assert(orbit.observe(10100,inOrbit)==OA::orbitSetup);
     assert(!orbit.active() && orbit.observe(20000,inApex)==OA::none);
     orbit.arm(30000);
     auto stale=inApex;stale.exactOwner=false;
@@ -54,15 +52,19 @@ int main() {
     orbit.arm(50000);inApex.complete=false;
     assert(orbit.observe(140001,inApex)==OA::timedOut);
     orbit.arm(150000);inApex.complete=true;
+    inApex.ready=false;
     assert(orbit.observe(150000,inApex)==OA::none);
-    assert(orbit.observe(158000,inApex)==OA::select);
-    assert(orbit.observe(158001,departed)==OA::none); // Native cleanup already began.
-    assert(orbit.observe(158100,inOrbit)==OA::orbitSetup);
+    inApex.ready=true;
+    assert(orbit.observe(150001,inApex)==OA::select); // No delay once native readiness returns.
+    assert(orbit.observe(150002,departed)==OA::none); // Native cleanup already began.
+    assert(orbit.observe(150100,inOrbit)==OA::orbitSetup);
     orbit.arm(160000);
+    inApex.pendingStep=28;
     assert(orbit.observe(160000,inApex)==OA::none);
-    assert(orbit.observe(168000,inApex)==OA::select);
+    inApex.pendingStep=38;
+    assert(orbit.observe(160001,inApex)==OA::select);
     auto replaced=inOrbit;replaced.step=38;replaced.sameWorld=false;
-    assert(orbit.observe(168001,replaced)==OA::canceled);
+    assert(orbit.observe(160002,replaced)==OA::canceled);
     movies::SurfaceRegistrations surfaces{};
     for (unsigned i=1;i<=6;++i) surfaces[i].entries[0]=movies::movie_surface_definitions[i-1];
     // Live black-video capture: old candidate handles remain, but no container
