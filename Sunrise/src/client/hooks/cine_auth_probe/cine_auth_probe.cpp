@@ -7,6 +7,8 @@
 
 #include "cine_auth_probe.h"
 
+#include <Windows.h>
+
 #include <array>
 #include <atomic>
 #include <cstdarg>
@@ -79,8 +81,9 @@ constexpr std::size_t kCompGenerationOffset = 400;
 constexpr std::size_t kCompStartedOffset = 608;
 /** Deferred flag: an Auth body arrived while the armed gate was closed. */
 constexpr std::size_t kCompDeferredOffset = 609;
-/** Process-wide line cap, so a stuck component cannot flood the log. */
-constexpr unsigned kMaxReports = 256;
+/** Bounded per-window logging survives a long mission without exhausting the intro budget. */
+constexpr unsigned kMaxReports = 32;
+constexpr ULONGLONG kReportWindowMs = 5000;
 
 using ApplyGate = char(__fastcall*)(void*, void*);
 using BodyApply = char(__fastcall*)(void*, const std::byte*);
@@ -110,14 +113,21 @@ std::atomic_bool g_installed{false};
 ArmedCheck g_armedCheck{nullptr};
 // The whole chain runs on the component's owning thread; the counters and flags are diagnostic
 // only, so they need no lock.
-UpdateState g_lastUpdate{};
+std::array<UpdateState, 16> g_lastUpdates{};
+std::size_t g_nextUpdate{};
+ULONGLONG g_reportWindow{};
 unsigned g_reports{0};
 thread_local bool t_inGate{false};
 thread_local bool t_inUpdate{false};
 thread_local bool t_startRan{false};
 
-/** Formats and writes one probe line at debug level, under the shared line cap. */
+/** Formats a bounded info-level probe line; normal playtest logs retain it. */
 void write_line(const char* format, ...) noexcept {
+    const auto now = GetTickCount64();
+    if (now - g_reportWindow >= kReportWindowMs) {
+        g_reportWindow = now;
+        g_reports = 0;
+    }
     if (g_reports >= kMaxReports) {
         return;
     }
@@ -129,7 +139,7 @@ void write_line(const char* format, ...) noexcept {
     va_end(args);
     if (written > 0) {
         core::log::write(core::log::Channel::client,
-                         core::log::Level::debug,
+                         core::log::Level::info,
                          {line.data(), static_cast<std::size_t>(written)});
     }
 }
@@ -265,6 +275,15 @@ char __fastcall update_tick(void* component) noexcept {
     if (comp != nullptr) {
         state.latch = static_cast<int>(comp[kCompStartedOffset]);
     }
+    UpdateState* previous = nullptr;
+    for (auto& entry : g_lastUpdates) {
+        if (entry.component == component) { previous = &entry; break; }
+    }
+    if (previous == nullptr) {
+        previous = &g_lastUpdates[g_nextUpdate++ % g_lastUpdates.size()];
+        *previous = {};
+    }
+    auto& g_lastUpdate = *previous;
     if (state.component != g_lastUpdate.component || state.armed != g_lastUpdate.armed
         || state.deferred != g_lastUpdate.deferred || state.latch != g_lastUpdate.latch) {
         g_lastUpdate = state;
