@@ -202,8 +202,8 @@ struct RuntimeInstance final {
     std::uint64_t playerKey{};
     /** Bounded diagnostic budget for Ember bridge and console Sense fields. */
     std::uint16_t emberInteractionReports{};
-    std::array<std::uint64_t, 64> emberInteractionValues{};
-    std::uint64_t emberInteractionSeen{};
+    std::array<std::uint64_t, 128> emberInteractionValues{};
+    std::array<std::uint64_t, 2> emberInteractionSeen{};
     bool publicTarget{};
     bool missionStateBound{};
     bool missionStarted{};

@@ -50,25 +50,46 @@ return function(m, a, ending)
         end
         a.device(c, "REACTOR_SHIELD_DEVICE", open, snap)
     end
-    -- Both ring devices are ordinary type-23s -- their configs carry the same class refs as a
-    -- working clamshell door -- and driving their position or power changes nothing visible.
-    -- Presence of the placed objects is the only lever that moves this beam, and the three
-    -- objects split by role: the core and ring models carry solid geometry with full LOD tables,
-    -- while the laser model carries the emitter's own effect components and no geometry LODs.
-    -- So the core and ring are the structure the weapon is built from and stay for the whole
-    -- mission, and the laser is the beam itself. Firing it off leaves the weapon installed but
-    -- dark, rather than deleting it and everything around it.
+    -- The weapon has two halves and both are driven.
+    --
+    -- Objects: the core and ring models carry solid geometry with full LOD tables and are the
+    -- structure the weapon is built from, so they are placed once and never taken back out --
+    -- removing them deletes the beam and everything around it. The laser model carries the
+    -- emitter's effect components and no geometry LODs, so it is the beam itself and its
+    -- presence is what has been observed to make the beam appear and disappear.
+    --
+    -- Devices: `SPECOPS_APEX_RING_LASER_DEVICE` and `..._RING_DEVICE` are the authored lanes of
+    -- those same placed objects, exactly as the Mercury lever's type-23 device animates the
+    -- type-4 object it belongs to. Their closed vocabulary is position, power and lock. They are
+    -- snap-initialized to a baseline and then transitioned without snap, which is the pattern
+    -- that made the lever animate. Whether they actually report back is now observable:
+    -- `ring_device_sense` in the log carries their native position and power.
     local structure_objects = {"SPECOPS_APEX_RING_CORE_OBJECT", "SPECOPS_APEX_RING_RING_OBJECT"}
+    local beam_devices = {"SPECOPS_APEX_RING_LASER_DEVICE", "SPECOPS_APEX_RING_RING_DEVICE"}
+    local function beam_drive(c, driven, snap)
+        for _, name in ipairs(beam_devices) do a.device(c, name, driven, snap) end
+    end
+    -- Firing: the beam is present and both of its devices are powered.
     local function beam(c, s, firing, snap)
         -- Idempotent: redundant publications would spend intents from the callback's budget.
         if s:variable("ember.apex.beam") == firing then return end
         c:set_variable("ember.apex.beam", firing)
         a.objects(c, {"SPECOPS_APEX_RING_LASER_OBJECT"}, firing)
-        -- The authored device lanes still follow, so the weapon's own state matches what is
-        -- drawn even though the beam is not rendered from them.
-        for _, name in ipairs({"SPECOPS_APEX_RING_LASER_DEVICE", "SPECOPS_APEX_RING_RING_DEVICE"}) do
+        for _, name in ipairs(beam_devices) do
             lane(c, name, firing and "power_on" or "power_off", snap)
         end
+        if not firing then
+            -- Installed but dark: the drive returns to its baseline with the power.
+            c:set_variable("ember.apex.surge", false)
+            beam_drive(c, false, snap)
+        end
+    end
+    -- The surge is the authored drive of a firing beam, so it never removes it. If these
+    -- devices do move the emitter, this is the lane that shows it.
+    local function beam_surge(c, s, on)
+        if s:variable("ember.apex.beam") ~= true or s:variable("ember.apex.surge") == on then return end
+        c:set_variable("ember.apex.surge", on)
+        beam_drive(c, on, false)
     end
     -- `REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON` and `FOUNDRY_THERMAL_DOT_HOP_ON` both reference
     -- effect resource 80C1D9E0 -- the burn already working in the Foundry. The hot-pipe and
@@ -130,12 +151,14 @@ return function(m, a, ending)
         c:set_variable("ember.apex.vent_step", step)
         c:set_variable("ember.apex.vents_open", step == "open")
         if step == "warning" then
+            beam_surge(c, s, true)
             if phase(s) == 3 then
                 for _, side in ipairs(sides) do
                     if not dead(s, side) then a.slot(c, "REACTOR_CLAMSHELL_" .. side .. "_ALARM_SEQUENCE"):play_sequence{} end
                 end
             else a.slot(c, "REACTOR_COFFIN_ALARM_SEQUENCE"):play_sequence{} end
         else
+            if step == "closed" then beam_surge(c, s, false) end
             if phase(s) == 3 then
                 for _, side in ipairs(sides) do if not dead(s, side) then doors(c, side, step == "open", snap) end end
             elseif phase(s) == 4 then
@@ -157,8 +180,11 @@ return function(m, a, ending)
         lane(c, "MOTHER_BRAIN_DOOR_DEVICE", "lock")
         unlock(c, "SPECOPS_APEX_RING_LASER_DEVICE")
         unlock(c, "SPECOPS_APEX_RING_RING_DEVICE")
-        -- The weapon is firing at the sun from the moment the area comes up.
+        -- The weapon is firing at the sun from the moment the area comes up. Snap the drive to
+        -- its baseline here so every later surge is an animated transition, not a jump.
         beam(c, s, true, true)
+        c:set_variable("ember.apex.surge", false)
+        beam_drive(c, false, true)
     end
     local function start_reactor(c, s)
         if phase(s) >= 3 then return end

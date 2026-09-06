@@ -1470,7 +1470,15 @@ void log_ember_interaction_sense(RuntimeInstance& instance,
                              && observation.key.senseSchema == 0x80804D3EU;
         const bool bridge = observation.key.slotType == 23 && observation.key.slotIndex < 6
                             && observation.key.senseSchema == 0x80804F47U;
-        if (observation.key.registryKey != 0xF6FFB59EU || (!console && !bridge)
+        // The Almighty's weapon ring: whether its two authored devices actually accept and
+        // report position and power decides whether the beam can be driven from them at all.
+        // Nothing observed these before, so a beam that did not change could not be told apart
+        // from a device transition that never landed.
+        const bool ring = observation.key.registryKey == 0xA3B76C64U
+                          && observation.key.slotType == 23
+                          && (observation.key.slotIndex == 48 || observation.key.slotIndex == 49)
+                          && observation.key.senseSchema == 0x80804F47U;
+        if ((observation.key.registryKey != 0xF6FFB59EU && !ring) || (!console && !bridge && !ring)
             || instance.emberInteractionReports >= 256
             || observation.firstValue > sense.valueCount
             || observation.valueCount > sense.valueCount - observation.firstValue) {
@@ -1482,12 +1490,15 @@ void log_ember_interaction_sense(RuntimeInstance& instance,
                 continue;
             }
             if (value.fieldOrdinal >= 9) continue;
-            const std::size_t field = (console ? 54U : observation.key.slotIndex * 9U)
-                                      + value.fieldOrdinal;
-            const std::uint64_t bit = std::uint64_t{1} << field;
-            if ((instance.emberInteractionSeen & bit) != 0
+            const std::size_t field =
+                ring ? 64U + (observation.key.slotIndex - 48U) * 9U + value.fieldOrdinal
+                     : (console ? 54U : observation.key.slotIndex * 9U) + value.fieldOrdinal;
+            if (field >= instance.emberInteractionValues.size()) continue;
+            const std::size_t word = field / 64U;
+            const std::uint64_t bit = std::uint64_t{1} << (field % 64U);
+            if ((instance.emberInteractionSeen[word] & bit) != 0
                 && instance.emberInteractionValues[field] == value.unsignedValue) continue;
-            instance.emberInteractionSeen |= bit;
+            instance.emberInteractionSeen[word] |= bit;
             instance.emberInteractionValues[field] = value.unsignedValue;
             if (instance.emberInteractionReports++ >= 256) return;
             std::array<char, 192> fields{};
@@ -1505,7 +1516,8 @@ void log_ember_interaction_sense(RuntimeInstance& instance,
             if (written > 0) {
                 log_line(core::log::Level::info,
                          &instance,
-                         console ? "ghost_link_sense" : "bridge_device_sense",
+                         ring ? "ring_device_sense"
+                              : (console ? "ghost_link_sense" : "bridge_device_sense"),
                          "observed",
                          {fields.data(),
                           (std::min)(static_cast<std::size_t>(written), fields.size() - 1)});
