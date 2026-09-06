@@ -1,5 +1,6 @@
 #include <array>
 #include <cassert>
+#include "../Sunrise/src/client/hooks/ember_movies/playback_rules.h"
 #include "../Sunrise/src/client/hooks/mission_retirement/mission_retirement.h"
 #include "../Sunrise/src/middleware/bap/activity_message/roster_presence.h"
 #include "../Sunrise/src/middleware/encoding/bit_reader.h"
@@ -18,6 +19,21 @@ static void expect(Reader& reader, unsigned width, std::uint64_t expected) {
     assert(reader.read(static_cast<std::uint8_t>(width), value) && value == expected);
 }
 int main() {
+    namespace movies=sunrise::client::hooks::ember_movies;
+    movies::Playback playback;
+    assert(playback.observe(false,5,true)==movies::Status::preparing);
+    assert(playback.observe(true,0,false)==movies::Status::preparing);
+    assert(playback.observe(true,6,false)==movies::Status::preparing);
+    assert(playback.observe(true,3,true)==movies::Status::preparing);
+    assert(playback.observe(true,5,true)==movies::Status::playing);
+    assert(playback.observe(true,6,true)==movies::Status::playing);
+    assert(playback.observe(true,6,false)==movies::Status::complete);
+    assert(playback.observe(false,6,false)==movies::Status::failed);
+    assert(playback.observe(true,7,false)==movies::Status::failed);
+    movies::Playback skipped;
+    assert(skipped.observe(true,5,true)==movies::Status::playing);
+    assert(skipped.observe(true,0,false)==movies::Status::complete);
+
     std::array<std::uint32_t, 5> history{102, 103, 104};
     std::size_t historyCount = 3;
     const std::array<std::uint32_t, 3> movieOne{105, 102, 104};

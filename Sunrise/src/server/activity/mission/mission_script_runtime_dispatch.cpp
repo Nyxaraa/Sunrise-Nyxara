@@ -18,6 +18,7 @@
 #include "mission_script_runtime.h"
 #include "mission_script_runtime_internal.h"
 #include "../../../client/hooks/mission_retirement/mission_retirement.h"
+#include "../../../client/hooks/ember_movies/ember_movies.h"
 
 // The intent fan-out reserves one Host output revision, then asks one typed adapter to encode it.
 
@@ -285,6 +286,17 @@ void dispatch_intent(RuntimeInstance& instance, std::uint64_t now) noexcept {
     }
     begin_intent_attempt(instance, now);
     switch (intent.kind) {
+    case lua_vm::IntentKind::playPrerenderedMovie: {
+        const auto activities=instance.view.catalog->activities();
+        if (instance.publicTarget || instance.view.activityRow>=activities.size()
+            || activities[instance.view.activityRow].definitionHash!=0x38F926B2U
+            || instance.activeRegion!=0
+            || !client::hooks::ember_movies::request({instance.view.binding.sessionId,
+                instance.view.activityClientGeneration},intent.requestKey,intent.firstRow,!intent.active)) {
+            refuse_delivery(instance,"movie_refused","native movie request unavailable",host::EffectOutcome::refused);
+        } else static_cast<void>(complete_local_effect(instance,"movie_queued"));
+        return;
+    }
     case lua_vm::IntentKind::selectMissionState: {
         scenes::Snapshot selected{};
         const scenes::Status status =

@@ -10,6 +10,7 @@
 #include "internal.h"
 #include "spawn/probe.h"
 #include "../mission_retirement/mission_retirement.h"
+#include "../ember_movies/ember_movies.h"
 
 namespace sunrise::client::hooks::bootflow {
 namespace {
@@ -65,6 +66,7 @@ void poll_world_step() noexcept {
 void poll_current_slice_set() noexcept {
     const std::int32_t index = spawn::sample_current_slice_set();
     mission_retirement::poll(index);
+    ember_movies::poll(index, read_step());
     const std::int32_t previous = g_publishedSliceSet.load(std::memory_order_relaxed);
     // A slice-set change is a world replacement whose transition arms a fresh fade, and a
     // teleport never passes the off-destination step that re-arms the release. Re-arm here or

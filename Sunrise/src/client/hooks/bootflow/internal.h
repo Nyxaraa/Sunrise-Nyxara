@@ -93,6 +93,10 @@ void publish_orbit_handoff(const hooking::detour::Handle& handle) noexcept;
 /** Detaches the orbit handoff release. */
 void uninstall_orbit_handoff() noexcept;
 
+[[nodiscard]] StageResult stage_ember_movie_tick(hooking::detour::Spec& spec) noexcept;
+void publish_ember_movie_tick(const hooking::detour::Handle& handle) noexcept;
+void uninstall_ember_movie_tick() noexcept;
+
 /** LoadingCinematics_Suppressed: travel-only suppression, separate from movie Auth. */
 [[nodiscard]] StageResult stage_loading_cinematics(hooking::detour::Spec& spec) noexcept;
 void publish_loading_cinematics(const hooking::detour::Handle& handle) noexcept;

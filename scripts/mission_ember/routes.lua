@@ -10,7 +10,7 @@ return function(m)
     controllers[0] = require("mission_ember.apex")(m, a, ending)
     local R = {}
     function R.client(c, s, e)
-        -- Native travel must reach the exact bookend before playback is offered.
+        -- Pre-rendered playback is observed without replacing the gameplay world.
         if s:variable("ember.ending") then ending.client(c, s, e); return end
         local active = controllers[s:variable("ember.region")]
         if not active then return end
@@ -30,7 +30,10 @@ return function(m)
         if active.guidance then active.guidance(c, s) end
     end
     function R.dispatch(method, c, s, e)
-        if s:variable("ember.ending") then return end
+        if s:variable("ember.ending") then
+            if method == "timer" then return ending.timer(c, s, e) end
+            return
+        end
         if method == "timer" then
             for _, region in ipairs({56, 40, 0}) do
                 local controller = controllers[region]

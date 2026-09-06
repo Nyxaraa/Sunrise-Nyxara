@@ -1,20 +1,15 @@
--- Post-escape bookends are distinct native packed-region entries (1 and 2).
--- Selection arms travel; offer playback only on the matching held-region receipt.
--- Never confuse an offered command, a skip request, or a failed start with completion.
+-- Ember bookends are pre-rendered movies. Keep Apex loaded while the native movie
+-- player owns presentation; never tear down the gameplay world to create type-6 actors.
 return function(m)
-    local movies = {
-        {state = m.states.STATE_80B3C09E_0000_0001_80B3C091, slot = m.Slot.PF_CINEMATIC_BOOKEND_STM_CINEMATIC},
-        {state = m.states.STATE_80B3C09E_0000_0002_80B3C093, slot = m.Slot.PF_CINEMATIC_BOOKEND_CNN_CINEMATIC},
-    }
     local E = {}
     local music = require("mission_ember.music")(m)
     local function play(c, index)
-        local row = assert(movies[index])
         c:set_variable("ember.ending", index)
         c:clear_variable("ember.ending.playing")
-        c:clear_variable("ember.ending.runtime")
         c:clear_variable("ember.ending.stopping")
-        c:select_state(assert(row.state))
+        c:play_prerendered_movie{index = index}
+        c:set_variable("ember.ending.polls", 0)
+        c:start_timer("ember.ending.poll", 250)
     end
     function E.start(c, s)
         if s:variable("ember.ending") then return end
@@ -23,47 +18,43 @@ return function(m)
     end
     function E.client(c, s, e)
         local index = s:variable("ember.ending")
-        local row = index and movies[index]
-        if not row or s:variable("ember.ending.offered") == index
-            or e.held_region_index ~= row.state.region_index then return end
-        c:set_variable("ember.ending.offered", index)
-        c:slot(row.slot):set_cinematic_active{active = true}
-    end
-    local function matched(c, s, e)
-        local index = s:variable("ember.ending")
-        local row = index and movies[index]
-        if not row then return end
-        local slot = c:slot(row.slot)
-        if e.registry_key ~= slot.registry_key or e.slot_type ~= slot.slot_type or e.slot_index ~= slot.slot_index then return end
-        return index, slot
-    end
-    function E.started(c, s, e)
-        local index = matched(c, s, e)
-        if not index or s:variable("ember.ending.offered") ~= index or s:variable("ember.ending.playing") or type(e.runtime_object_id) ~= "string" then return end
-        c:set_variable("ember.ending.playing", index)
-        c:set_variable("ember.ending.runtime", e.runtime_object_id)
-    end
-    function E.skip(c, s, e)
-        local index, slot = matched(c, s, e)
-        if not index or s:variable("ember.ending.playing") ~= index
-            or e.runtime_object_id ~= s:variable("ember.ending.runtime")
-            or s:variable("ember.ending.stopping") then return end
-        c:set_variable("ember.ending.stopping", true)
-        slot:set_cinematic_active{active = false}
-    end
-    function E.terminated(c, s, e)
-        local index, slot = matched(c, s, e)
-        if not index or s:variable("ember.ending.playing") ~= index
-            or e.runtime_object_id ~= s:variable("ember.ending.runtime") then return end
-        slot:set_cinematic_active{active = false}
-        if movies[index + 1] then play(c, index + 1)
-        else
-            c:set_variable("ember.ending", index + 1)
-            c:set_variable("ember.complete", true)
-            -- Native lifetime 6 enters the completion/reward branch (BEA9D0/B37100).
-            c.lifetime:set{state = c.sdk.lifetime_states:at(6)}
-            c:set_phase(100)
+        if not index or index > 2 then return end
+        local status = c:prerendered_movie_status(index)
+        if status == "playing" then
+            if s:variable("ember.ending.playing") ~= index then c:set_variable("ember.ending.playing", index) end
+        elseif status == "complete" then
+            -- The native bridge requires real playback before it can report completion,
+            -- including when a short/skip transition happens between script callbacks.
+            if index == 1 then play(c, 2)
+            else
+                c:cancel_timer("ember.ending.poll")
+                c:set_variable("ember.ending", 3)
+                c:set_variable("ember.complete", true)
+                c.lifetime:set{state = c.sdk.lifetime_states:at(6)}
+                c:set_phase(100)
+            end
+        elseif status == "failed" then
+            c:set_variable("ember.ending.failed", true)
         end
     end
+    function E.timer(c, s, e)
+        if e.timer_name ~= "ember.ending.poll" then return true end
+        E.client(c, s, e)
+        local index = s:variable("ember.ending")
+        if index and index <= 2 and not s:variable("ember.ending.failed") then
+            local polls = (s:variable("ember.ending.polls") or 0) + 1
+            c:set_variable("ember.ending.polls", polls)
+            -- Also bound a refused delivery that never reached the native bridge.
+            if polls >= 2600 then c:set_variable("ember.ending.failed", true)
+            else c:start_timer("ember.ending.poll", 250) end
+        end
+        return true
+    end
+    -- Direct movies have no type-6 source: the native bridge handles local Escape,
+    -- invokes the native stop routine, and waits for the decoder to stop.
+    function E.skip(c, s, e) end
+    -- A type-6 incident cannot complete a pre-rendered movie request.
+    function E.started(c, s, e) end
+    function E.terminated(c, s, e) end
     return E
 end

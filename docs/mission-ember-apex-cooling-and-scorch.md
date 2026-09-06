@@ -2,6 +2,8 @@
 
 ## Current implementation
 
+The ending route now uses the native pre-rendered player directly; see [the current ending mechanism](mission-ember-prerendered-ending.md). The world-transfer experiments below are retained as historical failure evidence. Direct playback still needs live confirmation.
+
 - Cooling doors open after the surge stops. Visual/mechanical intervals remain 14 seconds closed, 6 seconds surging, 10 seconds exposed.
 - The user confirmed those visuals/mechanics align, but hears the surge at cooling-door opening. The next live test requested another four seconds of lead. Audio sequences now pre-roll at closed-window second 4, ten seconds before the visual surge. This is playtest-based compensation, not a recovered native delay parameter. Pending audio is phase/region/generation guarded and cancelled on reset, core destruction and deposit.
 - Initial beam: snapping to the resting endpoint still showed the incomplete beam in the first user screenshot. Native device position/power both reached 1. The new candidate seeks the driven endpoint once on laser creation, then animates to the resting endpoint so authored animation events can run. Duplicate presence and late presence after deposit cannot restart it. The target is the second user screenshot's thin, continuous beam. Needs visual confirmation.

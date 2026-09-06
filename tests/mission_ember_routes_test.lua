@@ -25,6 +25,12 @@ end
 function c:cancel_timer(k) timers[k] = nil end
 function c:set_phase(p) record("phase",p) end
 function c:select_state(state) assert(state.region_index); record("select",state.region_index) end
+local movieStatus={}
+function c:play_prerendered_movie(args)
+    record('movie',args.index,args)
+    if not args.stop then movieStatus[args.index]='queued' end
+end
+function c:prerendered_movie_status(index) return movieStatus[index] or 'absent' end
 c.lifetime = {set = function(_, args) record("lifetime",args.state) end}
 local types = {set_engagement_state=70,set_music_section=11,set_mission_effect=26,set_object_filter=34,transition=23,set_interactable_object=4,set_object_active=4,watch_damage=20,
     fire_trigger=31,set_directive=68,set_darkness_zone=35,play_dialogue_cue=53,play_sequence=5,
@@ -460,40 +466,32 @@ for i=#calls,1,-1 do
     end
 end
 assert(sunburnAfterEscape==false,'escape completion must disable native sunburn')
--- A selected bookend is not loaded merely because the player holds Apex's base world.
-local beforeArrival=#calls
-call(R.client,c,s,{held_region_index=0})
-call(R.client,c,s,{current_region_index=1})
-assert(#calls==beforeArrival and not vars['ember.ending.offered'],'pending/base world offered playback')
-region(1)
-assert(vars['ember.ending.offered']==1)
-local offeredCalls=#calls;region(1);assert(#calls==offeredCalls,'duplicate arrival replayed the movie offer')
-assert(vars['ember.ending']==1 and not vars['ember.ending.playing'],'offer is not native playback')
-local offered=false
-for _,row in ipairs(calls)do
-    if row[1]=='set_cinematic_active' and row[2]=='pf_cinematic_bookend_stm._cinematic'
-        and row[3].active then offered=true end
-end
-assert(offered,'first bookend was never offered')
-local first=event('PF_CINEMATIC_BOOKEND_STM_CINEMATIC',{runtime_object_id='9007199254740993'})
-local second=event('PF_CINEMATIC_BOOKEND_CNN_CINEMATIC',{runtime_object_id='9007199254740994'})
+-- Direct playback leaves Apex loaded and never selects a bookend world.
+assert(vars['ember.ending']==1 and movieStatus[1]=='queued')
+for i=depositStart+1,#calls do assert(calls[i][1]~='select','ending must not request world teardown') end
 local beforeStart=#calls
-call(R.terminated,c,s,first);call(R.skip,c,s,first)
-assert(#calls==beforeStart and vars['ember.ending']==1,'unstarted movie advanced the ending')
-call(R.started,c,s,second);assert(not vars['ember.ending.playing'],'wrong controller claimed playback')
-call(R.started,c,s,first);assert(vars['ember.ending.playing']==1)
-call(R.terminated,c,s,event('PF_CINEMATIC_BOOKEND_STM_CINEMATIC',{runtime_object_id='stale'}))
-assert(vars['ember.ending']==1,'stale runtime object advanced the movie')
+call(R.client,c,s,{held_region_index=0})
+assert(#calls==beforeStart and not vars['ember.complete'],'queue receipt must not complete a movie')
+local first=event('PF_CINEMATIC_BOOKEND_STM_CINEMATIC',{runtime_object_id='9007199254740993'})
+call(R.terminated,c,s,first);call(R.started,c,s,first);call(R.skip,c,s,first)
+assert(vars['ember.ending']==1 and #calls==beforeStart,'type-6 receipts must not advance direct playback')
+movieStatus[1]='preparing';call(R.client,c,s,{held_region_index=0})
+assert(not vars['ember.ending.playing'])
+movieStatus[1]='playing';call(R.client,c,s,{held_region_index=0})
+assert(vars['ember.ending.playing']==1)
 call(R.skip,c,s,first)
-assert(vars['ember.ending']==1 and not vars['ember.complete'],'skip must wait for native termination')
-local stoppingCalls=#calls;call(R.skip,c,s,first);assert(#calls==stoppingCalls,'repeated skip republished stop')
-call(R.terminated,c,s,first)
-assert(vars['ember.ending']==2 and not vars['ember.ending.playing'],'second movie is only offered')
-call(R.terminated,c,s,first);assert(vars['ember.ending']==2,'old movie completion advanced its successor')
-call(R.started,c,s,second);assert(not vars['ember.ending.playing'],'unoffered second movie claimed playback')
-region(2)
-call(R.started,c,s,second);call(R.terminated,c,s,second)
-assert(vars['ember.complete'])
+assert(vars['ember.ending']==1 and not vars['ember.complete'],'skip must wait for native completion')
+local stoppedCalls=#calls;call(R.skip,c,s,first);assert(#calls==stoppedCalls)
+movieStatus[1]='complete';timer('ember.ending.poll')
+assert(vars['ember.ending']==2 and movieStatus[2]=='queued')
+call(R.client,c,s,{held_region_index=0});call(R.terminated,c,s,first)
+assert(not vars['ember.complete'],'first movie completion must not complete the mission')
+movieStatus[2]='failed';call(R.client,c,s,{held_region_index=0})
+assert(vars['ember.ending.failed'] and not vars['ember.complete'],'playback failure must not award completion')
+movieStatus[2]='playing';call(R.client,c,s,{held_region_index=0})
+movieStatus[2]='complete';timer('ember.ending.poll')
+assert(vars['ember.complete'] and vars['ember.ending']==3)
+local completedCalls=#calls;call(R.client,c,s,{held_region_index=0});assert(#calls==completedCalls)
 local objective=vars['ember.r.guidance']
 region(56);region(40);assert(vars['ember.r.guidance']==objective,'backtracking reset the forward objective')
 local n=#calls;call(R.terminated,c,s,event('PF_CINEMATIC_BOOKEND_CNN_CINEMATIC'));assert(#calls==n)

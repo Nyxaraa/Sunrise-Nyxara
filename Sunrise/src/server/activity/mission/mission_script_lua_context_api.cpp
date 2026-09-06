@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "mission_script_lua_internal.h"
+#include "../../../client/hooks/ember_movies/ember_movies.h"
 #include "mission_script_lua_names.h"
 #include "mission_script_lua_peer_internal.h"
 #include "mission_script_lua_resolve.h"
@@ -192,6 +193,35 @@ resolve_message_name(lua_State* state, std::string_view name, ActivityMessageDef
     return queue_intent(state, frame, intent);
 }
 
+/** Ember's exact packaged movie pair; work is committed as an ordinary mission intent. */
+int context_play_prerendered_movie(lua_State* state) {
+    static_cast<void>(luaL_checkudata(state,1,kContextMetatable));
+    const auto* impl=impl_from_state(state);
+    if (impl->identity.publicTarget || impl->identity.definitionHash!=0x38F926B2U)
+        return luaL_error(state,"pre-rendered movie bridge is scoped to mission_ember");
+    static constexpr std::array<std::string_view,2> fields{"index","stop"};
+    refuse_unknown_arguments(state,fields);
+    const auto index=optional_integer_argument(state,"index",0);
+    if (index<1 || index>2) return luaL_error(state,"unknown Ember bookend index");
+    lua_getfield(state,2,"stop"); const bool stop=lua_toboolean(state,-1); lua_pop(state,1);
+    Intent intent{};intent.kind=IntentKind::playPrerenderedMovie;
+    intent.firstRow=static_cast<std::uint32_t>(index);intent.active=!stop;
+    return queue_intent(state,active_frame(state),intent);
+}
+int context_prerendered_movie_status(lua_State* state) {
+    static_cast<void>(luaL_checkudata(state,1,kContextMetatable));
+    const auto index=luaL_checkinteger(state,2);
+    auto& frame=active_frame(state);
+    const auto* impl=impl_from_state(state);
+    if (impl->identity.definitionHash!=0x38F926B2U || impl->identity.publicTarget
+        || !frame.event || index<1 || index>2) { lua_pushliteral(state,"absent");return 1; }
+    namespace movies=client::hooks::ember_movies;
+    const auto result=movies::status({frame.event->binding.sessionId,frame.event->sourceGeneration},
+        static_cast<unsigned>(index));
+    constexpr std::array<const char*,6> names{"absent","queued","preparing","playing","complete","failed"};
+    lua_pushstring(state,names[static_cast<unsigned>(result)]);return 1;
+}
+
 /** Lua index for the mission context: its collections, phase, variables and timers. */
 [[nodiscard]] int context_index(lua_State* state) {
     static_cast<void>(luaL_checkudata(state, 1, kContextMetatable));
@@ -221,6 +251,10 @@ resolve_message_name(lua_State* state, std::string_view name, ActivityMessageDef
         lua_pushcfunction(state, &context_scene);
     } else if (key == "slot") {
         lua_pushcfunction(state, &context_slot);
+    } else if (key == "play_prerendered_movie") {
+        lua_pushcfunction(state, &context_play_prerendered_movie);
+    } else if (key == "prerendered_movie_status") {
+        lua_pushcfunction(state, &context_prerendered_movie_status);
     } else if (key == "select_state") {
         lua_pushcfunction(state, &context_select_state);
     } else if (key == "restart_checkpoint") {

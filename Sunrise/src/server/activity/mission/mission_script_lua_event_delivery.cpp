@@ -62,6 +62,8 @@ push_incident_revision_member(lua_State* state, const host::Event& event, std::s
         return "slot.advance_task";
     case ActionKind::playDialogueCue:
         return "slot.play_dialogue_cue";
+    case ActionKind::playPrerenderedMovie:
+        return "mission.play_prerendered_movie";
     case ActionKind::selectMissionState:
         return "mission.select_state";
     }
