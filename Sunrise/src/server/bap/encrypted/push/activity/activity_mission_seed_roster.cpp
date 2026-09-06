@@ -503,10 +503,12 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
             publicRegion = isPublic;
         }
     }
-    const bool transitionPublication =
-        !lease.fullSetPublished
-        && ((!lease.scriptSelected && !publicRegion) || heldRegion < 0
-            || static_cast<std::uint32_t>(heldRegion) != selectedRegion);
+    // Arrival was already accepted for a sibling state above. Apply that same rule to
+    // the content subset, or the lease commits without ever registering its movie controller.
+    const bool transitionPublication = mission_seed_transition_subset_only(
+        lease.fullSetPublished, lease.scriptSelected, publicRegion,
+        heldRegion, selectedRegion, summary.sliceSetIndex,
+        middleware::content::packages::tables::kSliceSetIndexFactor);
     for (std::size_t source = 0; source < foldGroupCount; ++source) {
         const layouts::RosterGroup& candidate = materialized[source];
         if (!layouts::valid_roster_group(candidate)) {

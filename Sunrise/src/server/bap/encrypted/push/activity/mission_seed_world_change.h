@@ -72,4 +72,15 @@ mission_seed_arrival_window_closed(std::int32_t heldRegion,
         && !mission_seed_arrival_window_closed(heldRegion, newRegion, newSliceSet, factor);
 }
 
+/** State-local records may publish once the containing world is held, including sibling movies. */
+[[nodiscard]] constexpr bool mission_seed_transition_subset_only(
+    bool fullSetPublished, bool scriptSelected, bool publicRegion,
+    std::int32_t heldRegion, std::uint32_t selectedRegion,
+    std::uint32_t selectedSliceSet, std::uint32_t factor) noexcept {
+    return !fullSetPublished
+        && ((!scriptSelected && !publicRegion)
+            || !mission_seed_arrival_window_closed(
+                heldRegion, selectedRegion, selectedSliceSet, factor));
+}
+
 } // namespace sunrise::server::bap::encrypted::push::activity

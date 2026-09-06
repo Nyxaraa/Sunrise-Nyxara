@@ -107,6 +107,15 @@ void arrival_window_stays_open_across_a_real_slice_set_change() {
 } // namespace
 
 int main() {
+    // Closing the arrival lease alone is insufficient: the roster must include the
+    // state-local cinematic groups while the client still reports Apex gameplay.
+    assert(!seed::mission_seed_transition_subset_only(false, true, false, 0, 1, 0, 8));
+    assert(!seed::mission_seed_transition_subset_only(false, true, false, 0, 2, 0, 8));
+    assert(seed::mission_seed_transition_subset_only(false, true, false, 40, 1, 0, 8));
+    assert(seed::mission_seed_transition_subset_only(false, true, false, -1, 1, 0, 8));
+    assert(seed::mission_seed_transition_subset_only(false, false, false, 0, 1, 0, 8));
+    assert(!seed::mission_seed_transition_subset_only(false, false, true, 0, 1, 0, 8));
+    assert(!seed::mission_seed_transition_subset_only(true, true, false, 40, 1, 0, 8));
     // Real full-mission case: the last explicit seed is the landing, but ordinary
     // traversal already brought the player to Apex before selecting its ending.
     assert(!seed::mission_seed_selection_needs_arrival(64, 64, 0, 1, 0, 8));

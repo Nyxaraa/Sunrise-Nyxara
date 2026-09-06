@@ -12,3 +12,11 @@ Package evidence correction: config 80B3D494 (ship) and 80B3D497 (sunburn) both 
 Validation: all five mission Lua suites pass. Route peak: 235 variables, 61 intents per callback, three concurrent timers, 13,000 Lua instructions including the mock. Tests cover cooling command order, beam presence, deferred ship activation, duplicate ship receipts, and disabling the extra escape burn.
 
 Still unresolved: exact native ending-readiness failure and full-screen surge distortion. The diagnostic DLL commit fe45d11 improves visibility but does not itself fix cinematic playback. Do not reinstate the reverted cinematic-region ordinal encoding: it caused Lime.
+
+## Ending roster correction
+
+The 15:52:37 stalled-run capture contains 491 allocated sync records and no type-6 cinematic record. All allocated records have byte 20 set to 1; its exact native readiness meaning is not established. This capture does not demonstrate Omega's 19-unseeded-record condition.
+
+The roster's transitionPublication predicate still compared heldRegion directly against selectedRegion. Thus held Apex region 0 / selected bookend region 1 withheld state-local groups even after the separate arrival-window check accepted the shared world. Apply the shared-world arrival rule to the roster subset too. Both bookends may then publish while the player holds Apex; genuine world changes and unknown held-world state still defer local records.
+
+This is isolated from the reverted global-message state-byte experiment. Global state encoding is unchanged. Release build and all 22 portable tests pass, including the production subset predicate. Native movie creation and playback need a live test; do not treat server cinematic_staged as proof of playback.
