@@ -88,6 +88,22 @@ bool stream_ready(std::uint32_t handle) {
     const auto location=item-(read<std::uintptr_t>(item+8)&mask);
     return movie_stream_ready(read<std::uint32_t>(item),read<std::uint32_t>(item+4),location);
 }
+int root_state(std::uint32_t handle) {
+    if (handle==0xFFFFFFFFU || !status) return -1;
+    auto* root=blob(handle);return root ? status(root) : -1;
+}
+bool definitions_ready(bool requireBuffers) {
+    for (unsigned i=0;i<movie_surface_definitions.size();++i) {
+        const auto tag=movie_surface_definitions[i];
+        const auto item=datum(tag);
+        if (!item) return false;
+        const auto at=reinterpret_cast<std::uintptr_t>(blob(tag));
+        if (!movie_definition_resident(read<std::uint32_t>(item),read<std::uint32_t>(item+4),at)
+            || !movie_definition_matches(i,read<std::uint8_t>(at),read<std::uint8_t>(at+6))) return false;
+        if (requireBuffers && read<std::uintptr_t>(at+8)==0) return false;
+    }
+    return true;
+}
 }
 bool sunburn_resident() noexcept {
     if (!resolve()) return false;
@@ -101,6 +117,7 @@ bool MovieResource::begin(std::uint32_t asset) noexcept {
     create(mgr,&root_,8,2,0,"mission_ember_movie");
     if (!held()) return false;
     auto* root=blob(root_);if (!root) return false;
+    retiringSurfaces_=false;
     // Retain metadata plus the compact stream mapping consumed by 41A160.
     // Its native kind-1 load initializes file offset/patch/size without copying the movie.
     for (const auto tag : movie_metadata(asset)) {
@@ -109,18 +126,49 @@ bool MovieResource::begin(std::uint32_t asset) noexcept {
     }
     const std::uint32_t streamRequest[]{movie_resource_kind,movie_stream(asset)};
     add(root,streamRequest);
-    for (const auto tag : movie_surfaces) {
+    // Native registration 1204163 immediately reads the referenced definition.
+    // A single flat batch cannot order that callback after the definition load.
+    for (const auto tag : movie_surface_definitions) {
         const std::uint32_t request[]{movie_resource_kind,tag};
         add(root,request);
     }
     submit(mgr,root_);asset_=asset;
     core::log::writef(core::log::Channel::client,core::log::Level::info,
-        "ev=ember_movie result=resource_requested asset=%08X root=%08X kind=1 metadata=4 stream=%08X surfaces=6",asset_,root_,movie_stream(asset_));
+        "ev=ember_movie result=resource_requested asset=%08X root=%08X kind=1 metadata=4 stream=%08X definitions=6",asset_,root_,movie_stream(asset_));
     return true;
+}
+bool MovieResource::advance() noexcept {
+    if (!held() || retiringSurfaces_) return false;
+    if (surfaces_!=0xFFFFFFFFU) return true;
+    __try {
+        const auto value=root_state(root_);
+        if (value==3 || value<0) return false;
+        if (value!=2) return true;
+        if (!definitions_ready(false)) return false;
+        auto* mgr=manager();
+        create(mgr,&surfaces_,8,2,0,"mission_ember_movie_surfaces");
+        if (surfaces_==0xFFFFFFFFU) return false;
+        auto* root=blob(surfaces_);if (!root) return false;
+        // 1204581 binds each raw buffer to definition+8. Both the buffer callback
+        // and the container registration require the retained definition first.
+        for (auto tag : movie_surface_buffers) {
+            const std::uint32_t request[]{movie_resource_kind,tag};add(root,request);
+        }
+        for (auto tag : movie_surfaces) {
+            const std::uint32_t request[]{movie_resource_kind,tag};add(root,request);
+        }
+        submit(mgr,surfaces_);
+        core::log::writef(core::log::Channel::client,core::log::Level::info,
+            "ev=ember_movie result=surface_dependencies_ready asset=%08X root=%08X buffers=6 containers=6",asset_,surfaces_);
+        return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 int MovieResource::state() const noexcept {
     if (!held() || !status) return -1;
-    __try { auto* root=blob(root_);return root ? status(root) : -1; }
+    __try {
+        const auto value=root_state(root_);
+        return value!=2 ? value : surfaces_==0xFFFFFFFFU ? 1 : root_state(surfaces_);
+    }
     __except(EXCEPTION_EXECUTE_HANDLER) { return -1; }
 }
 bool MovieResource::ready() const noexcept {
@@ -142,6 +190,7 @@ bool MovieResource::ready() const noexcept {
 bool MovieResource::prepare_surfaces() noexcept {
     if (state()!=2 || !publishSurfaces || !surfaceRegistrations) return false;
     __try {
+        if (!definitions_ready(true)) return false;
         for (unsigned i=0;i<movie_surfaces.size();++i) {
             auto* container=blob(movie_surfaces[i],0x80806B91U);
             if (!container || read<std::uint32_t>(reinterpret_cast<std::uintptr_t>(container))
@@ -158,11 +207,24 @@ bool MovieResource::prepare_surfaces() noexcept {
 }
 bool MovieResource::release() noexcept {
     if (!held()) return true;
-    const auto value=state();
-    if (!resource_can_release(value)) return false;
-    destroy(manager(),root_);
-    core::log::writef(core::log::Channel::client,core::log::Level::info,
-        "ev=ember_movie result=resource_released asset=%08X root=%08X",asset_,root_);
-    root_=0xFFFFFFFFU;asset_=0;return true;
+    __try {
+        if (surfaces_!=0xFFFFFFFFU) {
+            if (!resource_can_release(root_state(surfaces_))) return false;
+            destroy(manager(),surfaces_);surfaces_=0xFFFFFFFFU;retiringSurfaces_=true;
+            core::log::writef(core::log::Channel::client,core::log::Level::info,
+                "ev=ember_movie result=surfaces_retiring asset=%08X",asset_);
+            return false; // Native unregister/release callbacks run asynchronously.
+        }
+        if (retiringSurfaces_) {
+            if (!movie_surfaces_absent(read<SurfaceRegistrations>(surfaceRegistrations))) return false;
+            for (auto tag : movie_surfaces) if (blob(tag,0x80806B91U)) return false;
+            for (auto tag : movie_surface_buffers) if (blob(tag)) return false;
+        }
+        if (!resource_can_release(root_state(root_))) return false;
+        destroy(manager(),root_);
+        core::log::writef(core::log::Channel::client,core::log::Level::info,
+            "ev=ember_movie result=resource_released asset=%08X root=%08X",asset_,root_);
+        root_=0xFFFFFFFFU;asset_=0;retiringSurfaces_=false;return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 }

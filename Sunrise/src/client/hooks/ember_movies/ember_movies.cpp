@@ -26,7 +26,7 @@ Owner firstCompleted{};
 std::uint64_t key{}, began{};
 unsigned movie{};
 Status state{};
-bool acquired{}, stopRequested{}, attempted{}, escapeHeld{};
+bool acquired{}, stopRequested{}, attempted{}, escapeHeld{}, finishing{};
 Playback playback{};
 MovieResource resource{};
 void* decoderOwner{};
@@ -78,6 +78,12 @@ void release() {
     presentation.store(false);
     if (acquired) { api.release(api.manager()); acquired=false; }
 }
+void finish() {
+    if (!resource.release()) return;
+    state=Status::complete; watching.store(false); finishing=false; report("complete",lastDecoderState);
+    if (movie==1) firstCompleted=owner;
+    else if (firstCompleted==owner) orbit_return::arm(owner);
+}
 void fail(const char* reason) {
     // Stop only our exact decoder asset, never another movie's playback.
     if (acquired) {
@@ -102,7 +108,7 @@ bool request(Owner next, std::uint64_t nextKey, unsigned index, bool stop) noexc
     } else if (!acquired && !resource.held() && state!=Status::queued && state!=Status::preparing && state!=Status::playing) {
         if (index==1 || !(next==owner)) firstCompleted={};
         owner=next; key=nextKey; movie=index; state=Status::queued; began=GetTickCount64();
-        stopRequested=false; playback={}; decoderOwner=nullptr; lastDecoderState=-1;
+        stopRequested=false; finishing=false; playback={}; decoderOwner=nullptr; lastDecoderState=-1;
         escapeHeld=(GetAsyncKeyState(VK_ESCAPE)&0x8000)!=0;
         watching.store(true); report("queued"); accepted=true;
     }
@@ -130,6 +136,9 @@ void poll(std::int32_t region, std::int32_t step) noexcept {
     if (region!=0 || step!=38) { fail("world_changed"); ReleaseSRWLockExclusive(&lock); return; }
     if (!frameReady.load()) { fail("frame_observer_unavailable"); ReleaseSRWLockExclusive(&lock); return; }
     if (!uiReady.load()) { fail("movie_ui_unavailable"); ReleaseSRWLockExclusive(&lock); return; }
+    // Native release may clear/reuse the decoder. Once EOF is observed, wait
+    // only for our resource cleanup; never reinterpret that cleared decoder.
+    if (finishing) { finish(); ReleaseSRWLockExclusive(&lock); return; }
     if (!resolve()) { state=Status::failed; watching.store(false); ReleaseSRWLockExclusive(&lock); return; }
     auto* manager=api.manager();
     auto* decoder=api.decoder();
@@ -137,6 +146,9 @@ void poll(std::int32_t region, std::int32_t step) noexcept {
     if (state==Status::queued) {
         if (!resource.held() && !resource.begin(assets[movie-1])) {
             fail("resource_request_failed"); ReleaseSRWLockExclusive(&lock); return;
+        }
+        if (!resource.advance()) {
+            fail("surface_dependency_failed"); ReleaseSRWLockExclusive(&lock); return;
         }
         if (resource.state()==3 || resource.state()<0) {
             fail("resource_load_failed"); ReleaseSRWLockExclusive(&lock); return;
@@ -178,9 +190,10 @@ void poll(std::int32_t region, std::int32_t step) noexcept {
         api.stop(manager); stopRequested=false; report("stop_requested",decoderState);
     }
     if (observed==Status::complete) {
-        release(); state=observed; watching.store(!resource.release()); report("complete",decoderState);
-        if (movie==1) firstCompleted=owner;
-        else if (firstCompleted==owner) orbit_return::arm(owner);
+        release();
+        // Lua submits movie two as soon as completion is visible. Finish native
+        // unregistration first, so that submission never races retained resources.
+        finishing=true; finish();
     }
     else if (observed==Status::failed) fail("decoder_failed_or_replaced");
     else state=observed;

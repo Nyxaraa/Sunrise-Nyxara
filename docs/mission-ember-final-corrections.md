@@ -1,5 +1,19 @@
 # 1AU: movie loader, surge audio and escape explosions
 
+## Freeze captured on `a47adbd`: surface registration dereferenced an unloaded definition
+
+The final escape trigger queued STM at t=289137 and submitted its resource root at t=289153. No playback submission followed. All six containers were resident, but all six definitions were unloaded (`FEFE0000 / type_info 001044FB / blob 0`). Scanning the frozen process found the render thread's saved exception: **C0000005 at game+1204163, RAX=0, RBX=80BCA021, RDX=4**. That instruction reads the definition's slot byte during container registration. This establishes the fault directly; neither decoding nor orbit return had begun.
+
+Evidence is preserved in `build/first-encounter-audit/a47adbd-surface-exception.txt`, `a47adbd-frozen-surfaces.txt`, `a47adbd-fiber/surface-exception-stack.bin`, and the `a47adbd-live-20260906-201858` log directory. The process was inspected without launching, stopping or modifying the game.
+
+The corrected loader uses two asynchronous roots. The first retains metadata, the compact movie stream mapping and the six definitions. Only after native completion and validation of each 16-byte type-19 definition, slot and format does it submit the second root containing the six raw backing buffers and six registration containers. Merely inserting definitions earlier in the same unordered batch would not establish this dependency.
+
+The backing buffer tags are `80BCA020`, `80BCA023`, `80BCA027`, `80BCA02A`, `80BCA02D`, and `80BCA030`. Their package type is `254FB`, paired with definition type `44FB`; both use native request kind 1. Native `1202430` expands the eight-byte definition to 16 bytes. The type-19 buffer callback at `1204581` fills definition+8, which `1184660` reads through `4A6340`. Playback now requires all six non-null backing pointers as well as the matching registrations and published selections.
+
+Cleanup releases the dependent root first and waits for the native container registrations, selections and backing records to disappear before releasing the definitions. Completion is not exposed to Lua until this cleanup finishes, preventing the next movie from being refused while the previous resources are retained. Once native EOF has been observed, cleanup no longer reads the released decoder. The immediate return-to-orbit selection remains after movie two completes; there is no added banner delay.
+
+The captured free-list/invalid-definition cases and outstanding-registration cleanup cases pass regression tests. All 24 portable tests and the native/package ABI verifier pass. Visible video, hidden HUD, both movie transitions and the orbit arrival still require a fresh live run of this correction.
+
 ## Correction after the active black-picture trace
 
 The manual replay established the failure directly: valid 1920×800 Y/U/V frames were present in native CPU buffers, and the UI command stream included the native movie command (`1B`, with packed header flags). A decoded frame from `picture-20260906-194230/` visibly contains the cutscene. The six GPU video surface slots were null during playback. Their native registration rows had **count 0 / selected FFFFFFFF**, with only stale candidate values. The prior raw metadata request did not retain the six surface containers named by `80BCA032`.

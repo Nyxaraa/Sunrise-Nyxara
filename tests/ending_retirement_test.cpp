@@ -65,12 +65,29 @@ int main() {
     assert(orbit.observe(160001,inApex)==OA::select);
     auto replaced=inOrbit;replaced.step=38;replaced.sameWorld=false;
     assert(orbit.observe(160002,replaced)==OA::canceled);
+    // a47adbd: container 80BCA022 loaded, but definition 80BCA021 was
+    // FEFE0000 / 001044FB / null. Native 1204163 faulted reading its slot.
+    assert(!movies::movie_definition_resident(0xFEFE0000,0x1044FB,0));
+    assert(!movies::movie_definition_resident(0xFEFE0000,0x1044FB,0x1234000));
+    assert(!movies::movie_definition_resident(0xC0000010,0x44FB,0));
+    assert(!movies::movie_definition_resident(0xC0000008,0x44FB,0x1234000));
+    assert(!movies::movie_definition_resident(0xC0000010,0x254FB,0x1234000)); // raw buffer is not a definition
+    assert(movies::movie_definition_resident(0xC0000010,0x44FB,0x1234000));
+    assert(movies::movie_definition_resident(0xC0000010,0x4044FB,0x1234000)); // native residency flags
+    for (unsigned i=0;i<6;++i) {
+        assert(movies::movie_definition_matches(i,i+1,i<2 ? 0x7F : 0x23));
+        assert(!movies::movie_definition_matches(i,0,i<2 ? 0x7F : 0x23));
+    }
+    assert(!movies::movie_definition_matches(0,1,0x23));
+    assert(!movies::movie_definition_matches(6,7,0x23));
     movies::SurfaceRegistrations surfaces{};
     for (unsigned i=1;i<=6;++i) surfaces[i].entries[0]=movies::movie_surface_definitions[i-1];
     // Live black-video capture: old candidate handles remain, but no container
     // holds a registration and every selected surface is FFFFFFFF.
     assert(!movies::movie_surfaces_registered(surfaces));
+    assert(movies::movie_surfaces_absent(surfaces)); // stale candidates do not retain references
     for (unsigned i=1;i<=6;++i) surfaces[i].count=1;
+    assert(!movies::movie_surfaces_absent(surfaces)); // hold definitions until native unregister
     assert(movies::movie_surfaces_registered(surfaces));
     assert(!movies::movie_surfaces_selected(surfaces));
     for (unsigned i=1;i<=6;++i) surfaces[i].selected=surfaces[i].entries[0];
@@ -86,6 +103,11 @@ int main() {
     assert(!movies::movie_surfaces_registered(surfaces)); // do not publish an unrelated pending slot
     surfaces[7].selected=123;
     assert(movies::movie_surfaces_selected(surfaces));
+    auto removed=surfaces;
+    for (unsigned i=1;i<=6;++i) removed[i].count=0;
+    assert(!movies::movie_surfaces_absent(removed)); // selection is still using the definition
+    for (unsigned i=1;i<=6;++i) removed[i].selected=0xFFFFFFFF;
+    assert(movies::movie_surfaces_absent(removed));
     // Native kind 2 resolves shared-tag records; these ordinary movie tags require 1.
     static_assert(movies::movie_resource_kind==1);
     assert((movies::movie_metadata(0x80BCA001)==std::array<std::uint32_t,4>{0x80BCA001,0x80BCA000,0x80B9EB33,0x80BCA032}));

@@ -50,6 +50,16 @@ assert surface + 13 + struct.unpack_from('<i', data, surface + 9)[0] == 0x2E800B
 target(0xB5F4C5, 9, surface)  # native world activation publishes the surface registration stacks
 target(0x1184660, 0x37, 0x1202C20)  # renderer fetches selected surface definitions
 assert data[0x116A070:0x116A077] == bytes.fromhex('48 83 38 00 0f 95 c0')  # missing surface => skip GPU upload
+# Captured a47adbd exception: C0000005, RIP 1204163, RAX=0, RBX=80BCA021,
+# RDX=4. The registration callback reads the unloaded definition's slot directly.
+assert data[0x1204160:0x1204167] == bytes.fromhex('48 2b c1 48 0f be 08')
+# Native type-19 definitions need 16 bytes, not their eight-byte package size.
+assert struct.unpack_from('<I',data,0x1202488+18*4)[0] == 0x1202478
+assert data[0x1202478:0x120247F] == bytes.fromhex('ba 10 00 00 00 8b c2')
+# The type-19 raw buffer callback fills definition+8; the renderer reads that pointer.
+assert struct.unpack_from('<I',data,0x12045D0+18*4)[0] == 0x1204581
+assert data[0x12045BF:0x12045C6] == bytes.fromhex('48 2b c1 4c 89 40 08')
+assert data[0x4A6340:0x4A6345] == bytes.fromhex('48 8b 41 08 c3')
 ui = signature('Sunrise/src/client/hooks/bootflow/ember_movie_ui.cpp', 'sig')
 assert ui == 0x132BD80
 target(0x132B890, 0x353, 0x1278FF0)  # native movie command is queued before either UI layer
@@ -104,6 +114,12 @@ if len(sys.argv) > 2:
                           (0x80BCA022, 0x80806B91), (0x80BCA025, 0x80806B91),
                           (0x80BCA028, 0x80806B91), (0x80BCA02B, 0x80806B91),
                           (0x80BCA02E, 0x80806B91), (0x80BCA031, 0x80806B91),
+                          (0x80BCA021, 0x80BCA020), (0x80BCA024, 0x80BCA023),
+                          (0x80BCA026, 0x80BCA027), (0x80BCA029, 0x80BCA02A),
+                          (0x80BCA02C, 0x80BCA02D), (0x80BCA02F, 0x80BCA030),
+                          (0x80BCA020, 0x80BCA021), (0x80BCA023, 0x80BCA024),
+                          (0x80BCA027, 0x80BCA026), (0x80BCA02A, 0x80BCA029),
+                          (0x80BCA02D, 0x80BCA02C), (0x80BCA030, 0x80BCA02F),
                           (0x80BCA034, 0xFFFFFFFF), (0x80C7C000, 0xFFFFFFFF)]:
         # Tag package IDs include the bank: 80BCAxxx belongs to package 01E5.
         package = (tag >> 13) & 0x3FF
@@ -117,7 +133,10 @@ if len(sys.argv) > 2:
         assert type_info & 0xF000 != 0x2000, (hex(tag), hex(type_info))
         if expected == 0xFFFFFFFF:
             assert (type_info & 0x30000) == 0x10000 and (type_info >> 6) & 0x3F == 24
-    print('Installed movie metadata, compact streams, six surface containers and kind-1 package types verified.')
+        if 0x80BCA020 <= expected <= 0x80BCA030:
+            definitions = {0x80BCA021,0x80BCA024,0x80BCA026,0x80BCA029,0x80BCA02C,0x80BCA02F}
+            assert (type_info & 0x3FFFF) == (0x44FB if tag in definitions else 0x254FB)
+    print('Movie metadata, streams, surface containers, definitions and raw buffers all use kind 1.')
     tags = repo / 'build/first-encounter-audit/tags'
     catalog = (tags / '80BCA032.bin').read_bytes()
     for i, (container, definition) in enumerate(zip(
