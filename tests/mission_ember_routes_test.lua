@@ -390,20 +390,24 @@ assert(vars['ember.carry.apex.done'] and not vars['ember.carry.apex.held'])
 local before=#calls;use('MOTHER_BRAIN_INTERACT_OBJECT');assert(#calls==before)
 call(R.dispatch,'object',c,s,event('MOTHER_BRAIN_CARRY_OBJECT',{generation=3,present=false,alive=false}))
 assert(not timers['ember.carry.recover.apex.3'],'consumed final cell respawned')
--- Deposit must publish a disabled revision before the delayed rail attachment.
+-- Deposit disables the scripted climb burn; native sunburn alone owns escape damage.
 local detachedBeforeRail=false
 for i=depositStart+1,#calls do
     if calls[i][1]=='set_mission_effect' and calls[i][3].enabled==false then detachedBeforeRail=true end
 end
-assert(detachedBeforeRail,'deposit must detach the pipe burn before applying escape scorch')
--- Escape replaces the climb attachment with one scoped burn and disables the other source.
-timer('ember.apex.hazards')
+assert(detachedBeforeRail,'deposit must detach the pipe burn before escape')
+-- No scripted rail burn is attached during escape.
+call(R.dispatch,'timer',c,s,{timer_name='ember.apex.hazards'})
 local escapeEffect
 for i=#calls,1,-1 do
     if calls[i][1]=='set_mission_effect' then escapeEffect=calls[i][3];break end
 end
-assert(escapeEffect and escapeEffect.enabled==true and escapeEffect.filter~=nil,
-    'escape must attach the rail burn after deposit')
+assert(escapeEffect and escapeEffect.enabled==false,
+    'escape must leave the additional scripted burn disabled')
+for i=depositStart+1,#calls do
+    assert(not (calls[i][1]=='set_mission_effect' and calls[i][3].enabled),
+        'deposit must not add a second damage attachment')
+end
 local afterRail=#calls
 call(R.dispatch,'timer',c,s,{timer_name='ember.apex.hazards'})
 assert(#calls==afterRail,'duplicate hazard callback must not reattach scorch')
@@ -413,7 +417,7 @@ for i=depositStart+1,#calls do
         sunburnState=calls[i][3].active
     end
 end
-assert(sunburnState==false,'escape must not stack the sunburn prop with the rail burn')
+assert(sunburnState==true,'escape must activate its authored sunburn object')
 -- The weapon is dead once the cell is in: powered off, but still installed. Deactivating the
 -- ring objects would take the beam and its surrounding structure out of the world entirely.
 assert(vars['ember.apex.beam']==false,'the beam must stop firing after the deposit')
@@ -449,6 +453,13 @@ reset_check('escape',function()
     assert(vars['ember.apex.beam']==false,'escape restart must leave the beam off')
 end)
 trigger('APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER')
+local sunburnAfterEscape
+for i=#calls,1,-1 do
+    if calls[i][1]=='set_object_active' and calls[i][2]==slotDefs[m.Slot.SUNBURN_DAMAGE_OBJECT].name then
+        sunburnAfterEscape=calls[i][3].active;break
+    end
+end
+assert(sunburnAfterEscape==false,'escape completion must disable native sunburn')
 -- A selected bookend is not loaded merely because the player holds Apex's base world.
 local beforeArrival=#calls
 call(R.client,c,s,{held_region_index=0})

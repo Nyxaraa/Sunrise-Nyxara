@@ -106,6 +106,8 @@ return function(m, a, ending)
         local wanted = mode or "off"
         if s:variable("ember.apex.hazard_mode") == wanted then return end
         c:set_variable("ember.apex.hazard_mode", wanted)
+        -- The placed native sunburn object owns escape damage and its authored bounds.
+        a.objects(c, {"SUNBURN_DAMAGE_OBJECT"}, mode == "escape")
         if mode == "climb" then
             -- The five narrow authored pipe volumes on the way up to the deposit; their heights
             -- track the climb the mother-brain dialogue volumes walk through, from z~172 at
@@ -122,13 +124,8 @@ return function(m, a, ending)
                     a.slot(c, "REACTOR_MOTHER_BRAIN_HOT_PIPES_03_TRIGGER_VOLUME"),
                     a.slot(c, "SLOT_0005_80B3C09F"), a.slot(c, "SLOT_0006_80B3C09F"),
                     a.slot(c, "SLOT_0008_80B3C09F")}}, true)
-        elseif mode == "escape" then
-            -- The deposit callback already detached the climb burn on an earlier tick.
-            -- Attach one rail-scoped burn. The sunburn prop
-            -- alone did not deliver damage in the live test; do not run both sources.
-            a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
-                "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), true)
         else
+            -- End the climb attachment; never add a second rail-wide damage effect.
             a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
                 "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), false)
         end
@@ -184,6 +181,7 @@ return function(m, a, ending)
     local function initialize_devices(c, s)
         if s:variable("ember.apex.devices_ready") then return end
         c:set_variable("ember.apex.devices_ready", true)
+        a.objects(c, {"SUNBURN_DAMAGE_OBJECT"}, false)
         unlock(c, "SECURITY_DOOR_DEVICE")
         for _, side in ipairs(sides) do
             for _, part in ipairs({"DOOR_A", "DOOR_B"}) do unlock(c, "REACTOR_CLAMSHELL_" .. side .. "_" .. part .. "_DEVICE") end
@@ -216,16 +214,13 @@ return function(m, a, ending)
         function(c, s)
             if phase(s) ~= 5 then return end
             set(c, 6)
-            -- Deliver an explicit detach before publishing the rail attachment. A direct
-            -- enabled-to-enabled filter change can leave the previous burn attached.
-            hazards(c, s, nil)
-            c:start_timer("ember.apex.hazards", 250)
+            -- Disable the climb burn and enable only the authored escape hazard.
+            hazards(c, s, "escape")
             a.checkpoint(c, 0, 0x45920385, "escape")
             a.device(c, "MOTHER_BRAIN_CONSOLE_DEVICE", true)
             a.device(c, "MOTHER_BRAIN_ENGINE_LEFT_DEVICE", true)
             a.device(c, "MOTHER_BRAIN_ENGINE_RIGHT_DEVICE", true)
             a.objects(c, {"REACTOR_GETAWAY_SHIP_OBJECT"}, true)
-            a.objects(c, {"SUNBURN_DAMAGE_OBJECT"}, false)
             -- Object publication is not an entity-creation receipt. Start its device from
             -- A.object once the ship is present, so the initial movement is not lost.
             c:clear_variable("ember.apex.ship_started")
@@ -371,8 +366,8 @@ return function(m, a, ending)
         end
         if e.timer_name == "ember.apex.hazards" then
             -- The climb pipes burn while the cell is being carried up (phase 5), well before
-            -- the deposit. Escape (phase 6) replaces it with the rail-scoped burn, so
-            -- entering it detaches the climb burn. A checkpoint reset also detaches it.
+            -- the deposit. Escape (phase 6) uses only the native sunburn object.
+            -- Entering escape or resetting detaches the climb burn.
             if s:variable("ember.region") == 0 then
                 local p = phase(s)
                 if p == 5 then hazards(c, s, "climb")
