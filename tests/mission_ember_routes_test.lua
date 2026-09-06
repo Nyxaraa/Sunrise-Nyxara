@@ -215,16 +215,29 @@ use('SECURITY_PLACED_INTERCEPTOR_OBJECT',1)
 assert(vars['ember.apex.interceptor_boarded'])
 local used=#calls;use('SECURITY_PLACED_INTERCEPTOR_OBJECT',1);assert(#calls==used)
 local controllers=byname.electron_controllers.squads
+-- The dispenser squads hold the security room: both controller anchors are inside
+-- security_center_player_trigger, while every access volume lies east of x=-331. Under the
+-- access objective the native task selector walked them out through the security door, and
+-- no access group could hold them, so pinning a chosen pair of groups could not work either.
+assert(byname.electron_controllers.objective=='EMBER_APEX_SECURITY_OBJECTIVE'
+    and byname.dispenser.objective=='EMBER_APEX_SECURITY_OBJECTIVE',
+    'dispenser squads must hold the security room, not the access approach')
+assert(byname.electron_controllers.fixed_tasks==nil,
+    'controllers pick their own task inside the security objective')
+local security=c:slot(m.Slot.EMBER_APEX_SECURITY_OBJECTIVE)
 for i,n in ipairs(controllers)do
     local values=c:squad(m.Squad[n]).default_counts
-        local assigned
+    local assigned
     for _, row in ipairs(calls) do
-        if row[1]=='assign_combat_objective' and row[2]==slotDefs[m.Slot[n]].name then assigned=row[3].task_group end
+        if row[1]=='assign_combat_objective' and row[2]==slotDefs[m.Slot[n]].name then assigned=row[3] end
     end
-    assert(assigned==byname.electron_controllers.fixed_tasks[i])
+    assert(assigned and assigned.objective.slot_type==security.slot_type
+        and assigned.objective.slot_index==security.slot_index,
+        'controllers must be assigned the security objective')
+    -- Cost selection runs inside that objective's seven authored groups.
     local beforeCosts=#calls
-    call(R.squad,c,s,event(n,{objective_revision=1,task_costs={0,0,0,0,0,0,0,0,0,10,10,0,0,0}}))
-    assert(#calls==beforeCosts,'gate controllers migrated to an unrelated combat area')
+    call(R.squad,c,s,event(n,{objective_revision=1,task_costs={10,10,0,10,10,10,10}}))
+    assert(#calls>beforeCosts,'controllers must follow their security task costs')
     call(R.squad,c,s,event(n,{alive_count=1,previous_alive_count=0,slot_counts=values}))
     call(R.squad,c,s,event(n,{alive_count=0,previous_alive_count=1,slot_counts=values}))
     assert((transition('SECURITY_DOOR_DEVICE').transition=='open')==(i==2), 'controller gate must require both deaths')
@@ -318,15 +331,38 @@ assert(vars['ember.carry.apex.done'] and not vars['ember.carry.apex.held'])
 local before=#calls;use('MOTHER_BRAIN_INTERACT_OBJECT');assert(#calls==before)
 call(R.dispatch,'object',c,s,event('MOTHER_BRAIN_CARRY_OBJECT',{generation=3,present=false,alive=false}))
 assert(not timers['ember.carry.recover.apex.3'],'consumed final cell respawned')
+-- The escape scorch is the same authored effect the climb used, re-filtered to the rail top.
 timer('ember.apex.hazards')
-assert(vars['ember.effect.AOD_REACTOR_RAIL_TOP_HOP_ON'])
-reset_check('escape',function()assert(vars['ember.apex.phase']==6 and vars['ember.apex.dead.COFFIN'])end)
+assert(vars['ember.effect.REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON'],'escape must scorch')
+local escapeFilter
+for i=#calls,1,-1 do
+    if calls[i][1]=='set_object_filter' then escapeFilter=calls[i][2];break end
+end
+assert(escapeFilter=='aod_reactor_rail_top_object_filter','escape hazard must use the rail top')
+-- The weapon is dead once the cell is in: the beam goes down and stays down.
+assert(vars['ember.apex.beam']==false,'beam must shut down after the deposit')
+-- Each authored explosion set is armed so it can fire as the player reaches it.
+for _,set in ipairs({'A','B','C','D'})do
+    local name='ember_apex_explosion_sequence_prefab.explosion_set_'..set:lower()..'_player_trigger'
+    local armed=false
+    for _,row in ipairs(calls)do
+        if row[1]=='fire_trigger' and row[2]==name then armed=true end
+    end
+    assert(armed,'explosion set '..set..' was never armed')
+end
+reset_check('escape',function()
+    assert(vars['ember.apex.phase']==6 and vars['ember.apex.dead.COFFIN'])
+    assert(vars['ember.apex.beam']==false,'escape restart must leave the beam off')
+end)
 trigger('APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER')
-local beforeTransit=#calls
-region(1)
-assert(#calls==beforeTransit and not vars['ember.ending.playing'],'movie started before staging arrival')
-region(49);region(1);call(R.terminated,c,s,event('PF_CINEMATIC_BOOKEND_STM_CINEMATIC'))
-region(49);region(2);call(R.terminated,c,s,event('PF_CINEMATIC_BOOKEND_CNN_CINEMATIC'))
+-- Regions 0, 1 and 2 are sibling states of one slice set, so the client never reports a new
+-- held region. The bookend is activated on a later callback, never in the selecting one.
+assert(vars['ember.ending']==1 and not vars['ember.ending.playing'],'movie played in its own selection')
+region(0);assert(vars['ember.ending.playing']==1,'first movie never started')
+call(R.terminated,c,s,event('PF_CINEMATIC_BOOKEND_STM_CINEMATIC'))
+assert(vars['ember.ending']==2 and vars['ember.ending.playing']==1)
+region(0);assert(vars['ember.ending.playing']==2,'second movie never started')
+call(R.terminated,c,s,event('PF_CINEMATIC_BOOKEND_CNN_CINEMATIC'))
 assert(vars['ember.complete'])
 local objective=vars['ember.r.guidance']
 region(56);region(40);assert(vars['ember.r.guidance']==objective,'backtracking reset the forward objective')

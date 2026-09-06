@@ -134,13 +134,13 @@ return function(m, a)
         if s:variable("ember.region") ~= 40 then return end
         local p = phase(s)
         local combat = a.combat(s, current_groups[math.min(p, 11)] or {})
-        if p <= 2 then a.directive(c, s, "ECECF63D", "CINDER_DIRECTIVE_SUNBURN_GOTO_NAV_POINT", combat)
-        elseif p <= 5 then a.directive(c, s, "D496059B", "CINDER_DIRECTIVE_READY_ROOM_02_GOTO_NAV_POINT", combat)
-        elseif p == 6 then a.directive(c, s, combat and "7FF69D75" or "DF93A91C", "CINDER_DIRECTIVE_MEAT_GRINDER_GOTO_NAV_POINT", combat)
-        elseif p == 7 then a.directive(c, s, "62E3AEFB", "CINDER_DIRECTIVE_MEAT_GRINDER_GOTO_NAV_POINT", combat)
-        elseif p <= 10 then a.directive(c, s, "BAD7D583", "CINDER_DIRECTIVE_FOUNDRY_GOTO_NAV_POINT", combat)
-        elseif p <= 13 then a.directive(c, s, "7FF69D75", "FOUNDRY_HATCH_DOOR_CENTER_NAV_POINT", combat)
-        else a.directive(c, s, "FF7AB219", "CINDER_DIRECTIVE_CHUTE_GOTO_NAV_POINT", false) end
+        if p <= 2 then a.directive(c, s, "ECECF63D", "CINDER_DIRECTIVE_SUNBURN_GOTO_NAV_POINT")
+        elseif p <= 5 then a.directive(c, s, "D496059B", "CINDER_DIRECTIVE_READY_ROOM_02_GOTO_NAV_POINT")
+        elseif p == 6 then a.directive(c, s, combat and "7FF69D75" or "DF93A91C", "CINDER_DIRECTIVE_MEAT_GRINDER_GOTO_NAV_POINT")
+        elseif p == 7 then a.directive(c, s, "62E3AEFB", "CINDER_DIRECTIVE_MEAT_GRINDER_GOTO_NAV_POINT")
+        elseif p <= 10 then a.directive(c, s, "BAD7D583", "CINDER_DIRECTIVE_FOUNDRY_GOTO_NAV_POINT")
+        elseif p <= 13 then a.directive(c, s, "7FF69D75", "FOUNDRY_HATCH_DOOR_CENTER_NAV_POINT")
+        else a.directive(c, s, "FF7AB219", "CINDER_DIRECTIVE_CHUTE_GOTO_NAV_POINT") end
     end
     function C.resume(c, s)
         if (s:variable("ember.r.furthest") or 0) > 2 then return end

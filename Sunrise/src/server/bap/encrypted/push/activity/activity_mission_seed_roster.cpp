@@ -28,8 +28,10 @@ namespace layouts = state::build_data::scenarios;
                                       static_cast<int>(reason.size()),
                                       reason.data());
     if (written > 0) {
+        // A refusal strands the selected state: its records are never seeded and the client waits
+        // for content that never arrives. That is not a debug detail, so it is reported at warn.
         core::log::write(core::log::Channel::server,
-                         core::log::Level::debug,
+                         core::log::Level::warn,
                          {line.data(), static_cast<std::size_t>(written)});
     }
     return MissionSeedRosterResult::refused;

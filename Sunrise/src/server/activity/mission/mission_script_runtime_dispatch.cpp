@@ -212,6 +212,19 @@ void arm_state_region_teleport(RuntimeInstance& instance,
             instance.view.binding.sessionId, membership::kAbsentSliceSetIndex, 0));
         return;
     }
+    // A region is `sliceSetIndex + stateOrdinal`, so a sibling state sits in the slice set the
+    // client already holds and there is nothing to transition to. Arming anyway hands the client
+    // a slice-set index that is not a slice set (region 1 with slice set 0's name hash), and it
+    // starts a teleportation it can never finish. Clear the arm and let the roster publish the
+    // new state's groups into the world that is already standing.
+    const std::int32_t heldSliceSet =
+        membership::reported_slice_set(instance.view.binding.sessionId);
+    if (heldSliceSet >= 0 && heldSliceSet == static_cast<std::int32_t>(plan.sliceSetIndex)) {
+        static_cast<void>(membership::arm_host_teleport(
+            instance.view.binding.sessionId, membership::kAbsentSliceSetIndex, 0));
+        log_line(core::log::Level::info, &instance, "state_region", "teleport_not_required");
+        return;
+    }
     const std::string_view name(reinterpret_cast<const char*>(destination.packageName.data()),
                                 destination.packageNameLength);
     ::sunrise::state::build_data::scenarios::Definition layout{};

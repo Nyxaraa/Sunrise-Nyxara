@@ -29,8 +29,16 @@ return {
     {name = "foundry_final", region = 40, objective = "EMBER_CINDER_FOUNDRY_OBJECTIVE", task_groups = 16, squads = {"FOUNDRY_ANCHOR_A_SQUAD", "FOUNDRY_SUPPORT_G_SQUAD", "FOUNDRY_SUPPORT_H_SQUAD", "FOUNDRY_SUPPORT_I_SQUAD"}},
     {name = "access1", region = 0, objective = "EMBER_APEX_ACCESS_OBJECTIVE", task_groups = 14, squads = {"ACCESS_JUMP_ONE_SUPPORT_A_SQUAD", "ACCESS_JUMP_ONE_SUPPORT_B_SQUAD", "ACCESS_JUMP_ONE_SUPPORT_C_SQUAD"}},
     {name = "access2", region = 0, objective = "EMBER_APEX_ACCESS_OBJECTIVE", task_groups = 14, squads = {"ACCESS_JUMP_TWO_SUPPORT_A_SQUAD", "ACCESS_JUMP_TWO_SUPPORT_B_SQUAD", "ACCESS_JUMP_TWO_SUPPORT_C_SQUAD"}},
-    {name = "electron_controllers", region = 0, objective = "EMBER_APEX_ACCESS_OBJECTIVE", task_groups = 14, fixed_tasks = {9, 10}, squads = {"DISPENSER_SUPPORT_A_SQUAD", "DISPENSER_SUPPORT_B_SQUAD"}},
-    {name = "dispenser", region = 0, objective = "EMBER_APEX_ACCESS_OBJECTIVE", task_groups = 14, squads = {"DISPENSER_SUPPORT_C_SQUAD"}},
+    -- The dispenser squads hold the security room, not the access approach. Their authored
+    -- anchors (-363,2643,181.5) and (-360,2645,181.5) are both inside
+    -- `security_center_player_trigger` (-387..-344.5, 2639.5..2662, 177..197), while every
+    -- access volume lies east of x=-331 (jump one -331..-312, jump two -256.5..-224, inner
+    -- door -224..-174). Under the access objective the native task selector pulled the two
+    -- Electron Controllers out to those eastern areas -- through the security door and out of
+    -- reach. No access task group could hold them, so pinning a pair of them never could work.
+    -- The security objective owns this room, so they keep their own cost-selected tasks here.
+    {name = "electron_controllers", region = 0, objective = "EMBER_APEX_SECURITY_OBJECTIVE", task_groups = 7, squads = {"DISPENSER_SUPPORT_A_SQUAD", "DISPENSER_SUPPORT_B_SQUAD"}},
+    {name = "dispenser", region = 0, objective = "EMBER_APEX_SECURITY_OBJECTIVE", task_groups = 7, squads = {"DISPENSER_SUPPORT_C_SQUAD"}},
     {name = "security", region = 0, objective = "EMBER_APEX_SECURITY_OBJECTIVE", task_groups = 7, squads = {"SECURITY_LEDGE_SUPPORT_A_SQUAD", "SECURITY_LEDGE_SUPPORT_B_SQUAD"}},
     {name = "reactor_east_entry", region = 0, objective = "EMBER_APEX_REACTOR_CLAMSHELL_EAST_OBJECTIVE", task_groups = 19, squads = {"REACTOR_CLAMSHELL_EAST_DEFENSE_A_SQUAD", "REACTOR_CLAMSHELL_EAST_SUPPORT_A_SQUAD", "REACTOR_CLAMSHELL_EAST_SUPPORT_B_SQUAD"}},
     {name = "reactor_east_reinforce", region = 0, objective = "EMBER_APEX_REACTOR_CLAMSHELL_EAST_OBJECTIVE", task_groups = 19, squads = {"REACTOR_CLAMSHELL_EAST_DEFENSE_B_SQUAD", "REACTOR_CLAMSHELL_EAST_MELEE_A_SQUAD", "REACTOR_CLAMSHELL_EAST_MELEE_B_SQUAD", "REACTOR_CLAMSHELL_EAST_SUPPORT_C_SQUAD", "REACTOR_CLAMSHELL_EAST_SUPPORT_D_SQUAD"}},

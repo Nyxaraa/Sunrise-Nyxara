@@ -16,6 +16,15 @@ return function(m, a, ending)
     local escape_triggers = {"APEX_MOTHER_BRAIN_005_DIALOG_PLAYER_TRIGGER", "APEX_MOTHER_BRAIN_006_DIALOG_PLAYER_TRIGGER",
         "APEX_MOTHER_BRAIN_007_DIALOG_PLAYER_TRIGGER", "APEX_MOTHER_BRAIN_008_DIALOG_PLAYER_TRIGGER",
         "APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER"}
+    -- The authored explosion prefab's four player triggers, west to east along the rails:
+    -- set A x -448.75..-438.75, B -403.75..-393.75, C -368.75..-358.75, D -323.75..-313.75,
+    -- all spanning y 2967..3002.5 and z 185..212.5. They were never armed, so the sequence
+    -- had nothing to advance it and everything the scene did happened at the deposit.
+    local explosion_triggers = {}
+    for _, set in ipairs({"A", "B", "C", "D"}) do
+        explosion_triggers[#explosion_triggers + 1] =
+            "EMBER_APEX_EXPLOSION_SEQUENCE_PREFAB_EXPLOSION_SET_" .. set .. "_PLAYER_TRIGGER"
+    end
     local function phase(s) return s:variable("ember.apex.phase") or 0 end
     local function set(c, p) c:set_variable("ember.apex.phase", p) end
     local function generation(s) return s:variable("ember.apex.generation") or 1 end
@@ -41,24 +50,57 @@ return function(m, a, ending)
         end
         a.device(c, "REACTOR_SHIELD_DEVICE", open, snap)
     end
-    local function beam(c, active, snap)
-        -- Both devices address the placed ring/laser objects and their native VFX graphs.
+    -- The three placed ring objects carry the beam's own authored effect graphs; the two
+    -- devices are its mechanical lanes. Holding all three objects active for the whole fight
+    -- is what made the beam look constant, so the surge is those authored objects coming up
+    -- with their devices at the warning and going dark again at recovery.
+    -- The core is the weapon's own body and stays present; the laser and ring are what
+    -- brighten, so only those two are modulated.
+    local ring_objects = {"SPECOPS_APEX_RING_LASER_OBJECT", "SPECOPS_APEX_RING_RING_OBJECT"}
+    local function beam(c, s, active, snap)
+        -- Idempotent: the cycle re-asserts the same pose every step, and each redundant
+        -- publication would spend intents from the callback's native budget.
+        if s:variable("ember.apex.beam") == active then return end
+        c:set_variable("ember.apex.beam", active)
+        a.objects(c, ring_objects, active)
         a.device(c, "SPECOPS_APEX_RING_LASER_DEVICE", active, snap)
         a.device(c, "SPECOPS_APEX_RING_RING_DEVICE", active, snap)
         -- FX power is independent of mechanical position; pulse both authored graphs.
         lane(c, "SPECOPS_APEX_RING_LASER_DEVICE", active and "power_on" or "power_off", snap)
         lane(c, "SPECOPS_APEX_RING_RING_DEVICE", active and "power_on" or "power_off", snap)
     end
-    local function hazards(c, s, enabled)
-        a.effect(c, s, "REACTOR_MOTHER_BRAIN_HOT_PIPES_THERMAL_HOP_ON",
-            "REACTOR_MOTHER_BRAIN_HOT_PIPES_OBJECT_FILTER_80B3C09F",
-            {players = true, inside_any = {
-                a.slot(c, "REACTOR_MOTHER_BRAIN_HOT_PIPES_02_TRIGGER_VOLUME"),
-                a.slot(c, "REACTOR_MOTHER_BRAIN_HOT_PIPES_03_TRIGGER_VOLUME"),
-                a.slot(c, "SLOT_0005_80B3C09F"), a.slot(c, "SLOT_0006_80B3C09F"),
-                a.slot(c, "SLOT_0008_80B3C09F")}}, enabled)
-        a.effect(c, s, "AOD_REACTOR_RAIL_TOP_HOP_ON", "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER",
-            {players = true, inside = a.slot(c, "SLOT_019E")}, enabled)
+    -- `REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON` and `FOUNDRY_THERMAL_DOT_HOP_ON` both reference
+    -- effect resource 80C1D9E0 -- the burn already working in the Foundry. The hot-pipe and
+    -- rail-top hop-ons carry 80B82484 and 80C1D389 instead, which is why contact read as a
+    -- shock rather than a scorch. Apex drives the one authored scorch for both hazards and
+    -- swaps only its filter, so the climb and the escape share the same effect. A new revision
+    -- removes the previous attachment (native 9EF8A0/9F1F10) before attaching the new filter.
+    local function rail_filter(c) return {players = true, inside = a.slot(c, "SLOT_019E")} end
+    local function hazards(c, s, mode)
+        if mode == "climb" then
+            -- The five narrow authored pipe volumes on the way up to the deposit. Slot 7 is a
+            -- broad kill volume well below the walkable route and is deliberately not a pipe.
+            a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
+                "REACTOR_MOTHER_BRAIN_HOT_PIPES_OBJECT_FILTER_80B3C21C",
+                {players = true, inside_any = {
+                    a.slot(c, "REACTOR_MOTHER_BRAIN_HOT_PIPES_02_TRIGGER_VOLUME"),
+                    a.slot(c, "REACTOR_MOTHER_BRAIN_HOT_PIPES_03_TRIGGER_VOLUME"),
+                    a.slot(c, "SLOT_0005_80B3C09F"), a.slot(c, "SLOT_0006_80B3C09F"),
+                    a.slot(c, "SLOT_0008_80B3C09F")}}, true)
+        elseif mode == "escape" then
+            a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
+                "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), true)
+        else
+            a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
+                "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), false)
+        end
+    end
+    -- Activate the authored explosion scene once, then arm its own four progress triggers
+    -- alongside the escape dialogue volumes so each section detonates as the player reaches it.
+    local function arm_escape(c)
+        a.scene(c, "EMBER_APEX_EXPLOSION_SEQUENCE_PREFAB_TRIGGERED_EXPLOSIONS_SCENE")
+        for _, name in ipairs(explosion_triggers) do a.slot(c, name):fire_trigger{} end
+        for _, name in ipairs(escape_triggers) do a.slot(c, name):fire_trigger{} end
     end
     local function doors(c, side, open, snap)
         for _, part in ipairs({"DOOR_A", "DOOR_B", "LIGHT_A", "LIGHT_B", "TARGET"}) do
@@ -81,14 +123,14 @@ return function(m, a, ending)
         c:set_variable("ember.apex.vent_step", step)
         c:set_variable("ember.apex.vents_open", step == "open")
         if step == "warning" then
-            beam(c, true)
+            beam(c, s, true)
             if phase(s) == 3 then
                 for _, side in ipairs(sides) do
                     if not dead(s, side) then a.slot(c, "REACTOR_CLAMSHELL_" .. side .. "_ALARM_SEQUENCE"):play_sequence{} end
                 end
             else a.slot(c, "REACTOR_COFFIN_ALARM_SEQUENCE"):play_sequence{} end
         else
-            if step == "closed" then beam(c, false, snap) end
+            if step == "closed" then beam(c, s, false, snap) end
             if phase(s) == 3 then
                 for _, side in ipairs(sides) do if not dead(s, side) then doors(c, side, step == "open", snap) end end
             elseif phase(s) == 4 then
@@ -110,7 +152,7 @@ return function(m, a, ending)
         lane(c, "MOTHER_BRAIN_DOOR_DEVICE", "lock")
         unlock(c, "SPECOPS_APEX_RING_LASER_DEVICE")
         unlock(c, "SPECOPS_APEX_RING_RING_DEVICE")
-        beam(c, false, true)
+        beam(c, s, false, true)
     end
     local function start_reactor(c, s)
         if phase(s) >= 3 then return end
@@ -136,11 +178,13 @@ return function(m, a, ending)
             a.device(c, "MOTHER_BRAIN_ENGINE_RIGHT_DEVICE", true)
             a.device(c, "REACTOR_GETAWAY_SHIP_DEVICE", true)
             a.objects(c, {"REACTOR_GETAWAY_SHIP_OBJECT", "SUNBURN_DAMAGE_OBJECT"}, true)
-            a.device(c, "SPECOPS_APEX_RING_LASER_DEVICE", true)
-            a.device(c, "SPECOPS_APEX_RING_RING_DEVICE", true)
+            -- The weapon is dead once the cell is in: the beam shuts down and stays down,
+            -- including across an escape checkpoint restart. The previous code opened both
+            -- devices here, which left it running through the whole escape.
+            beam(c, s, false, true)
+            c:cancel_timer(vent_timer(s))
             a.scene(c, "MOTHER_BRAIN_HOLE_EXPLOSION_SCENE")
-            a.scene(c, "EMBER_APEX_EXPLOSION_SEQUENCE_PREFAB_TRIGGERED_EXPLOSIONS_SCENE")
-            for _, name in ipairs(escape_triggers) do a.slot(c, name):fire_trigger{} end
+            arm_escape(c)
             a.cue(c, s, 51); A.guidance(c, s)
         end)
     function A.enter(c, s)
@@ -155,8 +199,8 @@ return function(m, a, ending)
         a.device(c, "ACCESS_DOOR_OUTER_DEVICE", true)
         a.device(c, "SECURITY_DOOR_DEVICE", false, true)
         a.slot(c, "SECURITY_PLACED_INTERCEPTOR_OBJECT"):set_interactable_object{generation = 1}
-        a.objects(c, {"SPECOPS_APEX_RING_LASER_OBJECT",
-            "SPECOPS_APEX_RING_CORE_OBJECT", "SPECOPS_APEX_RING_RING_OBJECT"}, true)
+        -- Only the core is held on here; `beam()` owns the laser and ring so they can surge.
+        a.objects(c, {"SPECOPS_APEX_RING_CORE_OBJECT"}, true)
         for _, side in ipairs(sides) do
             doors(c, side, false, true)
             a.device(c, "CLAMSHELL_PIPES_" .. side .. "_DEVICE", false, true)
@@ -194,7 +238,7 @@ return function(m, a, ending)
             if a.matches(c, e, "APEX_MOTHER_BRAIN_008_DIALOG_PLAYER_TRIGGER") then a.cue(c, s, 54) end
             if a.matches(c, e, "APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER") then
                 set(c, 7); a.darkness(c, s, false)
-                hazards(c, s, false)
+                hazards(c, s, nil)
                 c:cancel_timer("ember.apex.hazards")
                 c:cancel_timer(vent_timer(s))
                 ending.start(c, s)
@@ -235,7 +279,10 @@ return function(m, a, ending)
             set(c, 5)
             c:cancel_timer(vent_timer(s)); c:cancel_timer("ember.apex.explain." .. generation(s))
             coffin_doors(c, true)
-            beam(c, true)
+            -- The weapon keeps firing until the cell goes in, so the beam stays up here.
+            beam(c, s, true)
+            -- Arm the climb scorch now: the pipes burn while the cell is carried up.
+            c:start_timer("ember.apex.hazards", 1)
             unlock(c, "MOTHER_BRAIN_DOOR_DEVICE")
             unlock(c, "COFFIN_BUNKER_DOOR_SOUTH_DEVICE")
             a.device(c, "MOTHER_BRAIN_DOOR_DEVICE", true)
@@ -258,7 +305,15 @@ return function(m, a, ending)
     end
     function A.timer(c, s, e)
         if e.timer_name == "ember.apex.hazards" then
-            if phase(s) == 6 and s:variable("ember.region") == 0 then hazards(c, s, true) end
+            -- The climb pipes burn while the cell is being carried up (phase 5), well before
+            -- the deposit; the rail top burns during the escape (phase 6). Any earlier phase
+            -- owns no hazard, so this is also how a checkpoint reset detaches one.
+            if s:variable("ember.region") == 0 then
+                local p = phase(s)
+                if p == 5 then hazards(c, s, "climb")
+                elseif p == 6 then hazards(c, s, "escape")
+                else hazards(c, s, nil) end
+            end
             return true
         end
         if carry.timer(c, s, e) then return true end
@@ -293,20 +348,23 @@ return function(m, a, ending)
     function A.guidance(c, s)
         if s:variable("ember.region") ~= 0 then return end
         local p = phase(s)
-        if p == 1 then a.directive(c, s, "4E4862BB", "SECURITY_INTERCEPTOR_NAV_POINT", a.combat(s, access))
+        if p == 1 then a.directive(c, s, "4E4862BB", "SECURITY_INTERCEPTOR_NAV_POINT")
         elseif p == 2 then a.directive(c, s, s:variable("ember.apex.interceptor_boarded") and "4E4862BB" or "3CBFC90B",
-            s:variable("ember.apex.interceptor_boarded") and "APEX_DIRECTIVE_REACTOR_CLAMSHELL_GOTO_NAV_POINT" or "SECURITY_INTERCEPTOR_NAV_POINT", a.combat(s, access))
-        elseif p == 3 then a.directive(c, s, "26C3C19D", "APEX_DIRECTIVE_REACTOR_CLAMSHELL_GOTO_NAV_POINT", a.combat(s, reactor))
-        elseif p == 4 then a.directive(c, s, "61D2B286", "APEX_DIRECTIVE_REACTOR_COFFIN_TARGET_NAV_POINT", a.combat(s, reactor))
+            s:variable("ember.apex.interceptor_boarded") and "APEX_DIRECTIVE_REACTOR_CLAMSHELL_GOTO_NAV_POINT" or "SECURITY_INTERCEPTOR_NAV_POINT")
+        elseif p == 3 then a.directive(c, s, "26C3C19D", "APEX_DIRECTIVE_REACTOR_CLAMSHELL_GOTO_NAV_POINT")
+        elseif p == 4 then a.directive(c, s, "61D2B286", "APEX_DIRECTIVE_REACTOR_COFFIN_TARGET_NAV_POINT")
         elseif p == 5 then a.directive(c, s, "4746660F",
-            carry.held(s) and "EMBER_DIRECTIVE_REACTOR_MOTHER_BRAIN_DELIVERY_NAV_POINT" or "APEX_WEAPON_NAV_POINT", a.combat(s, reactor))
-        elseif p == 6 then a.directive(c, s, "40FC40AD", "APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_NAV_POINT", false) end
+            carry.held(s) and "EMBER_DIRECTIVE_REACTOR_MOTHER_BRAIN_DELIVERY_NAV_POINT" or "APEX_WEAPON_NAV_POINT")
+        elseif p == 6 then a.directive(c, s, "40FC40AD", "APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_NAV_POINT") end
     end
     function A.reset(c, s, name)
         if name == "escape" then
             c:start_timer("ember.apex.hazards", 1)
             set(c, 6)
-            for _, t in ipairs(escape_triggers) do a.slot(c, t):fire_trigger{} end
+            -- The weapon is already dead at this checkpoint: restoring it must leave the
+            -- beam off and re-arm the escape's own progress triggers.
+            beam(c, s, false, true)
+            arm_escape(c)
             a.darkness(c, s, true)
         else
             c:cancel_timer(vent_timer(s)); c:cancel_timer("ember.apex.core." .. generation(s))
@@ -329,6 +387,9 @@ return function(m, a, ending)
             a.device(c, "MOTHER_BRAIN_DOOR_DEVICE", false, true)
             a.device(c, "COFFIN_BUNKER_DOOR_SOUTH_DEVICE", false, true)
             a.device(c, "REACTOR_SHIELD_DEVICE", false, true)
+            -- Detaching the hazard has its own callback: retiring 45 squads already spends
+            -- most of this one's native intent budget.
+            c:start_timer("ember.apex.hazards", 1)
             set(c, 2)
             -- Publish the reset now; repopulate on the first playable client report
             -- after the wipe handshake. A one-millisecond timer can expire during the fade.
@@ -342,6 +403,8 @@ return function(m, a, ending)
             c:start_timer("ember.apex.core." .. generation(s), 1)
         end
         a.darkness(c, s, phase(s) >= 3 and phase(s) <= 6)
+        -- Streaming back into the area re-attaches the hazard this phase owns.
+        if phase(s) == 5 or phase(s) == 6 then c:start_timer("ember.apex.hazards", 1) end
         if phase(s) == 3 or phase(s) == 4 then
             cycle(c, s, "closed", true)
             if phase(s) == 3 and not s:variable("ember.r.cue.41") then c:start_timer("ember.apex.explain." .. generation(s), 9000) end

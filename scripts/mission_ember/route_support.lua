@@ -99,11 +99,18 @@ return function(mission, on_clear)
         c:set_variable("ember.checkpoint.hash", hash)
         c:set_variable("ember.checkpoint.name", name)
     end
+    -- Each authored directive carries both HUD lines: `title` is the main objective and
+    -- `description` the sub-objective, so the banner advances by selecting a new element.
+    -- Native type-68 state 0 ENTERS the directive, and the Lua surface always publishes it,
+    -- so every republication replays the banner's entry animation. Republishing whenever the
+    -- navpoint changed therefore made the objective flash on each combat transition while its
+    -- text stayed put. The directive is now keyed on its element alone and carries one stable
+    -- navpoint, so the body changes only at a real milestone and enters exactly once there.
     function api.directive(c, s, hash, marker, combat)
         local rank = ({[56] = 1, [40] = 2, [0] = 3})[s:variable("ember.region")] or 0
         if rank < (s:variable("ember.r.furthest") or 0) then return end
         music.update(c, s)
-        local shown = combat and "" or (marker or "")
+        local shown = marker or ""
         local signature = hash .. ":" .. shown
         if s:variable("ember.r.guidance") == signature then return end
         local binding = assert(directives[hash], "missing authored directive " .. hash)

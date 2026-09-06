@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "internal.h"
+#include "mission_seed_world_change.h"
 
 namespace sunrise::server::bap::encrypted::push::activity {
 

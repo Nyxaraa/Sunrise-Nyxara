@@ -88,10 +88,10 @@ return function(m, a)
     function P.guidance(c, s)
         if s:variable("ember.region") ~= 56 then return end
         local p = phase(s)
-        if p == 1 then a.directive(c, s, "883C188D", "LINK_DIRECTIVE_CONTROL_INTERACT_NAV_POINT", a.combat(s, {"processing_entry"}))
-        elseif p == 2 then a.directive(c, s, s:variable("ember.carry.processing.notified") and "57050F62" or "591B1D88", carry.held(s) and "LINK_DIRECTIVE_CONTROL_INTERACT_NAV_POINT" or "LINK_CARRY_OBJECT_NAV_POINT", a.combat(s, {"processing_entry"}))
-        elseif p == 3 then a.directive(c, s, "03285502", nil, true)
-        elseif p == 4 then a.directive(c, s, "65D5979D", "CINDER_DIRECTIVE_CINDER_GOTO_BUBBLE_NAV_POINT", false) end
+        if p == 1 then a.directive(c, s, "883C188D", "LINK_DIRECTIVE_CONTROL_INTERACT_NAV_POINT")
+        elseif p == 2 then a.directive(c, s, s:variable("ember.carry.processing.notified") and "57050F62" or "591B1D88", carry.held(s) and "LINK_DIRECTIVE_CONTROL_INTERACT_NAV_POINT" or "LINK_CARRY_OBJECT_NAV_POINT")
+        elseif p == 3 then a.directive(c, s, "03285502", nil)
+        elseif p == 4 then a.directive(c, s, "65D5979D", "CINDER_DIRECTIVE_CINDER_GOTO_BUBBLE_NAV_POINT") end
     end
     function P.reset(c, s)
         a.effect(c, s, "TUMBLER_DAMAGE_HOP_ON", nil, nil, false)

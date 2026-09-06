@@ -18,6 +18,7 @@
 #include "activity_authority_query_owner.h"
 #include "activity_authority_reset_owner.h"
 #include "activity_mission_seed_lease.h"
+#include "encrypted/push/activity/mission_seed_world_change.h"
 #include "core/threading/srw_lock.h"
 #include "encrypted/bap_connection_publication.h"
 #include "encrypted/push/activity/internal.h"
@@ -1128,10 +1129,22 @@ select_activity_mission_seed(const state::activity::SessionBinding& binding,
                 }
                 lease.registeredRegions[lease.registeredRegionCount++] = plan.effectiveRegion;
             }
-            // A region change replaces the instantiated world. Publications keep answering the
+            // A SLICE-SET change replaces the instantiated world. Publications keep answering the
             // previous plan until the client's post-arrival solicited answer advances the region
             // epoch, because registering the new region's groups mid-teardown races the teardown.
-            if (lease.configured && lease.plan.effectiveRegion != plan.effectiveRegion) {
+            //
+            // An authored region is `sliceSetIndex + stateOrdinal`, so sibling states share one
+            // slice set: Ember's apex gameplay (0) and both ending bookends (1, 2) are all slice
+            // set 0. Moving between them instantiates nothing new, and the client's current region
+            // leg only advances on an actual slice-set switch. Waiting for an arrival there is a
+            // deadlock: the roster withholds the new region's groups forever and the client never
+            // finishes synchronizing. Only a real slice-set change opens the arrival window.
+            if (lease.configured
+                && encrypted::push::activity::mission_seed_region_change_replaces_world(
+                    lease.plan.sliceSetIndex,
+                    lease.plan.effectiveRegion,
+                    plan.sliceSetIndex,
+                    plan.effectiveRegion)) {
                 lease.previousPlan = lease.plan;
                 lease.regionArrivalPending = true;
             }
