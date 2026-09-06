@@ -98,8 +98,7 @@ return function(m, a, ending)
     -- `REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON` and `FOUNDRY_THERMAL_DOT_HOP_ON` both reference
     -- effect resource 80C1D9E0 -- the burn already working in the Foundry. The hot-pipe and
     -- rail-top hop-ons carry 80B82484 and 80C1D389 instead, which is why contact read as a
-    -- shock rather than a scorch. Apex drives the one authored scorch for both hazards and
-    -- swaps only its filter, so the climb and the escape share the same effect. A new revision
+    -- shock rather than a scorch. Use the authored scorch for the climb pipes. A new revision
     -- removes the previous attachment (native 9EF8A0/9F1F10) before attaching the new filter.
     local function rail_filter(c) return {players = true, inside = a.slot(c, "SLOT_019E")} end
     local function hazards(c, s, mode)
@@ -120,8 +119,11 @@ return function(m, a, ending)
                     a.slot(c, "SLOT_0005_80B3C09F"), a.slot(c, "SLOT_0006_80B3C09F"),
                     a.slot(c, "SLOT_0008_80B3C09F")}}, true)
         elseif mode == "escape" then
+            -- Escape already owns SUNBURN_DAMAGE_OBJECT. Adding this rail-wide burn on top
+            -- adds damage until the escape-end trigger detaches it. Retire the
+            -- climb attachment here and let the native sunburn object own escape damage.
             a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
-                "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), true)
+                "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), false)
         else
             a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
                 "AOD_REACTOR_RAIL_TOP_OBJECT_FILTER", rail_filter(c), false)
@@ -162,7 +164,8 @@ return function(m, a, ending)
                 end
             else a.slot(c, "REACTOR_COFFIN_ALARM_SEQUENCE"):play_sequence{} end
         else
-            if step == "closed" then beam_surge(c, s, false) end
+            -- Exposure is the cooling window: stop the surge before moving the shutters.
+            beam_surge(c, s, false)
             if phase(s) == 3 then
                 for _, side in ipairs(sides) do if not dead(s, side) then doors(c, side, step == "open", snap) end end
             elseif phase(s) == 4 then
@@ -213,12 +216,9 @@ return function(m, a, ending)
             a.device(c, "MOTHER_BRAIN_ENGINE_LEFT_DEVICE", true)
             a.device(c, "MOTHER_BRAIN_ENGINE_RIGHT_DEVICE", true)
             a.objects(c, {"REACTOR_GETAWAY_SHIP_OBJECT", "SUNBURN_DAMAGE_OBJECT"}, true)
-            -- The escape ship has no authored flight path: the four Harvesters own the only
-            -- type-58 sequences in the mission, so this ship travels on its own device's
-            -- position lane. That device was never unlocked or powered, which is the same
-            -- omission that left the weapon beam inert, so it held its start pose.
-            unlock(c, "REACTOR_GETAWAY_SHIP_DEVICE")
-            a.device(c, "REACTOR_GETAWAY_SHIP_DEVICE", true)
+            -- Object publication is not an entity-creation receipt. Start its device from
+            -- A.object once the ship is present, so the initial movement is not lost.
+            c:clear_variable("ember.apex.ship_started")
             -- The weapon is dead once the cell is in: powered off but still installed, so
             -- the beam and everything built around it stay in the world. The previous code
             -- opened both devices here, which left it running through the whole escape.
@@ -347,8 +347,8 @@ return function(m, a, ending)
     function A.timer(c, s, e)
         if e.timer_name == "ember.apex.hazards" then
             -- The climb pipes burn while the cell is being carried up (phase 5), well before
-            -- the deposit; the rail top burns during the escape (phase 6). Any earlier phase
-            -- owns no hazard, so this is also how a checkpoint reset detaches one.
+            -- the deposit. Escape (phase 6) uses its separate native sunburn object, so
+            -- entering it detaches the climb burn. A checkpoint reset also detaches it.
             if s:variable("ember.region") == 0 then
                 local p = phase(s)
                 if p == 5 then hazards(c, s, "climb")
@@ -461,6 +461,23 @@ return function(m, a, ending)
     end
     function A.object(c, s, e)
         carry.state(c, s, e)
+        if e.present and e.alive then
+            for i, name in ipairs({"SPECOPS_APEX_RING_LASER_OBJECT", "SPECOPS_APEX_RING_RING_OBJECT"}) do
+                if a.matches(c, e, name) and s:variable("ember.apex.beam") == true then
+                    -- Reapply the current pose when native creation finishes. The initial
+                    -- setup can precede creation; waiting for the first surge left it dark.
+                    unlock(c, beam_devices[i])
+                    a.device(c, beam_devices[i], s:variable("ember.apex.surge") ~= true, true)
+                end
+            end
+            if a.matches(c, e, "REACTOR_GETAWAY_SHIP_OBJECT") and phase(s) == 6
+                and not s:variable("ember.apex.ship_started") then
+                c:set_variable("ember.apex.ship_started", true)
+                unlock(c, "REACTOR_GETAWAY_SHIP_DEVICE")
+                a.device(c, "REACTOR_GETAWAY_SHIP_DEVICE", false, true)
+                a.device(c, "REACTOR_GETAWAY_SHIP_DEVICE", true)
+            end
+        end
         if e.generation == generation(s) then
             for _, which in ipairs({"EAST", "WEST", "COFFIN"}) do
                 local prefix = which == "COFFIN" and "REACTOR_COFFIN" or ("REACTOR_CLAMSHELL_" .. which)

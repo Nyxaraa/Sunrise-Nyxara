@@ -204,6 +204,12 @@ region(0)
 assert(vars['ember.r.guidance']:sub(1,8)=='4E4862BB','apex must not show the grinder objective')
 assert(transition('SECURITY_DOOR_DEVICE').transition=='close')
 timer('ember.apex.setup.')
+for _,name in ipairs({'SPECOPS_APEX_RING_LASER_OBJECT','SPECOPS_APEX_RING_RING_OBJECT'}) do
+    call(R.dispatch,'object',c,s,event(name,{generation=1,present=true,alive=true}))
+end
+assert(transition('SPECOPS_APEX_RING_LASER_DEVICE',true).transition=='open')
+assert(transition('SPECOPS_APEX_RING_LASER_DEVICE',true).snap==true)
+assert(vars['ember.apex.beam'] and not vars['ember.apex.surge'],'entry must light the resting beam')
 assert(transition('CLAMSHELL_TO_COFFIN_EAST_BRIDGE_DEVICE', true).transition=='open')
 assert(transition('CLAMSHELL_TO_COFFIN_WEST_BRIDGE_DEVICE', true).transition=='open')
 assert(transition('REACTOR_COFFIN_DOOR_EAST_DEVICE').transition=='lock')
@@ -267,8 +273,23 @@ assert(vars['ember.apex.surge']==true,'the warning must drive the beam')
 assert(transition('SPECOPS_APEX_RING_LASER_DEVICE', true).transition=='close')
 assert(transition('SPECOPS_APEX_RING_RING_DEVICE', true).transition=='close')
 assert(transition('REACTOR_CLAMSHELL_EAST_DOOR_A_DEVICE').transition=='close')
+local coolingStart=#calls
 timer('ember.apex.vents.')
 assert(timers['ember.apex.vents.1']==10000)
+assert(vars['ember.apex.surge']==false,'cooling shutters opened during the surge')
+local restored={}
+for i=coolingStart+1,#calls do
+    local row=calls[i]
+    if row[1]=='transition' then
+        for _,name in ipairs({'SPECOPS_APEX_RING_LASER_DEVICE','SPECOPS_APEX_RING_RING_DEVICE'}) do
+            if row[2]==slotDefs[m.Slot[name]].name and row[3].transition=='open' then restored[name]=true end
+        end
+        if row[2]==slotDefs[m.Slot.REACTOR_CLAMSHELL_EAST_DOOR_A_DEVICE].name and row[3].transition=='open' then
+            assert(restored.SPECOPS_APEX_RING_LASER_DEVICE and restored.SPECOPS_APEX_RING_RING_DEVICE,
+                'both beam devices must end the surge before opening the cooling shutters')
+        end
+    end
+end
 assert(transition('REACTOR_CLAMSHELL_EAST_LIGHT_A_DEVICE').transition=='power_on')
 for _,side in ipairs({'EAST','WEST'})do
     local n='REACTOR_CLAMSHELL_'..side
@@ -335,7 +356,12 @@ assert(vars['ember.carry.apex.generation']==3 and vars['ember.apex.phase']==5)
 use('MOTHER_BRAIN_CARRY_OBJECT',1);use('MOTHER_BRAIN_INTERACT_OBJECT');assert(vars['ember.apex.phase']==5)
 local depositStart=#calls
 use('MOTHER_BRAIN_CARRY_OBJECT',3);use('MOTHER_BRAIN_INTERACT_OBJECT');assert(vars['ember.apex.phase']==6)
--- The device cannot animate an absent object or one left locked/unpowered.
+-- Publish first; only native object presence starts the movement.
+assert(not vars['ember.apex.ship_started'])
+call(R.dispatch,'object',c,s,event('REACTOR_GETAWAY_SHIP_OBJECT',{generation=1,present=false,alive=false}))
+assert(not vars['ember.apex.ship_started'])
+call(R.dispatch,'object',c,s,event('REACTOR_GETAWAY_SHIP_OBJECT',{generation=1,present=true,alive=true}))
+assert(vars['ember.apex.ship_started'])
 local shipSteps={}
 for i=depositStart+1,#calls do
     local row=calls[i]
@@ -345,19 +371,22 @@ for i=depositStart+1,#calls do
         shipSteps[#shipSteps+1]=row[3].transition
     end
 end
-assert(table.concat(shipSteps,',')=='spawn,unlock,power_on,open', 'escape ship activation order')
+assert(table.concat(shipSteps,',')=='spawn,unlock,power_on,close,open', 'escape ship activation order')
+local shipStartedCalls=#calls
+call(R.dispatch,'object',c,s,event('REACTOR_GETAWAY_SHIP_OBJECT',{generation=1,present=true,alive=true}))
+assert(#calls==shipStartedCalls,'duplicate presence restarted the escape flight')
 assert(vars['ember.carry.apex.done'] and not vars['ember.carry.apex.held'])
 local before=#calls;use('MOTHER_BRAIN_INTERACT_OBJECT');assert(#calls==before)
 call(R.dispatch,'object',c,s,event('MOTHER_BRAIN_CARRY_OBJECT',{generation=3,present=false,alive=false}))
 assert(not timers['ember.carry.recover.apex.3'],'consumed final cell respawned')
--- The escape scorch is the same authored effect the climb used, re-filtered to the rail top.
+-- Escape's native sunburn object must not stack with the scripted climb/rail burn.
 timer('ember.apex.hazards')
-assert(vars['ember.effect.REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON'],'escape must scorch')
-local escapeFilter
+local escapeEffect
 for i=#calls,1,-1 do
-    if calls[i][1]=='set_object_filter' then escapeFilter=calls[i][2];break end
+    if calls[i][1]=='set_mission_effect' then escapeEffect=calls[i][3];break end
 end
-assert(escapeFilter=='aod_reactor_rail_top_object_filter','escape hazard must use the rail top')
+assert(escapeEffect and escapeEffect.enabled==false and escapeEffect.filter==nil,
+    'escape must detach the added burn instead of stacking it with native sunburn')
 -- The weapon is dead once the cell is in: powered off, but still installed. Deactivating the
 -- ring objects would take the beam and its surrounding structure out of the world entirely.
 assert(vars['ember.apex.beam']==false,'the beam must stop firing after the deposit')
