@@ -1,5 +1,20 @@
 # 1AU: movie loader, surge audio and escape explosions
 
+## Visible first movie confirmed; second-movie handoff and native presentation
+
+The user confirmed visible STM playback with `15e507e`. Its decoder reached state 5 at t=281733, with all six selected Y/U/V definitions backed by non-null buffers. Native EOF arrived at t=481606. The bridge then stopped at `surfaces_retiring`: no completion was exposed to Lua, so CNN was never requested. This is the second-movie regression, not missing CNN media.
+
+Read-only captures in `build/first-encounter-audit/15e507e-live-20260906-203525/`, `15e507e-after-first-surfaces.txt`, and `15e507e-after-first-buffers.txt` show that the dependent root was freed while the catalog, registrations and buffers remained resident. Root release and global asset eviction are distinct. The old bridge incorrectly made eviction a prerequisite for reporting EOF.
+
+The correction retains one shared resource set across STM and CNN, preloading both compact media mappings. Native EOF immediately reports completion; only the same session/generation with a completed STM receipt can chain CNN onto the retained resources. The definition-only root loads first. Both movies' metadata, the shared catalog, raw buffers and registration containers load second, after validated definitions exist. Moving the catalog out of the definition root avoids retaining it during dependent cleanup. After CNN, asynchronous resource cleanup is independent of mission completion and the immediate orbit request. No asset is force-unregistered.
+
+At the user's request, the `132BD80` UI drawing suppression and Sunrise overlay suppression have been removed. Native `E2EAE0` chooses UI state `0x22` for an active pre-rendered component: its `D8` callback is `DD1D10`, which returns false. `E2E9F0` maps `0x21` and `0x22` to cinematic category 4. The bridge now passes `0x22` to the original `E1CD60` state transition when its owned playback would otherwise select normal gameplay (`0x2B/0x2D/0x2F`). Other requests, including loading/error/menu states, pass through. Presentation persists between the movies and clears after CNN or failure. Native UI drawing and window transitions run normally. Logs include requested, selected and applied state/category.
+
+`ember.hud.audience.<region>` is unrelated: it is a Lua once-only flag for initializing type-70 objective audiences. The intro starts `PF_CINEMATIC_BOOKEND_CINEMATIC` with `set_cinematic_active`; its authored region is not selected again for ending videos.
+
+The new handoff guards, all 24 portable tests, full Lua route and mapped-image/package verifier pass. The Windows release DLL also builds successfully. **Visible STM is confirmed on the prior build; CNN chaining, native cinematic UI presentation and immediate orbit arrival require a new live test.** The historical cleanup-before-completion and drawing-override descriptions below describe superseded implementations.
+
+
 ## Freeze captured on `a47adbd`: surface registration dereferenced an unloaded definition
 
 The final escape trigger queued STM at t=289137 and submitted its resource root at t=289153. No playback submission followed. All six containers were resident, but all six definitions were unloaded (`FEFE0000 / type_info 001044FB / blob 0`). Scanning the frozen process found the render thread's saved exception: **C0000005 at game+1204163, RAX=0, RBX=80BCA021, RDX=4**. That instruction reads the definition's slot byte during container registration. This establishes the fault directly; neither decoding nor orbit return had begun.

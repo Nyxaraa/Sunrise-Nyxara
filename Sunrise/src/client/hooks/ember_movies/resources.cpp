@@ -111,21 +111,18 @@ bool sunburn_resident() noexcept {
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 bool MovieResource::begin(std::uint32_t asset) noexcept {
-    if (held()) return asset_==asset;
+    if (held()) {
+        if (retiringSurfaces_ || (asset!=0x80BCA001U && asset!=0x80BCA003U)) return false;
+        asset_=asset;return true; // Both movies share one retained resource set.
+    }
     if ((asset!=0x80BCA001U && asset!=0x80BCA003U) || !resolve()) return false;
     auto* mgr=manager(); if (!mgr) return false;
     create(mgr,&root_,8,2,0,"mission_ember_movie");
     if (!held()) return false;
     auto* root=blob(root_);if (!root) return false;
     retiringSurfaces_=false;
-    // Retain metadata plus the compact stream mapping consumed by 41A160.
-    // Its native kind-1 load initializes file offset/patch/size without copying the movie.
-    for (const auto tag : movie_metadata(asset)) {
-        const std::uint32_t request[]{movie_resource_kind,tag};
-        add(root,request);
-    }
-    const std::uint32_t streamRequest[]{movie_resource_kind,movie_stream(asset)};
-    add(root,streamRequest);
+    // This root contains definitions only. The catalog belongs to the dependent
+    // root: retaining it while waiting for its containers to unload is circular.
     // Native registration 1204163 immediately reads the referenced definition.
     // A single flat batch cannot order that callback after the definition load.
     for (const auto tag : movie_surface_definitions) {
@@ -134,7 +131,7 @@ bool MovieResource::begin(std::uint32_t asset) noexcept {
     }
     submit(mgr,root_);asset_=asset;
     core::log::writef(core::log::Channel::client,core::log::Level::info,
-        "ev=ember_movie result=resource_requested asset=%08X root=%08X kind=1 metadata=4 stream=%08X definitions=6",asset_,root_,movie_stream(asset_));
+        "ev=ember_movie result=resource_requested asset=%08X root=%08X kind=1 definitions=6",asset_,root_);
     return true;
 }
 bool MovieResource::advance() noexcept {
@@ -149,6 +146,15 @@ bool MovieResource::advance() noexcept {
         create(mgr,&surfaces_,8,2,0,"mission_ember_movie_surfaces");
         if (surfaces_==0xFFFFFFFFU) return false;
         auto* root=blob(surfaces_);if (!root) return false;
+        // Preload both streams' compact mappings and metadata. Native EOF for
+        // STM can then hand off to CNN without releasing their shared textures.
+        for (auto asset : {0x80BCA001U,0x80BCA003U}) {
+            for (auto tag : movie_metadata(asset)) {
+                if (asset==0x80BCA003U && tag==0x80BCA032U) continue;
+                const std::uint32_t request[]{movie_resource_kind,tag};add(root,request);
+            }
+            const std::uint32_t request[]{movie_resource_kind,movie_stream(asset)};add(root,request);
+        }
         // 1204581 binds each raw buffer to definition+8. Both the buffer callback
         // and the container registration require the retained definition first.
         for (auto tag : movie_surface_buffers) {

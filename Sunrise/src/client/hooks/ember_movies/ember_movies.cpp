@@ -26,7 +26,7 @@ Owner firstCompleted{};
 std::uint64_t key{}, began{};
 unsigned movie{};
 Status state{};
-bool acquired{}, stopRequested{}, attempted{}, escapeHeld{}, finishing{};
+bool acquired{}, stopRequested{}, attempted{}, escapeHeld{};
 Playback playback{};
 MovieResource resource{};
 void* decoderOwner{};
@@ -75,16 +75,10 @@ template<class T> T field(void* pointer, unsigned offset) {
     T value{}; std::memcpy(&value, static_cast<std::byte*>(pointer)+offset, sizeof(value)); return value;
 }
 void release() {
-    presentation.store(false);
     if (acquired) { api.release(api.manager()); acquired=false; }
 }
-void finish() {
-    if (!resource.release()) return;
-    state=Status::complete; watching.store(false); finishing=false; report("complete",lastDecoderState);
-    if (movie==1) firstCompleted=owner;
-    else if (firstCompleted==owner) orbit_return::arm(owner);
-}
 void fail(const char* reason) {
+    presentation.store(false);
     // Stop only our exact decoder asset, never another movie's playback.
     if (acquired) {
         auto* decoder=api.decoder();
@@ -105,10 +99,11 @@ bool request(Owner next, std::uint64_t nextKey, unsigned index, bool stop) noexc
         }
     } else if (next==owner && nextKey==key && index==movie) {
         accepted=state!=Status::failed;
-    } else if (!acquired && !resource.held() && state!=Status::queued && state!=Status::preparing && state!=Status::playing) {
+    } else if (!acquired && (!resource.held() || can_chain_movies(owner,next,firstCompleted,movie,index,state))
+        && state!=Status::queued && state!=Status::preparing && state!=Status::playing) {
         if (index==1 || !(next==owner)) firstCompleted={};
         owner=next; key=nextKey; movie=index; state=Status::queued; began=GetTickCount64();
-        stopRequested=false; finishing=false; playback={}; decoderOwner=nullptr; lastDecoderState=-1;
+        stopRequested=false; playback={}; decoderOwner=nullptr; lastDecoderState=-1;
         escapeHeld=(GetAsyncKeyState(VK_ESCAPE)&0x8000)!=0;
         watching.store(true); report("queued"); accepted=true;
     }
@@ -129,22 +124,23 @@ void poll(std::int32_t region, std::int32_t step) noexcept {
     struct Reset { ~Reset() { inPoll=false; } } reset;
     AcquireSRWLockExclusive(&lock);
     if (state!=Status::queued && state!=Status::preparing && state!=Status::playing) {
-        watching.store(!resource.release());
+        // STM and CNN share textures. Waiting for those textures to disappear
+        // before reporting STM's EOF prevents Lua from ever submitting CNN.
+        const bool betweenMovies=state==Status::complete && movie==1 && region==0 && step==38;
+        if (!betweenMovies) presentation.store(false);
+        watching.store(betweenMovies || !resource.release());
         ReleaseSRWLockExclusive(&lock); return;
     }
     const auto now=GetTickCount64();
     if (region!=0 || step!=38) { fail("world_changed"); ReleaseSRWLockExclusive(&lock); return; }
     if (!frameReady.load()) { fail("frame_observer_unavailable"); ReleaseSRWLockExclusive(&lock); return; }
-    if (!uiReady.load()) { fail("movie_ui_unavailable"); ReleaseSRWLockExclusive(&lock); return; }
-    // Native release may clear/reuse the decoder. Once EOF is observed, wait
-    // only for our resource cleanup; never reinterpret that cleared decoder.
-    if (finishing) { finish(); ReleaseSRWLockExclusive(&lock); return; }
-    if (!resolve()) { state=Status::failed; watching.store(false); ReleaseSRWLockExclusive(&lock); return; }
+    if (!uiReady.load()) { fail("movie_presentation_unavailable"); ReleaseSRWLockExclusive(&lock); return; }
+    if (!resolve()) { fail("native_api_unavailable"); ReleaseSRWLockExclusive(&lock); return; }
     auto* manager=api.manager();
     auto* decoder=api.decoder();
     if (!manager || !decoder) { fail("player_unavailable"); ReleaseSRWLockExclusive(&lock); return; }
     if (state==Status::queued) {
-        if (!resource.held() && !resource.begin(assets[movie-1])) {
+        if (!resource.begin(assets[movie-1])) {
             fail("resource_request_failed"); ReleaseSRWLockExclusive(&lock); return;
         }
         if (!resource.advance()) {
@@ -191,9 +187,12 @@ void poll(std::int32_t region, std::int32_t step) noexcept {
     }
     if (observed==Status::complete) {
         release();
-        // Lua submits movie two as soon as completion is visible. Finish native
-        // unregistration first, so that submission never races retained resources.
-        finishing=true; finish();
+        if (movie==2) presentation.store(false);
+        state=Status::complete; watching.store(true); report("complete",decoderState);
+        if (movie==1) firstCompleted=owner;
+        else if (firstCompleted==owner) orbit_return::arm(owner);
+        // Final cleanup runs independently on subsequent frames. Native EOF,
+        // not global texture eviction, releases the mission's orbit handoff.
     }
     else if (observed==Status::failed) fail("decoder_failed_or_replaced");
     else state=observed;

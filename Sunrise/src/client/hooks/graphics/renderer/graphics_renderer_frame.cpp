@@ -16,7 +16,6 @@
 #include "../../../ui/activity/authored_placement_marker.h"
 #include "../../../ui/activity/authored_spatial_overlay.h"
 #include "../../teleport/runtime.h"
-#include "../../ember_movies/ember_movies.h"
 #include "../input/input.h"
 #include "graphics_renderer_report.h"
 #include "state.h"
@@ -128,10 +127,6 @@ void render_frame_locked() noexcept {
     if (!fully_active_locked()) {
         return;
     }
-    if (ember_movies::presenting()) {
-        transition_input_visibility_locked(false);
-        return;
-    }
     if (core::ui::scaling::dpi::update(g_resources.window)) {
         // Style and text scale change together, before the backend sets up the frame.
         core::ui::theme::apply();
@@ -182,7 +177,7 @@ void render_frame_locked() noexcept {
 /** Feeds one ordinary window message into the active Dear ImGui context. */
 bool handle_window_message(HWND window, UINT message, WPARAM word, LPARAM value) noexcept {
     AcquireSRWLockExclusive(&g_rendererLock);
-    if (!fully_active_locked() || g_resources.window != window || ember_movies::presenting()) {
+    if (!fully_active_locked() || g_resources.window != window) {
         ReleaseSRWLockExclusive(&g_rendererLock);
         return false;
     }

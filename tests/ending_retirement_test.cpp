@@ -24,6 +24,26 @@ static void expect(Reader& reader, unsigned width, std::uint64_t expected) {
 }
 int main() {
     namespace movies=sunrise::client::hooks::ember_movies;
+    // The first visible-video run reached native EOF, but the retained textures
+    // blocked request 2. A same-owner EOF authorizes reuse, not cache eviction.
+    const movies::Owner movieOwner{12,34};
+    assert(movies::can_chain_movies(movieOwner,movieOwner,movieOwner,1,2,movies::Status::complete));
+    assert(!movies::can_chain_movies(movieOwner,{13,34},movieOwner,1,2,movies::Status::complete));
+    assert(!movies::can_chain_movies(movieOwner,{12,35},movieOwner,1,2,movies::Status::complete));
+    assert(!movies::can_chain_movies(movieOwner,movieOwner,{},1,2,movies::Status::complete));
+    assert(!movies::can_chain_movies({}, {}, {},1,2,movies::Status::complete));
+    for (auto state : {movies::Status::queued,movies::Status::preparing,movies::Status::playing,
+                       movies::Status::failed,movies::Status::absent})
+        assert(!movies::can_chain_movies(movieOwner,movieOwner,movieOwner,1,2,state));
+    assert(!movies::can_chain_movies(movieOwner,movieOwner,movieOwner,2,1,movies::Status::complete));
+    assert(!movies::can_chain_movies(movieOwner,movieOwner,movieOwner,1,1,movies::Status::complete));
+    // Native presentation selects the cinematic category, preserving higher
+    // priority UI states. Playback completion restores the original selection.
+    for (int ui=-1;ui<=0x2F;++ui) {
+        assert(movies::movie_ui_state(ui,false)==ui);
+        const bool gameplay=ui==0x2B || ui==0x2D || ui==0x2F;
+        assert(movies::movie_ui_state(ui,true)==(gameplay ? 0x22 : ui));
+    }
     movies::OrbitReturn orbit;
     movies::OrbitObservation inApex{true,true,false,false,true,0,38,38,true};
     using OA=movies::OrbitAction;
