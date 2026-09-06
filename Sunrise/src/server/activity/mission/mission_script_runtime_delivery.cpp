@@ -171,7 +171,11 @@ void report_intent_status(RuntimeInstance& instance,
         return;
     }
     instance.lastIntentStatus = status;
-    log_line(core::log::Level::debug, &instance, "intent", name);
+    // A waiting intent retries until its lifetime expires, so the reason it is waiting is the
+    // only account of why a delivery never happened. At debug it was invisible, and a scene
+    // lease that never published looked like sixty seconds of silence before intent_timeout.
+    // The dedup above keeps this to one line per distinct status.
+    log_line(core::log::Level::info, &instance, "intent", name);
 }
 
 /**
