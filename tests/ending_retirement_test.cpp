@@ -3,6 +3,7 @@
 #include "../Sunrise/src/client/hooks/ember_movies/readiness_rules.h"
 #include "../Sunrise/src/client/hooks/ember_movies/sunburn_rules.h"
 #include "../Sunrise/src/client/hooks/ember_movies/playback_rules.h"
+#include "../Sunrise/src/client/hooks/ember_movies/surface_rules.h"
 #include "../Sunrise/src/client/hooks/mission_retirement/mission_retirement.h"
 #include "../Sunrise/src/middleware/bap/activity_message/roster_presence.h"
 #include "../Sunrise/src/middleware/encoding/bit_reader.h"
@@ -22,6 +23,27 @@ static void expect(Reader& reader, unsigned width, std::uint64_t expected) {
 }
 int main() {
     namespace movies=sunrise::client::hooks::ember_movies;
+    movies::SurfaceRegistrations surfaces{};
+    for (unsigned i=1;i<=6;++i) surfaces[i].entries[0]=movies::movie_surface_definitions[i-1];
+    // Live black-video capture: old candidate handles remain, but no container
+    // holds a registration and every selected surface is FFFFFFFF.
+    assert(!movies::movie_surfaces_registered(surfaces));
+    for (unsigned i=1;i<=6;++i) surfaces[i].count=1;
+    assert(movies::movie_surfaces_registered(surfaces));
+    assert(!movies::movie_surfaces_selected(surfaces));
+    for (unsigned i=1;i<=6;++i) surfaces[i].selected=surfaces[i].entries[0];
+    assert(movies::movie_surfaces_selected(surfaces));
+    surfaces[4].count=0;
+    assert(!movies::movie_surfaces_registered(surfaces));
+    surfaces[4].count=4;
+    assert(!movies::movie_surfaces_registered(surfaces));
+    surfaces[4].count=2;surfaces[4].entries[1]=123;
+    assert(!movies::movie_surfaces_registered(surfaces)); // another surface owns the top
+    surfaces[4].count=1;
+    surfaces[7].count=1;surfaces[7].entries[0]=123;
+    assert(!movies::movie_surfaces_registered(surfaces)); // do not publish an unrelated pending slot
+    surfaces[7].selected=123;
+    assert(movies::movie_surfaces_selected(surfaces));
     // Native kind 2 resolves shared-tag records; these ordinary movie tags require 1.
     static_assert(movies::movie_resource_kind==1);
     assert((movies::movie_metadata(0x80BCA001)==std::array<std::uint32_t,4>{0x80BCA001,0x80BCA000,0x80B9EB33,0x80BCA032}));

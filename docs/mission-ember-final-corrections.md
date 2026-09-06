@@ -1,12 +1,33 @@
 # 1AU: movie loader, surge audio and escape explosions
 
+## Correction after the active black-picture trace
+
+The manual replay established the failure directly: valid 1920×800 Y/U/V frames were present in native CPU buffers, and the UI command stream included the native movie command (`1B`, with packed header flags). A decoded frame from `picture-20260906-194230/` visibly contains the cutscene. The six GPU video surface slots were null during playback. Their native registration rows had **count 0 / selected FFFFFFFF**, with only stale candidate values. The prior raw metadata request did not retain the six surface containers named by `80BCA032`.
+
+The resource root now explicitly owns those six ordinary, kind-1 surface containers alongside the metadata and compact stream mapping:
+
+| Slot | Plane | Container | Definition |
+|---|---|---|---|
+| 1 | Y0 | 80BCA022 | 80BCA021 |
+| 2 | Y1 | 80BCA025 | 80BCA024 |
+| 3 | U0 | 80BCA028 | 80BCA026 |
+| 4 | U1 | 80BCA02B | 80BCA029 |
+| 5 | V0 | 80BCA02E | 80BCA02C |
+| 6 | V1 | 80BCA031 | 80BCA02F |
+
+Each container is class `80806B91`, containing its single definition reference. Each definition's first byte identifies the matching native slot. Once the root is ready and the player is idle, the bridge verifies all six retained registrations, then invokes native `1202B00`, the publication operation normally called at world activation `B5F4CE`. Stale candidates with count zero, invalid counts, other surface owners, or unrelated pending changes to slots 0/7 cannot pass. Playback waits for matching published selections; it never writes GPU pointers or bypasses the renderer's allocation checks. The root remains held until native movie completion releases it.
+
+Native `132B890` queues the movie and letterbox before calling the two UI drawing layers at `132BD80`. The new scoped hook suppresses those gameplay UI layers only while the Ember bridge owns playback. UI state and native movie rendering remain intact, and drawing returns at completion/failure. Sunrise's own debug/interaction overlays are also suppressed during this window. Native audio, both movies' order, completion receipts, and Escape handling are unchanged.
+
+The release build, all 24 portable tests, restored full Lua route, package surface references, native publication ABI and UI call order pass offline verification. **The installed correction still needs visible-video/HUD verification in game.** The replay confirmed native EOF for STM at t=456666 and automatic CNN playback at t=457139. Capture files are under `build/first-encounter-audit/picture-20260906-194*`, `live-picture-resources.txt`, and `live-surface-rows.txt`. The capture helper was stopped; the game was never launched or stopped by the agent.
+
 ## Playback report after `6540584`
 
 The user confirms immediate ending audio, but the picture stays black with gameplay HUD visible throughout. Both native players reached decoder state 5. STM subsequently stopped and completed after Escape (t=384298–384404); CNN also reached state 5 (t=384750) and completed after Escape (t=385250–385356). This establishes decoding/playback state and skip sequencing, **not visible video**. The archived log is `build/first-encounter-audit/6540584-black-video.log`.
 
 The failed beam inversion from `6540584` has been reverted at the user's request: normal uses `open`, surge uses `close`. Audio remains tied to the surge callback; shutter mechanics are unchanged. The restored mission route and all 24 portable tests pass.
 
-The picture investigation separates CPU extraction (`41D140`), fullscreen UI command production (`132B890` → `1278FF0`, command `1B`), GPU Y/U/V upload (`41D7B0`), and the final video draw (`1159CE0`, global shader index `B4`). Shader `80B35981` is resident in the captured process. The idle UI manager at `(RIP target of 132BD5C) & ~15 = 142F4EE30` has the expected `+1E4 = -1`, `+1EC = 0`. These **post-skip** readings do not identify the during-playback failure; an active picture/command-buffer capture is pending.
+The picture investigation separates CPU extraction (`41D140`), fullscreen UI command production (`132B890` → `1278FF0`, command `1B`), GPU Y/U/V upload (`41D7B0`), and the final video draw (`1159CE0`, global shader index `B4`). Shader `80B35981` is resident in the captured process. The idle UI manager at `(RIP target of 132BD5C) & ~15 = 142F4EE30` has the expected `+1E4 = -1`, `+1EC = 0`. Those initial post-skip readings did not identify the failure; the later active trace above does.
 
 
 ## Latest playtest: metadata ready, stream missing

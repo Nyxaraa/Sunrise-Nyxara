@@ -1,5 +1,6 @@
 #include "resources.h"
 #include "readiness_rules.h"
+#include "surface_rules.h"
 #include <Windows.h>
 #include <cstring>
 #include "../../patterns/image_scan.h"
@@ -15,6 +16,9 @@ using Submit=void(__fastcall*)(void*,std::uint32_t);
 using State=int(__fastcall*)(void*);
 Manager manager{}; Create create{}; Add add{}; Submit submit{},destroy{}; State status{};
 std::uintptr_t tableGlobal{};
+using PublishSurfaces=void(__fastcall*)();
+PublishSurfaces publishSurfaces{};
+std::uintptr_t surfaceRegistrations{};
 INIT_ONCE init=INIT_ONCE_STATIC_INIT;
 bool available{};
 template<class T> T read(std::uintptr_t at) { T value{};std::memcpy(&value,reinterpret_cast<void*>(at),sizeof(value));return value; }
@@ -30,17 +34,25 @@ bool resolve_native() {
     // B44020: inspect the completed root, then release it; no global I/O drain needed.
     constexpr auto endSig=signature<signature_length("48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 48 63 EA 4C 8B F1 E8")>(
         "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 48 63 EA 4C 8B F1 E8");
+    // 1202B00 publishes the registered surface stack; normal world activation
+    // calls it at B5F4CE. Direct movies keep the world, so perform that step here.
+    constexpr auto surfaceSig=signature<signature_length("8B 05 ? ? ? ? 48 8D 15 ? ? ? ? C7 05 ? ? ? ? FF FF FF FF 85 C0 74 0E FF C8 48 98 8B 4C 82 04 89 0D")>(
+        "8B 05 ? ? ? ? 48 8D 15 ? ? ? ? C7 05 ? ? ? ? FF FF FF FF 85 C0 74 0E FF C8 48 98 8B 4C 82 04 89 0D");
     auto* load=scan_main_image_unique(loadSig,"ember_resource_load");
     auto* end=scan_main_image_unique(endSig,"ember_resource_release");
+    auto* surfaces=scan_main_image_unique(surfaceSig,"ember_movie_surfaces");
     auto mgr=reinterpret_cast<Manager>(call(load,0x96));
     create=reinterpret_cast<Create>(call(load,0xD1));
     add=reinterpret_cast<Add>(call(load,0x14C));
     submit=reinterpret_cast<Submit>(call(load,0x157));
     status=reinterpret_cast<State>(call(end,0x85));
     destroy=reinterpret_cast<Submit>(call(end,0x9F));
-    if (!mgr || !create || !add || !submit || !status || !destroy || !end
+    if (!mgr || !create || !add || !submit || !status || !destroy || !end || !surfaces
         || end[0x2E]!=std::byte{0x48} || end[0x2F]!=std::byte{0x8B} || end[0x30]!=std::byte{0x05}) return false;
     tableGlobal=reinterpret_cast<std::uintptr_t>(end+0x35)+read<std::int32_t>(reinterpret_cast<std::uintptr_t>(end+0x31));
+    surfaceRegistrations=reinterpret_cast<std::uintptr_t>(surfaces+13)
+        +read<std::int32_t>(reinterpret_cast<std::uintptr_t>(surfaces+9));
+    publishSurfaces=reinterpret_cast<PublishSurfaces>(surfaces);
     manager=mgr; return true;
 }
 BOOL CALLBACK initialize(PINIT_ONCE,void*,void**) { available=resolve_native();return TRUE; }
@@ -97,9 +109,13 @@ bool MovieResource::begin(std::uint32_t asset) noexcept {
     }
     const std::uint32_t streamRequest[]{movie_resource_kind,movie_stream(asset)};
     add(root,streamRequest);
+    for (const auto tag : movie_surfaces) {
+        const std::uint32_t request[]{movie_resource_kind,tag};
+        add(root,request);
+    }
     submit(mgr,root_);asset_=asset;
     core::log::writef(core::log::Channel::client,core::log::Level::info,
-        "ev=ember_movie result=resource_requested asset=%08X root=%08X kind=1 metadata=4 stream=%08X",asset_,root_,movie_stream(asset_));
+        "ev=ember_movie result=resource_requested asset=%08X root=%08X kind=1 metadata=4 stream=%08X surfaces=6",asset_,root_,movie_stream(asset_));
     return true;
 }
 int MovieResource::state() const noexcept {
@@ -121,6 +137,23 @@ bool MovieResource::ready() const noexcept {
         const auto media=info ? read<std::uint32_t>(reinterpret_cast<std::uintptr_t>(info)+0x18) : 0xFFFFFFFFU;
         return movie_resources_ready(2,asset_,true,header,info!=nullptr,media)
             && media==movie_stream(asset_) && stream_ready(media);
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool MovieResource::prepare_surfaces() noexcept {
+    if (state()!=2 || !publishSurfaces || !surfaceRegistrations) return false;
+    __try {
+        for (unsigned i=0;i<movie_surfaces.size();++i) {
+            auto* container=blob(movie_surfaces[i],0x80806B91U);
+            if (!container || read<std::uint32_t>(reinterpret_cast<std::uintptr_t>(container))
+                !=movie_surface_definitions[i]) return false;
+        }
+        auto rows=read<SurfaceRegistrations>(surfaceRegistrations);
+        if (!movie_surfaces_registered(rows)) return false;
+        if (!movie_surfaces_selected(rows)) publishSurfaces();
+        if (!movie_surfaces_selected(read<SurfaceRegistrations>(surfaceRegistrations))) return false;
+        core::log::writef(core::log::Channel::client,core::log::Level::info,
+            "ev=ember_movie result=surfaces_selected asset=%08X count=6",asset_);
+        return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 bool MovieResource::release() noexcept {

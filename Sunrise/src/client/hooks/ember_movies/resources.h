@@ -9,6 +9,7 @@ public:
     bool begin(std::uint32_t asset) noexcept;
     int state() const noexcept; // native root: 1 pending, 2 ready, 3 failed
     bool ready() const noexcept;
+    bool prepare_surfaces() noexcept; // frame-owned publication after the native player is idle
     bool release() noexcept; // false while pending: never block the frame draining I/O
     bool held() const noexcept { return root_ != 0xFFFFFFFFU; }
 };

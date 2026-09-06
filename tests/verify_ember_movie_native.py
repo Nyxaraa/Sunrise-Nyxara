@@ -26,6 +26,17 @@ path = 'Sunrise/src/client/hooks/ember_movies/resources.cpp'
 load = signature(path, 'loadSig')
 end = signature(path, 'endSig')
 assert load == 0xB46E10 and end == 0xB44020
+surface = signature(path, 'surfaceSig')
+assert surface == 0x1202B00
+assert surface + 13 + struct.unpack_from('<i', data, surface + 9)[0] == 0x2E800B0
+target(0xB5F4C5, 9, surface)  # native world activation publishes the surface registration stacks
+target(0x1184660, 0x37, 0x1202C20)  # renderer fetches selected surface definitions
+assert data[0x116A070:0x116A077] == bytes.fromhex('48 83 38 00 0f 95 c0')  # missing surface => skip GPU upload
+ui = signature('Sunrise/src/client/hooks/bootflow/ember_movie_ui.cpp', 'sig')
+assert ui == 0x132BD80
+target(0x132B890, 0x353, 0x1278FF0)  # native movie command is queued before either UI layer
+target(0x132B890, 0x3DF, ui)
+target(0x132B890, 0x40C, ui)
 for offset, expected in [(0x96, 0x4294D0), (0xD1, 0x423EF0), (0x14C, 0x4312D0), (0x157, 0x435AA0)]:
     target(load, offset, expected)
 for offset, expected in [(0x85, 0x42C650), (0x9F, 0x425310)]:
@@ -72,6 +83,9 @@ if len(sys.argv) > 2:
                           (0x80BCA000, 0x80808499), (0x80BCA002, 0x80808499),
                           (0x80B9EB33, 0x80809A88), (0x80B9EB34, 0x80809A88),
                           (0x80BCA032, 0x80806B8F),
+                          (0x80BCA022, 0x80806B91), (0x80BCA025, 0x80806B91),
+                          (0x80BCA028, 0x80806B91), (0x80BCA02B, 0x80806B91),
+                          (0x80BCA02E, 0x80806B91), (0x80BCA031, 0x80806B91),
                           (0x80BCA034, 0xFFFFFFFF), (0x80C7C000, 0xFFFFFFFF)]:
         # Tag package IDs include the bank: 80BCAxxx belongs to package 01E5.
         package = (tag >> 13) & 0x3FF
@@ -85,7 +99,16 @@ if len(sys.argv) > 2:
         assert type_info & 0xF000 != 0x2000, (hex(tag), hex(type_info))
         if expected == 0xFFFFFFFF:
             assert (type_info & 0x30000) == 0x10000 and (type_info >> 6) & 0x3F == 24
-    print('Installed movie metadata, compact video streams and kind-1 package types verified.')
+    print('Installed movie metadata, compact streams, six surface containers and kind-1 package types verified.')
+    tags = repo / 'build/first-encounter-audit/tags'
+    catalog = (tags / '80BCA032.bin').read_bytes()
+    for i, (container, definition) in enumerate(zip(
+        [0x80BCA022,0x80BCA025,0x80BCA028,0x80BCA02B,0x80BCA02E,0x80BCA031],
+        [0x80BCA021,0x80BCA024,0x80BCA026,0x80BCA029,0x80BCA02C,0x80BCA02F])):
+        assert struct.unpack_from('<I', catalog, 0x38 + 16*i)[0] == container
+        assert (tags / f'{container:08X}.bin').read_bytes() == struct.pack('<I', definition)
+        assert (tags / f'{definition:08X}.bin').read_bytes()[0] == i + 1
+    print('Six authored Y/U/V definitions map to the renderer slots 1..6.')
 attach = signature('Sunrise/src/client/hooks/bootflow/ember_sunburn.cpp', 'sig')
 assert attach == 0x9F2760
 # Native attach dereferences the runtime relative template, then passes it to the child factory.

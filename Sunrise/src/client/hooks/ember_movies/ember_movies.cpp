@@ -19,6 +19,7 @@ using Busy = bool(__fastcall*)(void*);
 struct Api { Accessor manager{}, decoder{}; Operation acquire{}, release{}, stop{}; Play play{}; Busy busy{}; } api;
 SRWLOCK lock = SRWLOCK_INIT;
 std::atomic_bool watching{false}, frameReady{false};
+std::atomic_bool presentation{false}, uiReady{false};
 Owner owner{};
 std::uint64_t key{}, began{};
 unsigned movie{};
@@ -72,6 +73,7 @@ template<class T> T field(void* pointer, unsigned offset) {
     T value{}; std::memcpy(&value, static_cast<std::byte*>(pointer)+offset, sizeof(value)); return value;
 }
 void release() {
+    presentation.store(false);
     if (acquired) { api.release(api.manager()); acquired=false; }
 }
 void fail(const char* reason) {
@@ -109,6 +111,8 @@ Status status(Owner next, unsigned index) noexcept {
     ReleaseSRWLockShared(&lock); return value;
 }
 bool active() noexcept { return watching.load(); }
+bool presenting() noexcept { return presentation.load(); }
+void ui_ready(bool ready) noexcept { uiReady.store(ready); }
 void frame_ready(bool ready) noexcept { frameReady.store(ready); }
 void poll(std::int32_t region, std::int32_t step) noexcept {
     if (inPoll) return;
@@ -122,6 +126,7 @@ void poll(std::int32_t region, std::int32_t step) noexcept {
     const auto now=GetTickCount64();
     if (region!=0 || step!=38) { fail("world_changed"); ReleaseSRWLockExclusive(&lock); return; }
     if (!frameReady.load()) { fail("frame_observer_unavailable"); ReleaseSRWLockExclusive(&lock); return; }
+    if (!uiReady.load()) { fail("movie_ui_unavailable"); ReleaseSRWLockExclusive(&lock); return; }
     if (!resolve()) { state=Status::failed; watching.store(false); ReleaseSRWLockExclusive(&lock); return; }
     auto* manager=api.manager();
     auto* decoder=api.decoder();
@@ -139,11 +144,14 @@ void poll(std::int32_t region, std::int32_t step) noexcept {
         }
         if (api.busy(manager)) {
             if (now-began>30000) fail("player_busy_timeout");
+        } else if (!resource.prepare_surfaces()) {
+            if (now-began>30000) fail("surface_registration_timeout");
         } else {
             // Same acquire/play pairing as the authored pre-rendered component.
             report("resource_ready");
             decoderOwner=decoder; api.acquire(manager); acquired=true;
             api.play(manager,assets[movie-1],0); state=Status::preparing; began=now;
+            presentation.store(true);
             report("submitted");
         }
         ReleaseSRWLockExclusive(&lock); return;
