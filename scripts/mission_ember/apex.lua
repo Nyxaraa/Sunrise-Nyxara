@@ -66,8 +66,12 @@ return function(m, a, ending)
     -- `ring_device_sense` in the log carries their native position and power.
     local structure_objects = {"SPECOPS_APEX_RING_CORE_OBJECT", "SPECOPS_APEX_RING_RING_OBJECT"}
     local beam_devices = {"SPECOPS_APEX_RING_LASER_DEVICE", "SPECOPS_APEX_RING_RING_DEVICE"}
-    local function beam_drive(c, driven, snap)
-        for _, name in ipairs(beam_devices) do a.device(c, name, driven, snap) end
+    -- These carry the same inverted pose as the landing and clamshell bridges, where the
+    -- authored position-0 lane is the driven end rather than the resting one. Confirmed in game:
+    -- the resting drive rendered as the surge and the driven end as the weapon's normal state,
+    -- so resting is `open` and the surge drives to `close`.
+    local function beam_pose(c, surging, snap)
+        for _, name in ipairs(beam_devices) do a.device(c, name, not surging, snap) end
     end
     -- Firing: the beam is present and both of its devices are powered.
     local function beam(c, s, firing, snap)
@@ -79,9 +83,9 @@ return function(m, a, ending)
             lane(c, name, firing and "power_on" or "power_off", snap)
         end
         if not firing then
-            -- Installed but dark: the drive returns to its baseline with the power.
+            -- Installed but dark: the drive returns to its resting pose with the power.
             c:set_variable("ember.apex.surge", false)
-            beam_drive(c, false, snap)
+            beam_pose(c, false, snap)
         end
     end
     -- The surge is the authored drive of a firing beam, so it never removes it. If these
@@ -89,7 +93,7 @@ return function(m, a, ending)
     local function beam_surge(c, s, on)
         if s:variable("ember.apex.beam") ~= true or s:variable("ember.apex.surge") == on then return end
         c:set_variable("ember.apex.surge", on)
-        beam_drive(c, on, false)
+        beam_pose(c, on, false)
     end
     -- `REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON` and `FOUNDRY_THERMAL_DOT_HOP_ON` both reference
     -- effect resource 80C1D9E0 -- the burn already working in the Foundry. The hot-pipe and
@@ -184,7 +188,7 @@ return function(m, a, ending)
         -- its baseline here so every later surge is an animated transition, not a jump.
         beam(c, s, true, true)
         c:set_variable("ember.apex.surge", false)
-        beam_drive(c, false, true)
+        beam_pose(c, false, true)
     end
     local function start_reactor(c, s)
         if phase(s) >= 3 then return end

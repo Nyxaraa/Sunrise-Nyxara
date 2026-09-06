@@ -261,9 +261,11 @@ assert(vars['ember.apex.vent_step']=='warning' and timers['ember.apex.vents.1']=
 -- The weapon fires continuously through the fight; the exposure cycle must not blink it.
 -- The surge is the authored device drive of a beam that stays present and powered.
 assert(vars['ember.apex.beam']==true,'the weapon must keep firing across the cycle')
+-- Inverted pose, as on the landing and clamshell bridges: resting is open, the surge drives
+-- to close. The opposite mapping rendered the surge as the weapon's normal state.
 assert(vars['ember.apex.surge']==true,'the warning must drive the beam')
-assert(transition('SPECOPS_APEX_RING_LASER_DEVICE', true).transition=='open')
-assert(transition('SPECOPS_APEX_RING_RING_DEVICE', true).transition=='open')
+assert(transition('SPECOPS_APEX_RING_LASER_DEVICE', true).transition=='close')
+assert(transition('SPECOPS_APEX_RING_RING_DEVICE', true).transition=='close')
 assert(transition('REACTOR_CLAMSHELL_EAST_DOOR_A_DEVICE').transition=='close')
 timer('ember.apex.vents.')
 assert(timers['ember.apex.vents.1']==10000)
@@ -348,7 +350,8 @@ assert(escapeFilter=='aod_reactor_rail_top_object_filter','escape hazard must us
 -- ring objects would take the beam and its surrounding structure out of the world entirely.
 assert(vars['ember.apex.beam']==false,'the beam must stop firing after the deposit')
 assert(vars['ember.apex.surge']==false,'the drive must return to its baseline with the power')
-assert(transition('SPECOPS_APEX_RING_LASER_DEVICE', true).transition=='close')
+assert(transition('SPECOPS_APEX_RING_LASER_DEVICE', true).transition=='open',
+    'a dark weapon rests in its normal pose, not the surge')
 local poweredOff=false
 for _,row in ipairs(calls)do
     if row[1]=='transition' and row[2]=='specops_apex_ring.laser_device'
