@@ -1,6 +1,7 @@
 #include "ember_movies.h"
 #include "playback_rules.h"
 #include "resources.h"
+#include "orbit_return.h"
 #include <Windows.h>
 #include <array>
 #include <atomic>
@@ -21,6 +22,7 @@ SRWLOCK lock = SRWLOCK_INIT;
 std::atomic_bool watching{false}, frameReady{false};
 std::atomic_bool presentation{false}, uiReady{false};
 Owner owner{};
+Owner firstCompleted{};
 std::uint64_t key{}, began{};
 unsigned movie{};
 Status state{};
@@ -98,6 +100,7 @@ bool request(Owner next, std::uint64_t nextKey, unsigned index, bool stop) noexc
     } else if (next==owner && nextKey==key && index==movie) {
         accepted=state!=Status::failed;
     } else if (!acquired && !resource.held() && state!=Status::queued && state!=Status::preparing && state!=Status::playing) {
+        if (index==1 || !(next==owner)) firstCompleted={};
         owner=next; key=nextKey; movie=index; state=Status::queued; began=GetTickCount64();
         stopRequested=false; playback={}; decoderOwner=nullptr; lastDecoderState=-1;
         escapeHeld=(GetAsyncKeyState(VK_ESCAPE)&0x8000)!=0;
@@ -110,7 +113,7 @@ Status status(Owner next, unsigned index) noexcept {
     auto value=next==owner && index==movie ? state : Status::absent;
     ReleaseSRWLockShared(&lock); return value;
 }
-bool active() noexcept { return watching.load(); }
+bool active() noexcept { return watching.load() || orbit_return::active(); }
 bool presenting() noexcept { return presentation.load(); }
 void ui_ready(bool ready) noexcept { uiReady.store(ready); }
 void frame_ready(bool ready) noexcept { frameReady.store(ready); }
@@ -174,7 +177,11 @@ void poll(std::int32_t region, std::int32_t step) noexcept {
     if (stopRequested && asset==assets[movie-1]) {
         api.stop(manager); stopRequested=false; report("stop_requested",decoderState);
     }
-    if (observed==Status::complete) { release(); state=observed; watching.store(!resource.release()); report("complete",decoderState); }
+    if (observed==Status::complete) {
+        release(); state=observed; watching.store(!resource.release()); report("complete",decoderState);
+        if (movie==1) firstCompleted=owner;
+        else if (firstCompleted==owner) orbit_return::arm(owner);
+    }
     else if (observed==Status::failed) fail("decoder_failed_or_replaced");
     else state=observed;
     if ((state==Status::preparing && now-began>30000)

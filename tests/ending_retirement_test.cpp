@@ -4,6 +4,7 @@
 #include "../Sunrise/src/client/hooks/ember_movies/sunburn_rules.h"
 #include "../Sunrise/src/client/hooks/ember_movies/playback_rules.h"
 #include "../Sunrise/src/client/hooks/ember_movies/surface_rules.h"
+#include "../Sunrise/src/client/hooks/ember_movies/orbit_rules.h"
 #include "../Sunrise/src/client/hooks/mission_retirement/mission_retirement.h"
 #include "../Sunrise/src/middleware/bap/activity_message/roster_presence.h"
 #include "../Sunrise/src/middleware/encoding/bit_reader.h"
@@ -23,6 +24,45 @@ static void expect(Reader& reader, unsigned width, std::uint64_t expected) {
 }
 int main() {
     namespace movies=sunrise::client::hooks::ember_movies;
+    movies::OrbitReturn orbit;
+    movies::OrbitObservation inApex{true,true,false,false,true,0,38,38,true};
+    using OA=movies::OrbitAction;
+    assert(orbit.observe(1000,inApex)==OA::none); // Playing movies cannot arm return.
+    orbit.arm(1000);
+    assert(orbit.observe(9000,inApex)==OA::none); // Host must actually publish completion.
+    inApex.complete=true;
+    assert(orbit.observe(10000,inApex)==OA::none);
+    assert(orbit.observe(17999,inApex)==OA::none); // Full banner window.
+    assert(orbit.observe(18000,inApex)==OA::select);
+    assert(orbit.observe(18001,inApex)==OA::none); // No duplicate commit.
+    auto inOrbit=inApex; inOrbit.emberSelected=false;inOrbit.orbitSelected=true;
+    inOrbit.exactOwner=false; // Committing orbit may already retire the old ActivityClient link.
+    assert(orbit.observe(18002,inOrbit)==OA::cleanup); // Requires destination readback.
+    assert(orbit.observe(18003,inOrbit)==OA::none); // No repeated cleanup request.
+    movies::OrbitObservation betweenWorlds{};betweenWorlds.step=28;
+    assert(orbit.observe(18004,betweenWorlds)==OA::none);
+    assert(orbit.active());
+    inOrbit.step=29;
+    assert(orbit.observe(18100,inOrbit)==OA::orbitSetup);
+    assert(!orbit.active() && orbit.observe(20000,inApex)==OA::none);
+    orbit.arm(30000);
+    auto stale=inApex;stale.exactOwner=false;
+    assert(orbit.observe(31000,stale)==OA::canceled);
+    orbit.arm(40000);
+    auto departed=inApex;departed.step=28;
+    assert(orbit.observe(41000,departed)==OA::canceled);
+    orbit.arm(50000);inApex.complete=false;
+    assert(orbit.observe(140001,inApex)==OA::timedOut);
+    orbit.arm(150000);inApex.complete=true;
+    assert(orbit.observe(150000,inApex)==OA::none);
+    assert(orbit.observe(158000,inApex)==OA::select);
+    assert(orbit.observe(158001,departed)==OA::none); // Native cleanup already began.
+    assert(orbit.observe(158100,inOrbit)==OA::orbitSetup);
+    orbit.arm(160000);
+    assert(orbit.observe(160000,inApex)==OA::none);
+    assert(orbit.observe(168000,inApex)==OA::select);
+    auto replaced=inOrbit;replaced.step=38;replaced.sameWorld=false;
+    assert(orbit.observe(168001,replaced)==OA::canceled);
     movies::SurfaceRegistrations surfaces{};
     for (unsigned i=1;i<=6;++i) surfaces[i].entries[0]=movies::movie_surface_definitions[i-1];
     // Live black-video capture: old candidate handles remain, but no container

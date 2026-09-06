@@ -23,6 +23,24 @@ def target(base, offset, expected):
     assert value == expected, (hex(base), hex(offset), hex(value), hex(expected))
 
 path = 'Sunrise/src/client/hooks/ember_movies/resources.cpp'
+orbit = 'Sunrise/src/client/hooks/ember_movies/orbit_return.cpp'
+return_path = signature(orbit, 'returnSig')
+assert return_path == 0xE19D50
+for offset, expected in [(0x1E,0xB48550),(0x2F,0xE35820),(0x5B,0xBF84B0),
+                         (0x65,0xC06330),(0x6A,0xBF95D0),(0x7E,0xBFB1F0),(0x86,0xBF97D0)]:
+    target(return_path,offset,expected)
+assert signature(orbit,'activitySig') == 0xC294B0
+assert signature(orbit,'lifetimeSig') == 0x4FFD10
+assert signature(orbit,'stepSig') == 0xE1B4D0
+target(0xE1D619,0,0xE35820)
+target(0xE1D619,0x15,0xE1B4D0)
+assert data[0xE1D626:0xE1D62B] == bytes.fromhex('ba 1c 00 00 00')
+# Native UI return selection: initialize, construct default orbit, clear/select/commit.
+for site, expected in [(0x157727F,0xBF84B0),(0x157728C,0xC06330),
+                       (0x1577291,0xBF95D0),(0x15772A8,0xBFB1F0),(0x15772B4,0xBF97D0)]:
+    target(site,0,expected)
+assert data[0xBF84E4:0xBF84EB] == bytes.fromhex('c6 83 18 01 00 00 00')
+print('Native orbit selection/commit, lifetime reader and deferred cleanup ABI verified.')
 load = signature(path, 'loadSig')
 end = signature(path, 'endSig')
 assert load == 0xB46E10 and end == 0xB44020
