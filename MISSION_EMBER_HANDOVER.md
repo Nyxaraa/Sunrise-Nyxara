@@ -6,11 +6,11 @@ Prepared 6 September 2026 for Millie and the next agent working on Sunrise. Read
 
 1AU is scripted from the opening cinematic through the escape and two ending movies. The user has repeatedly played the route and described it as almost complete. The latest investigation isolated the ending presentation problem after resolving native playback, texture residency, movie sequencing and return to orbit.
 
-**The next action is a visual test of the installed gameplay-HUD filter.** The user tested `88a9632` and reported reticle, ammunition, abilities, radar and mission objectives still rendering over the movie. The log confirmed `requested=43 selected=33 applied=33` at t=766752 and STM playing at t=767072. Native HUD ownership is separate from the cinematic overlay window; see section 17. Do not start by rewriting mission progression or the movie loader.
+**The user confirmed the installed HUD correction (`3fea388`) works perfectly.** Preserve this tested baseline. The following describes the preceding failure and its correction. The user tested `88a9632` and reported reticle, ammunition, abilities, radar and mission objectives still rendering over the movie. The log confirmed `requested=43 selected=33 applied=33` at t=766752 and STM playing at t=767072. Native HUD ownership is separate from the cinematic overlay window; see section 17. Do not start by rewriting mission progression or the movie loader.
 
 The earlier build, `41e2728`, played both movies through the native decoder. Movie one was skipped with Escape; movie two reached its natural end. The game accepted completion, selected orbit and reached native `orbit_setup`. However, a loading window covered the video. `88a9632` changed the selected UI state from `0x22` (`loading`) to `0x21` (`cinematic_overlay`). That mapping is verified through the native state-to-window tables, rather than inferred from the broad cinematic category. The subsequent HUD filter keeps that correction and excludes only the native role-18 HUD window's drawing during owned movie presentation. It is built, ABI-verified and installed. The first installation attempt stopped before any game writes because Destiny was running; installation succeeded after a subsequent process check confirmed the game had closed.
 
-Installed HUD-correction DLL SHA-256: `c2e84a350012ffd11eaeb39ef39bcb385b986c42dac5c0386ac0d0325f7fcd5b`. It still requires an in-game HUD/subtitle/menu test. The guarded installer verified the DLL and all 17 mission scripts against their source hashes.
+Installed HUD-correction DLL SHA-256: `c2e84a350012ffd11eaeb39ef39bcb385b986c42dac5c0386ac0d0325f7fcd5b`. The user confirmed the HUD fix works in game; no separate menu/skip test matrix was reported. The guarded installer verified the DLL and all 17 mission scripts against their source hashes.
 
 Latest installed DLL SHA-256:
 
@@ -29,7 +29,7 @@ Installation manifest: `build/ember-installation.json`. Last backup: `build/embe
 | Movie picture | User explicitly confirmed visible first-movie picture on `15e507e`. Subsequent captures show valid video surfaces for both movies. |
 | Movie sequencing | `41e2728` produced first completion, second request, second playing and second natural completion. |
 | Orbit handoff | `41e2728` accepted completion, queued orbit, requested native cleanup and reached orbit setup. |
-| Gameplay HUD, subtitles and menus | `88a9632` selects state 33, but the user reports gameplay HUD over the movie. The new role-18 drawing filter is installed and awaiting visual testing. Subtitle/menu behavior still needs visual confirmation. |
+| Gameplay HUD, subtitles and menus | `88a9632` selects state 33, but the user reports gameplay HUD over the movie. The user confirmed the installed role-18 HUD fix (`3fea388`) works perfectly. Individual subtitle/menu/skip combinations were not separately reported. |
 | Remaining finale polish | Beam sound/screen effect, escape scorch, explosions, extraction-ship path and menu/skip behavior need targeted confirmation. Earlier source changes are not proof of visual or audio success. |
 | Fireteam wipe and respawn presentation | Implemented and covered by tests; a multiplayer acceptance run is still valuable. Do not imply solo observations prove co-op correctness. |
 
@@ -431,7 +431,7 @@ The user briefly opened menus for a read-only capture on the old build, but that
 
 The next `88a9632` test left the gameplay HUD over the video. Native `1316FC0` independently creates `hud` (name hash `268AB804`) or an equipment-specific override, then assigns semantic role 18 through `13165C0`. That setter writes window offset `310`; it is distinct from the state enum at `410`. The current `bootflow/ember_movie_hud.cpp` filter checks this role only at the verified root-window draw caller `132C1BD` → `13D9060`, returning before the entire HUD subtree, including cached child commands, is submitted. Recursive child widgets use the same callee but do not have a full window allocation, so the exact return-address guard must precede the role read. Do not remove that guard.
 
-Both `132BD80` layers and every other window role continue drawing. Native updates/input/visibility and user preferences remain unchanged. The filter is active only while the ending bridge owns presentation, spanning the movie handoff and ending on final completion/failure. It reports `hud_filter_attached` at startup and `hud_draw_suppressed` with the actual window identity on its first suppression. The native verifier checks the root construction, caller/callee and role setter; visual validation is pending. This is narrower than the old blanket layer suppression. Latest log and disassembly evidence: `build/first-encounter-audit/b9880dc-hud/`.
+Both `132BD80` layers and every other window role continue drawing. Native updates/input/visibility and user preferences remain unchanged. The filter is active only while the ending bridge owns presentation, spanning the movie handoff and ending on final completion/failure. It reports `hud_filter_attached` at startup and `hud_draw_suppressed` with the actual window identity on its first suppression. The native verifier checks the root construction, caller/callee and role setter; the user confirmed the HUD fix works in game. This is narrower than the old blanket layer suppression. Latest log and disassembly evidence: `build/first-encounter-audit/b9880dc-hud/`.
 
 A remaining interaction concern to test: the direct player uses a foreground Escape edge to call native stop. Native in-engine cutscenes have a type-6 skip incident; direct movies do not. Verify that closing inventory/settings does not accidentally skip the movie. If a change is needed, base it on native menu/input ownership rather than simply consuming all Escape presses.
 
@@ -510,7 +510,7 @@ python3 tools/install_mission_ember.py --game /home/millie/Games/Sunrise/bin/x64
 
 For the DLL carried in the archive, add `--dll _snapshot/runtime/steam_api64.dll`. It expects Linux `/proc` to enforce the closed-game guard, backs up the 18 destinations, verifies hashes, uses atomic replacement per file and never launches/stops the game. It does not install SDK/settings/save; the snapshot's matching SDK is separately supplied for a new environment. In this managed workspace, writing to the game directory requires tool escalation, but installation authorization already exists.
 
-## 21. Next test and debugging decision tree
+## 21. Regression checks and debugging decision tree
 
 1. Have the user manually launch the installed HUD-filter DLL; its SHA-256 is in section 1. Confirm `frame_attached`, `presentation_attached` and `hud_filter_attached` in the new log.
 2. Reach the final escape trigger normally. Confirm one movie-1 request. Preserve the current trigger and progression if it already fires.
@@ -543,4 +543,4 @@ Keep read-only evidence scoped to the relevant process/module and never recover 
 - Runtime DLL, matching generated SDK and selected diagnostic data are supplemental branch-archive assets with checksums.
 - Archive verification and the exact final commit are recorded in the delivery manifest.
 - No game launch, stop, new gameplay change or settings/save replacement is part of packaging.
-- First unresolved acceptance item is the role-18 HUD filter, subtitles and menu behavior during both ending movies.
+- The user confirmed the role-18 HUD correction works perfectly on `3fea388`. Preserve it; use section 21 for regression checks, not as a claim that every menu/skip combination was exercised.
