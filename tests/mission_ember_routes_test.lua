@@ -258,6 +258,9 @@ timer('ember.apex.explain.');assert(vars['ember.r.cue.41'] and vars['ember.music
 assert(timers['ember.apex.vents.1']==14000)
 timer('ember.apex.vents.') -- Surge precedes any target exposure.
 assert(vars['ember.apex.vent_step']=='warning' and timers['ember.apex.vents.1']==6000)
+-- The baseline is a running weapon, not a dark one, so the surge is a drive change.
+assert(vars['ember.apex.beam']==2,'warning must surge the beam')
+assert(transition('SPECOPS_APEX_RING_LASER_DEVICE', true).transition=='open')
 assert(transition('SPECOPS_APEX_RING_LASER_DEVICE').transition=='power_on')
 assert(transition('REACTOR_CLAMSHELL_EAST_DOOR_A_DEVICE').transition=='close')
 timer('ember.apex.vents.')
@@ -339,8 +342,15 @@ for i=#calls,1,-1 do
     if calls[i][1]=='set_object_filter' then escapeFilter=calls[i][2];break end
 end
 assert(escapeFilter=='aod_reactor_rail_top_object_filter','escape hazard must use the rail top')
--- The weapon is dead once the cell is in: the beam goes down and stays down.
-assert(vars['ember.apex.beam']==false,'beam must shut down after the deposit')
+-- The weapon is dead once the cell is in: powered off, but still installed. Deactivating the
+-- ring objects would take the beam and its surrounding structure out of the world entirely.
+assert(vars['ember.apex.beam']==0,'beam must be powered off after the deposit')
+local ringRemoved=false
+for _,row in ipairs(calls)do
+    if row[1]=='set_object_active' and row[3] and row[3].active==false
+        and tostring(row[2]):find('specops_apex_ring',1,true) then ringRemoved=true end
+end
+assert(not ringRemoved,'the weapon structure must never be deactivated')
 -- Each authored explosion set is armed so it can fire as the player reaches it.
 for _,set in ipairs({'A','B','C','D'})do
     local name='ember_apex_explosion_sequence_prefab.explosion_set_'..set:lower()..'_player_trigger'
@@ -352,7 +362,7 @@ for _,set in ipairs({'A','B','C','D'})do
 end
 reset_check('escape',function()
     assert(vars['ember.apex.phase']==6 and vars['ember.apex.dead.COFFIN'])
-    assert(vars['ember.apex.beam']==false,'escape restart must leave the beam off')
+    assert(vars['ember.apex.beam']==0,'escape restart must leave the beam powered off')
 end)
 trigger('APEX_DIRECTIVE_REACTOR_RAILS_ESCAPE_PLAYER_TRIGGER')
 -- Regions 0, 1 and 2 are sibling states of one slice set, so the client never reports a new

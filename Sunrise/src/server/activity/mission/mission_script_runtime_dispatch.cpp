@@ -5,6 +5,7 @@
 #include <span>
 #include <string_view>
 
+#include "../../../middleware/content/packages/tables/scenario_reader.h"
 #include "../../../state/activity/membership/activity_membership_query.h"
 #include "../../../state/build_data/runtime.h"
 #include "../../../state/build_data/spawn_sets/spawn_set_catalog.h"
@@ -214,12 +215,20 @@ void arm_state_region_teleport(RuntimeInstance& instance,
     }
     // A region is `sliceSetIndex + stateOrdinal`, so a sibling state sits in the slice set the
     // client already holds and there is nothing to transition to. Arming anyway hands the client
-    // a slice-set index that is not a slice set (region 1 with slice set 0's name hash), and it
-    // starts a teleportation it can never finish. Clear the arm and let the roster publish the
-    // new state's groups into the world that is already standing.
-    const std::int32_t heldSliceSet =
-        membership::reported_slice_set(instance.view.binding.sessionId);
-    if (heldSliceSet >= 0 && heldSliceSet == static_cast<std::int32_t>(plan.sliceSetIndex)) {
+    // a slice-set index that is not a slice set (region 1 carrying slice set 0's name hash), and
+    // it starts a teleportation it can never finish: the client logs the transition and never
+    // reaches "Finished synchronizing". Clear the arm and let the roster publish the new state's
+    // groups into the world that is already standing.
+    //
+    // The slice set the client holds is derived from the region it reports, not from
+    // `reported_slice_set()`: that reads the newest D6 host teleport, which still named the
+    // mission's opening move to region 64 long after later areas were reached on z-legs.
+    // Slice-set indices are multiples of the factor, so a region's own slice set is that region
+    // rounded down to it.
+    const auto factor = middleware::content::packages::tables::kSliceSetIndexFactor;
+    if (reported >= 0
+        && static_cast<std::uint32_t>(reported) - (static_cast<std::uint32_t>(reported) % factor)
+               == plan.sliceSetIndex) {
         static_cast<void>(membership::arm_host_teleport(
             instance.view.binding.sessionId, membership::kAbsentSliceSetIndex, 0));
         log_line(core::log::Level::info, &instance, "state_region", "teleport_not_required");

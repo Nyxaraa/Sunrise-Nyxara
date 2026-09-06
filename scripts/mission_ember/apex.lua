@@ -50,24 +50,27 @@ return function(m, a, ending)
         end
         a.device(c, "REACTOR_SHIELD_DEVICE", open, snap)
     end
-    -- The three placed ring objects carry the beam's own authored effect graphs; the two
-    -- devices are its mechanical lanes. Holding all three objects active for the whole fight
-    -- is what made the beam look constant, so the surge is those authored objects coming up
-    -- with their devices at the warning and going dark again at recovery.
-    -- The core is the weapon's own body and stays present; the laser and ring are what
-    -- brighten, so only those two are modulated.
-    local ring_objects = {"SPECOPS_APEX_RING_LASER_OBJECT", "SPECOPS_APEX_RING_RING_OBJECT"}
-    local function beam(c, s, active, snap)
+    -- The three placed ring objects ARE the weapon's structure and stay active for the whole
+    -- mission: deactivating them removes the beam and everything built around it, rather than
+    -- dimming it. The two devices are its lanes, so the beam has three authored states:
+    --   off   -- present but dead: powered off, the pose the weapon holds once the cell is in.
+    --   idle  -- powered and running, the beam's baseline between exposures.
+    --   surge -- powered and driven open, the intensification before the shutters expose a target.
+    local ring_objects = {"SPECOPS_APEX_RING_LASER_OBJECT", "SPECOPS_APEX_RING_CORE_OBJECT",
+        "SPECOPS_APEX_RING_RING_OBJECT"}
+    local BEAM_OFF, BEAM_IDLE, BEAM_SURGE = 0, 1, 2
+    local function beam(c, s, mode, snap)
         -- Idempotent: the cycle re-asserts the same pose every step, and each redundant
         -- publication would spend intents from the callback's native budget.
-        if s:variable("ember.apex.beam") == active then return end
-        c:set_variable("ember.apex.beam", active)
-        a.objects(c, ring_objects, active)
-        a.device(c, "SPECOPS_APEX_RING_LASER_DEVICE", active, snap)
-        a.device(c, "SPECOPS_APEX_RING_RING_DEVICE", active, snap)
-        -- FX power is independent of mechanical position; pulse both authored graphs.
-        lane(c, "SPECOPS_APEX_RING_LASER_DEVICE", active and "power_on" or "power_off", snap)
-        lane(c, "SPECOPS_APEX_RING_RING_DEVICE", active and "power_on" or "power_off", snap)
+        if s:variable("ember.apex.beam") == mode then return end
+        c:set_variable("ember.apex.beam", mode)
+        local powered = mode ~= BEAM_OFF
+        for _, name in ipairs({"SPECOPS_APEX_RING_LASER_DEVICE", "SPECOPS_APEX_RING_RING_DEVICE"}) do
+            a.device(c, name, mode == BEAM_SURGE, snap)
+            -- FX power is independent of mechanical position, so the weapon can stay
+            -- installed and lit, installed and dark, or driven wide open.
+            lane(c, name, powered and "power_on" or "power_off", snap)
+        end
     end
     -- `REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON` and `FOUNDRY_THERMAL_DOT_HOP_ON` both reference
     -- effect resource 80C1D9E0 -- the burn already working in the Foundry. The hot-pipe and
@@ -78,10 +81,16 @@ return function(m, a, ending)
     local function rail_filter(c) return {players = true, inside = a.slot(c, "SLOT_019E")} end
     local function hazards(c, s, mode)
         if mode == "climb" then
-            -- The five narrow authored pipe volumes on the way up to the deposit. Slot 7 is a
-            -- broad kill volume well below the walkable route and is deliberately not a pipe.
+            -- The five narrow authored pipe volumes on the way up to the deposit; their heights
+            -- track the climb the mother-brain dialogue volumes walk through, from z~172 at
+            -- x=-395 up to z~186 at x=-460. Slot 7 is a broad kill volume well below the
+            -- walkable route and is deliberately not a pipe.
+            --
+            -- The filter is the one that lives in the same object as those volumes. Pointing the
+            -- apex-object filter at globals-object volumes published cleanly but attached
+            -- nothing; this is the pairing that demonstrably delivered contact damage before.
             a.effect(c, s, "REACTOR_COFFIN_INTERIOR_THERMAL_HOP_ON",
-                "REACTOR_MOTHER_BRAIN_HOT_PIPES_OBJECT_FILTER_80B3C21C",
+                "REACTOR_MOTHER_BRAIN_HOT_PIPES_OBJECT_FILTER_80B3C09F",
                 {players = true, inside_any = {
                     a.slot(c, "REACTOR_MOTHER_BRAIN_HOT_PIPES_02_TRIGGER_VOLUME"),
                     a.slot(c, "REACTOR_MOTHER_BRAIN_HOT_PIPES_03_TRIGGER_VOLUME"),
@@ -123,14 +132,14 @@ return function(m, a, ending)
         c:set_variable("ember.apex.vent_step", step)
         c:set_variable("ember.apex.vents_open", step == "open")
         if step == "warning" then
-            beam(c, s, true)
+            beam(c, s, BEAM_SURGE)
             if phase(s) == 3 then
                 for _, side in ipairs(sides) do
                     if not dead(s, side) then a.slot(c, "REACTOR_CLAMSHELL_" .. side .. "_ALARM_SEQUENCE"):play_sequence{} end
                 end
             else a.slot(c, "REACTOR_COFFIN_ALARM_SEQUENCE"):play_sequence{} end
         else
-            if step == "closed" then beam(c, s, false, snap) end
+            if step == "closed" then beam(c, s, BEAM_IDLE, snap) end
             if phase(s) == 3 then
                 for _, side in ipairs(sides) do if not dead(s, side) then doors(c, side, step == "open", snap) end end
             elseif phase(s) == 4 then
@@ -152,7 +161,7 @@ return function(m, a, ending)
         lane(c, "MOTHER_BRAIN_DOOR_DEVICE", "lock")
         unlock(c, "SPECOPS_APEX_RING_LASER_DEVICE")
         unlock(c, "SPECOPS_APEX_RING_RING_DEVICE")
-        beam(c, s, false, true)
+        beam(c, s, BEAM_IDLE, true)
     end
     local function start_reactor(c, s)
         if phase(s) >= 3 then return end
@@ -178,10 +187,10 @@ return function(m, a, ending)
             a.device(c, "MOTHER_BRAIN_ENGINE_RIGHT_DEVICE", true)
             a.device(c, "REACTOR_GETAWAY_SHIP_DEVICE", true)
             a.objects(c, {"REACTOR_GETAWAY_SHIP_OBJECT", "SUNBURN_DAMAGE_OBJECT"}, true)
-            -- The weapon is dead once the cell is in: the beam shuts down and stays down,
-            -- including across an escape checkpoint restart. The previous code opened both
-            -- devices here, which left it running through the whole escape.
-            beam(c, s, false, true)
+            -- The weapon is dead once the cell is in: powered off but still installed, so
+            -- the beam and everything built around it stay in the world. The previous code
+            -- opened both devices here, which left it running through the whole escape.
+            beam(c, s, BEAM_OFF, true)
             c:cancel_timer(vent_timer(s))
             a.scene(c, "MOTHER_BRAIN_HOLE_EXPLOSION_SCENE")
             arm_escape(c)
@@ -199,8 +208,9 @@ return function(m, a, ending)
         a.device(c, "ACCESS_DOOR_OUTER_DEVICE", true)
         a.device(c, "SECURITY_DOOR_DEVICE", false, true)
         a.slot(c, "SECURITY_PLACED_INTERCEPTOR_OBJECT"):set_interactable_object{generation = 1}
-        -- Only the core is held on here; `beam()` owns the laser and ring so they can surge.
-        a.objects(c, {"SPECOPS_APEX_RING_CORE_OBJECT"}, true)
+        -- The weapon's structure is placed once and stays for the whole mission; `beam()`
+        -- only changes its power and drive.
+        a.objects(c, ring_objects, true)
         for _, side in ipairs(sides) do
             doors(c, side, false, true)
             a.device(c, "CLAMSHELL_PIPES_" .. side .. "_DEVICE", false, true)
@@ -279,8 +289,9 @@ return function(m, a, ending)
             set(c, 5)
             c:cancel_timer(vent_timer(s)); c:cancel_timer("ember.apex.explain." .. generation(s))
             coffin_doors(c, true)
-            -- The weapon keeps firing until the cell goes in, so the beam stays up here.
-            beam(c, s, true)
+            -- The weapon keeps running until the cell goes in; the exposure cycle is over,
+            -- so it settles back to its baseline rather than holding the surge.
+            beam(c, s, BEAM_IDLE)
             -- Arm the climb scorch now: the pipes burn while the cell is carried up.
             c:start_timer("ember.apex.hazards", 1)
             unlock(c, "MOTHER_BRAIN_DOOR_DEVICE")
@@ -363,7 +374,7 @@ return function(m, a, ending)
             set(c, 6)
             -- The weapon is already dead at this checkpoint: restoring it must leave the
             -- beam off and re-arm the escape's own progress triggers.
-            beam(c, s, false, true)
+            beam(c, s, BEAM_OFF, true)
             arm_escape(c)
             a.darkness(c, s, true)
         else
