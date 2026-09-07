@@ -1,3 +1,5 @@
+#include "../../../client/hooks/scripted_presentation/movies.h"
+#include "../../../client/hooks/scripted_presentation/orbit_return.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -279,6 +281,37 @@ void dispatch_intent(RuntimeInstance& instance, std::uint64_t now) noexcept {
     }
     begin_intent_attempt(instance, now);
     switch (intent.kind) {
+    case lua_vm::IntentKind::playPrerenderedMovie: {
+        if (instance.publicTarget
+            || !client::hooks::scripted_presentation::request(
+                {instance.view.binding.sessionId, instance.view.activityClientGeneration},
+                intent.requestKey,
+                intent.firstRow,
+                !intent.active,
+                intent.continueMovieSequence,
+                instance.activeRegion)) {
+            refuse_delivery(instance,
+                            "movie_refused",
+                            "native movie request unavailable",
+                            host::EffectOutcome::refused);
+        } else
+            static_cast<void>(complete_local_effect(instance, "movie_queued"));
+        return;
+    }
+    case lua_vm::IntentKind::returnToOrbit: {
+        if (instance.publicTarget || instance.activeRegion < 0
+            || !client::hooks::scripted_presentation::orbit_return::request(
+                {instance.view.binding.sessionId, instance.view.activityClientGeneration},
+                instance.activeRegion)) {
+            refuse_delivery(instance,
+                            "orbit_refused",
+                            "local activity unavailable",
+                            host::EffectOutcome::refused);
+        } else {
+            static_cast<void>(complete_local_effect(instance, "orbit_requested"));
+        }
+        return;
+    }
     case lua_vm::IntentKind::selectMissionState: {
         scenes::Snapshot selected{};
         const scenes::Status status =
