@@ -262,6 +262,11 @@ render_missions(const Source& source, const RenderIndex& index, std::vector<Sour
     append_hex(output, activity.selectedScenarioTag);
     output.append(",\n    matchmaking_config_tag = ");
     append_hex(output, activity.matchmakingConfigTag);
+    if (activity.bindingFlags & format::kActivityBindingHasLoadingUiFlag) {
+        output.append(",\n    authored_loading_ui_flag = ");
+        append_uint(output, (activity.bindingFlags & format::kActivityLoadingUiFlagMask)
+                            >> format::kActivityLoadingUiFlagShift);
+    }
     if (activity.scenarioIndex < missions.size()) {
         output.append(",\n    mission = require(\"missions.");
         output.append(missions[activity.scenarioIndex].stem);

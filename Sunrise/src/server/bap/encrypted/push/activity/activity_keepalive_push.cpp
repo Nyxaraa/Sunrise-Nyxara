@@ -10,6 +10,7 @@
 #include "../../../../../middleware/bap/activity_message/activity_replication_epoch_encoder.h"
 #include "../../../../../middleware/secure_channel/runtime.h"
 #include "../../../../../state/activity/definition.h"
+#include "../../../../../state/activity/presentation/runtime.h"
 #include "../../../../../state/activity/membership/activity_membership_query.h"
 #include "../../../../../state/activity/runtime.h"
 #include "../../../../../state/runtime/runtime.h"
@@ -67,6 +68,14 @@ void drive_cinematic_hold(Session& session, std::uint64_t now) noexcept {
                          core::log::Level::info,
                          "ev=queuez stage=cinematic_hold result=release");
     }
+}
+
+void drive_script_launch_mask(Session& session, bool active) noexcept {
+    namespace presentation = state::activity::presentation;
+    presentation::observe_launch(
+        {session.activity.session.sessionId, session.activity.bindingGeneration},
+        active && !core::settings::get().server.gameplay.holdLaunchCinematic,
+        active && client_in_world(session, nullptr));
 }
 
 /**
@@ -211,6 +220,7 @@ bool consume_activity_keepalive(Session& session,
                         && session.activityJoinGeneration == session.activity.bindingGeneration
                         && state::activity::binding_matches(session.activity.session)
                         && state::activity::binding_matches(session.activity.source);
+    drive_script_launch_mask(session, active);
     if (active) {
         static_cast<void>(authority_reset::expire(
             session.activityAuthorityReset, session.activity.bindingGeneration, now));

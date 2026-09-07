@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -38,6 +40,7 @@ enum class Kind : std::uint8_t {
     program,
     /** Combatant field .7: a 4-bit squad count, one ClientRef each, then a 31-bit revision. */
     manifest,
+    channels,
 };
 
 /** One root field: whether a presence bit precedes it, and how wide it is. */
@@ -79,7 +82,7 @@ inline constexpr std::array<FieldRule, kCombatantFieldCount> kCombatantRules{{
     {Kind::fixed, false, 3},   // .2 marker
     {Kind::fixed, false, 1},   // .3 enabled
     {Kind::refused, true, 0},  // .4
-    {Kind::refused, true, 0},  // .5
+    {Kind::channels, true, 0}, // .5
     {Kind::program, true, 0},  // .6
     {Kind::manifest, true, 0}, // .7
 }};
@@ -146,6 +149,25 @@ struct Layout final {
            && reader.skip(fields::kClientRefBits * count + fields::kCounterWidth);
 }
 
+/** Reads the bounded actor-control block before retaining it alongside movement and delivery. */
+[[nodiscard]] inline bool skip_channels(encoding::bits::Reader& reader) noexcept {
+    std::uint64_t revision{}, count{};
+    if (!reader.read(31, revision) || revision == 0 || !reader.skip(12)
+        || !reader.read(3, count) || count > scriptable_auth::kType2TemperamentCapacity
+        || !reader.skip(count * 32 + fields::kClientRefBits + 32)
+        || !reader.read(5, count) || count > scriptable_auth::kType2ChannelCapacity) return false;
+    std::array<std::uint32_t, scriptable_auth::kType2ChannelCapacity> names{};
+    for (std::size_t i = 0; i < count; ++i) {
+        std::uint64_t name{}, value{};
+        if (!reader.read(32, name) || !reader.read(32, value)
+            || !std::isfinite(std::bit_cast<float>(static_cast<std::uint32_t>(value)))) return false;
+        for (std::size_t j = 0; j < i; ++j)
+            if (names[j] == name) return false;
+        names[i] = static_cast<std::uint32_t>(name);
+    }
+    return true;
+}
+
 /**
  * Locates every root field of one body.
  * @param bits Meaningful bit count of the body.
@@ -186,6 +208,9 @@ struct Layout final {
                 break;
             case Kind::program:
                 skipped = skip_program(reader);
+                break;
+            case Kind::channels:
+                skipped = skip_channels(reader);
                 break;
             case Kind::manifest:
                 skipped = skip_manifest(reader);

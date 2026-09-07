@@ -9,8 +9,8 @@
 #include <limits>
 #include <string_view>
 
-#include "../../../client/sdk/presentation/config.h"
-#include "../../../client/sdk/presentation/config_rules.h"
+#include "../../../state/activity/presentation/config.h"
+#include "../../../state/activity/presentation/config_rules.h"
 
 namespace sunrise::server::activity::mission::lua_vm::detail {
 namespace {
@@ -35,12 +35,6 @@ std::uint32_t integer(lua_State* state, int table, const char* name, bool zero =
         luaL_error(state, "presentation.%s is outside its unsigned range", name);
     lua_pop(state, 1);
     return static_cast<std::uint32_t>(value);
-}
-std::int32_t region(lua_State* state, int table) {
-    const auto value = integer(state, table, "region", true);
-    if (value > static_cast<std::uint32_t>(INT32_MAX))
-        luaL_error(state, "presentation region outside i32");
-    return static_cast<std::int32_t>(value);
 }
 void array_keys(lua_State* state, int table, std::size_t size) {
     lua_pushnil(state);
@@ -107,53 +101,35 @@ int suppress_loading(lua_State* state) {
     impl.presentationConfigured = true;
     return 0;
 }
-// Reuse the declaration parser so both entry points enforce identical resource bounds.
-int configure(lua_State* state, const char* category) {
+int mask_loading_screen(lua_State* state) {
     auto& impl = setup_owner(state);
-    luaL_checktype(state, 1, LUA_TTABLE);
-    lua_newtable(state);
-    const int program = lua_gettop(state);
-    if (category) {
-        lua_newtable(state);
-        lua_newtable(state);
-        lua_pushvalue(state, 1);
-        lua_rawseti(state, -2, 1);
-        lua_setfield(state, -2, category);
-    } else {
-        fields(state, 1, {"movies", "surfaces"});
-        lua_pushvalue(state, 1);
-    }
-    lua_setfield(state, program, "presentation");
-    client::sdk::presentation::Config parsed{};
-    capture_presentation(state, program, false, parsed);
-    auto next = impl.presentation;
-    if (!category) {
-        next.movies = parsed.movies;
-        next.movieCount = parsed.movieCount;
-        next.surfaces = parsed.surfaces;
-    } else if (std::string_view(category) == "effect_attachments") {
-        if (next.effectCount == next.effects.size())
-            return luaL_error(state, "effect attachment capacity exceeded");
-        next.effects[next.effectCount++] = parsed.effects[0];
-    } else {
-        if (next.deliveryCount == next.deliveries.size())
-            return luaL_error(state, "delivery channel capacity exceeded");
-        next.deliveries[next.deliveryCount++] = parsed.deliveries[0];
-    }
-    if (!client::sdk::presentation::valid_config(next))
-        return luaL_error(state, "conflicting presentation registration");
-    impl.presentation = next;
+    luaL_checktype(state, 1, LUA_TBOOLEAN);
+    impl.presentation.maskLoadingScreen = lua_toboolean(state, 1);
     impl.presentationConfigured = true;
     return 0;
 }
-int configure_renderer(lua_State* state) { return configure(state, nullptr); }
-int register_effect(lua_State* state) { return configure(state, "effect_attachments"); }
-int bind_delivery(lua_State* state) { return configure(state, "delivery_channels"); }
+// Reuse the declaration parser so both entry points enforce identical resource bounds.
+int configure_renderer(lua_State* state) {
+    auto& impl = setup_owner(state);
+    luaL_checktype(state, 1, LUA_TTABLE);
+    fields(state, 1, {"movies", "surfaces"});
+    lua_newtable(state);
+    const int program = lua_gettop(state);
+    lua_pushvalue(state, 1);
+    lua_setfield(state, program, "presentation");
+    state::activity::presentation::Config parsed{};
+    capture_presentation(state, program, false, parsed);
+    parsed.suppressLoadingCinematics = impl.presentation.suppressLoadingCinematics;
+    parsed.maskLoadingScreen = impl.presentation.maskLoadingScreen;
+    impl.presentation = parsed;
+    impl.presentationConfigured = true;
+    return 0;
+}
 } // namespace
 void capture_presentation(lua_State* state,
                           int program,
                           bool publicTarget,
-                          client::sdk::presentation::Config& config) {
+                          state::activity::presentation::Config& config) {
     lua_getfield(state, program, "presentation");
     if (lua_isnil(state, -1)) {
         lua_pop(state, 1);
@@ -164,15 +140,18 @@ void capture_presentation(lua_State* state,
     const int table = lua_gettop(state);
     fields(state,
            table,
-           {"suppress_loading_cinematics",
+           {"suppress_loading_cinematics", "mask_loading_screen",
             "movies",
-            "surfaces",
-            "effect_attachments",
-            "delivery_channels"});
+            "surfaces"});
     lua_getfield(state, table, "suppress_loading_cinematics");
     if (!lua_isnil(state, -1) && !lua_isboolean(state, -1))
         luaL_error(state, "suppression must be boolean");
     config.suppressLoadingCinematics = lua_toboolean(state, -1);
+    lua_pop(state, 1);
+    lua_getfield(state, table, "mask_loading_screen");
+    if (!lua_isnil(state, -1) && !lua_isboolean(state, -1))
+        luaL_error(state, "loading screen mask must be boolean");
+    config.maskLoadingScreen = lua_toboolean(state, -1);
     lua_pop(state, 1);
     config.movieCount = rows(state, table, "movies", config.movies, [&](int row, auto& movie) {
         fields(state, row, {"asset", "header", "subtitles", "catalog", "stream"});
@@ -192,23 +171,7 @@ void capture_presentation(lua_State* state,
         surface_array(state, surfaces, "containers", config.surfaces.containers);
         lua_pop(state, 1);
     }
-    config.effectCount =
-        rows(state, table, "effect_attachments", config.effects, [&](int row, auto& effect) {
-            fields(state, row, {"region", "source", "source_offset", "original", "replacement"});
-            effect = {region(state, row),
-                      integer(state, row, "source"),
-                      integer(state, row, "source_offset", true),
-                      integer(state, row, "original"),
-                      integer(state, row, "replacement")};
-        });
-    config.deliveryCount =
-        rows(state, table, "delivery_channels", config.deliveries, [&](int row, auto& delivery) {
-            fields(state, row, {"region", "resource", "channel"});
-            delivery = {region(state, row),
-                        integer(state, row, "resource"),
-                        integer(state, row, "channel")};
-        });
-    if (!client::sdk::presentation::valid_config(config))
+    if (!state::activity::presentation::valid_config(config))
         luaL_error(state, "invalid or conflicting presentation declarations");
     lua_pop(state, 1);
 }
@@ -220,9 +183,8 @@ void register_presentation_api(lua_State* state) {
     lua_newtable(state);
     constexpr luaL_Reg functions[]{
         {"suppress_loading_cinematics", suppress_loading},
+        {"mask_loading_screen", mask_loading_screen},
         {"configure_movie_renderer", configure_renderer},
-        {"register_effect_attachment", register_effect},
-        {"bind_delivery_channel", bind_delivery},
         {nullptr, nullptr},
     };
     luaL_setfuncs(state, functions, 0);

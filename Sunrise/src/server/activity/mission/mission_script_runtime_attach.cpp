@@ -1,3 +1,4 @@
+#include "../../../state/activity/presentation/runtime.h"
 /**
  * Resolving, opening and starting one mission program for a Host slot.
  * Every function here runs under the mission runtime lock its caller already holds.
@@ -104,18 +105,15 @@ reload_authorization(const state::activity::SessionBinding& binding) noexcept {
 }
 
 bool bind_presentation(RuntimeInstance& instance) noexcept {
-    namespace presentation = client::sdk::presentation;
+    namespace presentation = ::sunrise::state::activity::presentation;
     presentation::Config config{};
     if (instance.publicTarget || !lua_vm::presentation_config(instance.vm, config)) return true;
-    if (!config.movieCount && !config.effectCount && !config.deliveryCount
-        && !config.suppressLoadingCinematics)
+    if (!config.movieCount && !config.suppressLoadingCinematics && !config.maskLoadingScreen)
         return true;
     const auto activities = instance.view.catalog->activities();
-    return instance.view.activityRow < activities.size()
-           && presentation::publish(
-               {instance.view.binding.sessionId, instance.view.activityClientGeneration},
-               activities[instance.view.activityRow].activityIndex,
-               config);
+    return instance.view.activityRow < activities.size() && presentation::publish(
+        {instance.view.binding.sessionId, instance.view.activityClientGeneration}, config,
+        activities[instance.view.activityRow].activityIndex);
 }
 
 /**
@@ -146,7 +144,7 @@ bool bind_presentation(RuntimeInstance& instance) noexcept {
     if (generated::resolve(view, worldView) != generated::BindStatus::ready) {
         return false;
     }
-    client::sdk::presentation::remove(
+    ::sunrise::state::activity::presentation::remove(
         {instance.view.binding.sessionId,instance.view.activityClientGeneration});
     instance.view = std::move(view);
     instance.worldView = std::move(worldView);
@@ -663,7 +661,7 @@ void attach_instance(const host::InstanceSnapshot& hostInstance,
     instance->occupied = true;
     const AttachResult opened = open_program(*instance, now);
     if (opened != AttachResult::ready)
-        client::sdk::presentation::remove(
+        ::sunrise::state::activity::presentation::remove(
             {instance->view.binding.sessionId,instance->view.activityClientGeneration});
     report_attach_result(
         hostInstance.binding, opened, attach_result_name(opened), instance->view.activityRow);

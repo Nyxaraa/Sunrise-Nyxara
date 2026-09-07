@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../../client/sdk/presentation/config.h"
+#include "../../../state/activity/presentation/config.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -532,6 +532,6 @@ void close(Vm& vm) noexcept;
 [[nodiscard]] const char* status_name(OpenStatus status) noexcept;
 [[nodiscard]] const char* status_name(CallStatus status) noexcept;
 
-bool presentation_config(const Vm& vm, client::sdk::presentation::Config& output) noexcept;
+bool presentation_config(const Vm& vm, state::activity::presentation::Config& output) noexcept;
 
 } // namespace sunrise::server::activity::mission::lua_vm

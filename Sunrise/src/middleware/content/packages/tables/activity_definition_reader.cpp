@@ -165,6 +165,11 @@ add_relative(std::size_t member, std::int64_t relative, std::size_t& target) noe
     output.matchmakingConfigTag = matchmakingTag;
     output.hasMatchmakingConfig = matchmakingTag != kActivityDefinitionNoMatchmakingConfig;
     output.internalNamePointerOffset = internalNameOffset;
+    // E2EC30 selects loading UI when this authored byte is nonzero.
+    if (recordLength > 0xE4) {
+        output.hasAuthoredLoadingUiFlag = true;
+        output.authoredLoadingUiFlag = std::to_integer<std::uint8_t>(blob[row.recordOffset + 0xE4]);
+    }
     if (!read_internal_name(blob, internalNameOffset, output)
         || !read(blob, row.recordOffset + kRecordRequiredLevelOffset, output.requiredLevel)
         || !read(blob, row.recordOffset + kRecordRequiredPowerOffset, output.requiredPower)

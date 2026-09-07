@@ -172,6 +172,11 @@ append_binding_locators(std::span<const activity_inventory::PackageLocator> sour
             | (binding.bindingEvidence.hasMatchmakingConfig
                    ? format::kActivityBindingHasMatchmakingConfig
                    : 0U);
+        if (binding.definition.hasAuthoredLoadingUiFlag) {
+            target.bindingFlags |= format::kActivityBindingHasLoadingUiFlag
+                | (static_cast<std::uint32_t>(binding.definition.authoredLoadingUiFlag)
+                   << format::kActivityLoadingUiFlagShift);
+        }
         if (!link_text(linker, source.id, target.id)
             || !link_text(linker, source.internalName, target.internalName)
             || !link_text(linker, source.displayName, target.displayName)

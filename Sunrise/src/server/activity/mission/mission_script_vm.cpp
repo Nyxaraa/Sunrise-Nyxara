@@ -796,7 +796,7 @@ const char* status_name(CallStatus status) noexcept {
     return "unknown";
 }
 
-bool presentation_config(const Vm& vm, client::sdk::presentation::Config& output) noexcept {
+bool presentation_config(const Vm& vm, state::activity::presentation::Config& output) noexcept {
     const auto& impl = VmAccess::get(vm);
     if (!impl.active || impl.faulted) return false;
     output = impl.presentation;

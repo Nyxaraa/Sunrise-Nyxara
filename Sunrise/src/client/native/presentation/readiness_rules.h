@@ -3,7 +3,7 @@
 #include <cstdint>
 
 #include "config.h"
-namespace sunrise::client::sdk::presentation {
+namespace sunrise::client::native::presentation {
 // Native 426920 selects 1 for ordinary tags, 2 only for type_info & F000 == 2000.
 // Callers declare ordinary-tag movie dependencies.
 constexpr std::uint32_t movie_resource_kind = 1;
@@ -28,4 +28,4 @@ constexpr bool movie_resources_ready(int rootState,
 constexpr bool resource_can_release(int state) noexcept {
     return state == 2 || state == 3;
 }
-} // namespace sunrise::client::sdk::presentation
+} // namespace sunrise::client::native::presentation

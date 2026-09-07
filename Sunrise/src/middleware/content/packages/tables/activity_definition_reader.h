@@ -38,6 +38,8 @@ struct ActivityDefinition final {
     std::uint8_t typeIndex{};
     std::uint32_t gameplaySettingsHash{};
     std::uint8_t destinationIndex{};
+    bool hasAuthoredLoadingUiFlag{};
+    std::uint8_t authoredLoadingUiFlag{};
 };
 
 /** Visitor called once per activity definition in activity-index order. */

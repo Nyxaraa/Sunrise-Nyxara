@@ -2,8 +2,7 @@
 #include <cstdint>
 
 #include "config.h"
-namespace sunrise::client::sdk::presentation {
-bool effect_resident(std::uint32_t asset) noexcept;
+namespace sunrise::client::native::presentation {
 // Load definitions before the callbacks which dereference them. Release the
 // dependent containers/buffers before releasing the definitions they use.
 class MovieResource {
@@ -23,4 +22,4 @@ public:
         return root_ != 0xFFFFFFFFU;
     }
 };
-} // namespace sunrise::client::sdk::presentation
+} // namespace sunrise::client::native::presentation

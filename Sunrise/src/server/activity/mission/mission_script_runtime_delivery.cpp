@@ -259,9 +259,6 @@ void complete_delivery(RuntimeInstance& instance) noexcept {
     case lua_vm::IntentKind::playDialogueCue:
         result = "dialogue_staged";
         break;
-    case lua_vm::IntentKind::returnToOrbit:
-        result = "orbit_requested";
-        break;
     case lua_vm::IntentKind::playPrerenderedMovie:
         result = "movie_queued";
         break;

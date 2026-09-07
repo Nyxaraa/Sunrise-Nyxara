@@ -191,6 +191,7 @@ local EventKind = {
 ---@field auth_writable boolean|nil
 ---@field set_object_active fun(SunriseSlot, SunriseObjectArguments?): SunriseRequestKey
 ---@field assign_combat_objective fun(self: SunriseSlot, args: {objective: SunriseSlot, revision: integer, task_group: integer, reserved: boolean?}): SunriseRequestKey
+---@field set_actor_channels fun(self: SunriseSlot, args: {generation: integer, revision: integer, channels: {channel: integer, value: number}[]}): SunriseRequestKey
 ---@field play_actor_path fun(self: SunriseSlot, args: {generation: integer, revision: integer, path: SunriseSlot}): SunriseRequestKey
 ---@field deliver_squads fun(self: SunriseSlot, args: {generation: integer, revision: integer, squads: SunriseSlot[]}): SunriseRequestKey
 ---@field deliver_squad fun(self: SunriseSlot, args: {generation: integer, revision: integer, squad: SunriseSlot}): SunriseRequestKey
@@ -308,30 +309,16 @@ local EventKind = {
 ---@field buffers integer[] Six backing buffers in matching order.
 ---@field containers integer[] Six registration containers in matching order.
 
----@class SunriseEffectAttachment
----@field region integer
----@field source integer
----@field source_offset integer Authored component offset within its source.
----@field original integer Expected native attachment asset.
----@field replacement integer Resident effect asset to attach instead.
-
----@class SunriseDeliveryChannel
----@field region integer
----@field resource integer Native delivery resource.
----@field channel integer Named model scalar; delivery stage 0 writes 0, stage 1 writes 1.
-
 ---@class SunrisePresentation
 ---@field suppress_loading_cinematics? boolean
+---@field mask_loading_screen? boolean
 ---@field movies? SunriseMovieResources[] Up to eight ordinary-tag movies.
 ---@field surfaces? SunriseMovieSurfaces Required when movies are declared.
----@field effect_attachments? SunriseEffectAttachment[] Up to eight exact source overrides.
----@field delivery_channels? SunriseDeliveryChannel[] Up to eight delivery channel bindings.
 
 ---@class SunrisePresentationSetup
----@field suppress_loading_cinematics fun(suppress: boolean) Mission-load setup; scoped to this private activity before fly-in.
----@field configure_movie_renderer fun(resources: SunrisePresentation) Mission-load setup; accepts movies and surfaces only. Playback owns renderer/HUD lifetime.
----@field register_effect_attachment fun(effect: SunriseEffectAttachment) Mission-load setup; binds one exact authored attachment replacement.
----@field bind_delivery_channel fun(binding: SunriseDeliveryChannel) Mission-load setup; binds a model channel to native delivery stages.
+---@field suppress_loading_cinematics fun(suppress: boolean) Masks native flight presentation for this private activity until initial world arrival.
+---@field mask_loading_screen fun(enabled: boolean) Blacks out the initial tips loading screen while preserving fly-in and intro cinematics for this private activity.
+---@field configure_movie_renderer fun(resources: SunrisePresentation) Mission-load setup; accepts movies and surfaces only. Resources are consumed on the native platform callback thread.
 
 ---@type {presentation: SunrisePresentationSetup}
 sunrise = {}
@@ -339,12 +326,11 @@ sunrise = {}
 ---@class SunriseMovieRequest
 ---@field index integer One-based index in the program's movie declarations.
 ---@field stop? boolean Request native stop; completion still needs a native receipt.
----@field continue_sequence? boolean Retain presentation for the next declared movie, for up to 30 seconds.
+---@field continue_sequence? boolean Retain movie resources for the next declared movie, for up to 30 seconds.
 
 ---@class SunriseScriptContext
 ---@field play_prerendered_movie fun(self: SunriseScriptContext, args: SunriseMovieRequest): SunriseRequestKey
 ---@field prerendered_movie_status fun(self: SunriseScriptContext, index: integer): 'absent'|'queued'|'preparing'|'playing'|'complete'|'failed'
----@field return_to_orbit fun(self: SunriseScriptContext): SunriseRequestKey Waits for native lifetime completion before leaving.
 
 ---@class SunriseProgram
 ---@field initial_state? SunriseState
@@ -377,6 +363,7 @@ sunrise = {}
 ---@field activity_root_tag integer
 ---@field scenario_tag integer
 ---@field matchmaking_config_tag integer
+---@field authored_loading_ui_flag integer|nil Package definition byte +0xE4: nonzero selects loading UI instead of flight overlay. Nil means metadata unavailable, not false. Does not prove flight skipping or destination correctness.
 ---@field mission SunriseMission|nil
 
 local sdk = {}

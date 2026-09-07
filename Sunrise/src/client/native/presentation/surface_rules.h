@@ -1,7 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
-namespace sunrise::client::sdk::presentation {
+namespace sunrise::client::native::presentation {
 // Type-19 definitions expand from eight package bytes to a 16-byte native
 // allocation. The raw buffer loader later fills definition+8 (native 1204581).
 constexpr bool movie_definition_resident(std::uint32_t size,
@@ -54,4 +54,4 @@ constexpr bool movie_surfaces_selected(const SurfaceRegistrations& rows,
         if (rows[i].selected != definitions[i - 1]) return false;
     return true;
 }
-} // namespace sunrise::client::sdk::presentation
+} // namespace sunrise::client::native::presentation

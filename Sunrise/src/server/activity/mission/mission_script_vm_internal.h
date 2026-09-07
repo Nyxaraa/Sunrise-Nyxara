@@ -99,7 +99,7 @@ struct CallFrame final {
 struct Impl final {
     Arena arena{};
     ProgramIdentity identity{};
-    client::sdk::presentation::Config presentation{};
+    state::activity::presentation::Config presentation{};
     bool presentationConfigured{};
     DefinitionApi definitions{};
     /** The peer set the host last published. Read by context.peers, never by an event. */

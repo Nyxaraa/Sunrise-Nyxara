@@ -37,7 +37,7 @@ constexpr std::array<RowSpec, 40> kRows{{
      "r:binding_locators;u32:activity_index;u32:definition_hash;u32:scenario_index;"
      "u32:flags;u32:selected_activity_root_tag;u32:selected_scenario_tag;"
      "u32:matchmaking_config_tag;u32:join_status;u32:binding_disposition;"
-     "u32:binding_reason;u32:binding_evidence_basis;u32:runnable_status;u32:binding_flags"},
+     "u32:binding_reason;u32:binding_evidence_basis;u32:runnable_status;u32:binding_flags;u8?:authored_loading_ui_flag"},
     {2,
      "scenarios",
      "scenarios",
@@ -347,6 +347,8 @@ append_raw_field(Value::Object& fields, std::string_view code, std::string_view 
         add_field(fields, name, "i64_decimal_string");
     } else if (code == "u16") {
         add_field(fields, name, "u16");
+    } else if (code == "u8?") {
+        add_field(fields, name, "u8_or_nil");
     } else if (code == "u8") {
         add_field(fields, name, "u8");
     } else if (code == "b32") {

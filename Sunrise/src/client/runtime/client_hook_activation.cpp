@@ -17,7 +17,6 @@
 #include "../hooks/async_io/async_io_lifetime_guard.h"
 #include "../hooks/bitmap/bitmap_hook_lifecycle.h"
 #include "../hooks/bootflow/bootflow_hook_lifecycle.h"
-#include "../sdk/presentation/runtime.h"
 #include "../hooks/config_getter/config_getter_lifecycle.h"
 #include "../hooks/cursor/runtime.h"
 #include "../hooks/graphics/graphics_hook_lifecycle.h"
@@ -188,7 +187,6 @@ void clear_game_targets() noexcept {
     // The bitmap reference guard puts the none sentinel in place of a reference outside tag
     // space. Without it the widget's stored-reference reader faults.
     (void)hooks::bitmap::install();
-    (void)sdk::presentation::install();
     // Retains the native handle for package placements without publishing unnamed map objects.
     (void)hooks::world_objects::install();
     // The server reports investment publications through these and never calls the Client.

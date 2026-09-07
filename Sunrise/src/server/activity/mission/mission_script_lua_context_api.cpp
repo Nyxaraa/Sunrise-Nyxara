@@ -1,4 +1,4 @@
-#include "../../../client/sdk/presentation/movies.h"
+#include "../../../state/activity/presentation/movies.h"
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -244,23 +244,14 @@ int context_prerendered_movie_status(lua_State* state) {
         lua_pushliteral(state, "absent");
         return 1;
     }
-    namespace movies = client::sdk::presentation;
+    namespace movies = ::sunrise::state::activity::presentation;
     const auto result =
-        movies::status({frame.event->binding.sessionId, frame.event->sourceGeneration},
+        movies::movie_status({frame.event->binding.sessionId, frame.event->sourceGeneration},
                        static_cast<unsigned>(index));
     constexpr std::array<const char*, 6> names{
         "absent", "queued", "preparing", "playing", "complete", "failed"};
     lua_pushstring(state, names[static_cast<unsigned>(result)]);
     return 1;
-}
-
-int context_return_to_orbit(lua_State* state) {
-    static_cast<void>(luaL_checkudata(state, 1, kContextMetatable));
-    if (impl_from_state(state)->identity.publicTarget)
-        return luaL_error(state, "local orbit return requires a private activity");
-    Intent intent{};
-    intent.kind = IntentKind::returnToOrbit;
-    return queue_intent(state, active_frame(state), intent);
 }
 
 /** Lua index for the mission context: its collections, phase, variables and timers. */
@@ -294,14 +285,10 @@ int context_return_to_orbit(lua_State* state) {
         lua_pushcfunction(state, &context_slot);
     } else if (key == "select_state") {
         lua_pushcfunction(state, &context_select_state);
-    } else if (key == "return_to_orbit") {
-        lua_pushcfunction(state, &context_return_to_orbit);
     } else if (key == "play_prerendered_movie") {
         lua_pushcfunction(state, &context_play_prerendered_movie);
     } else if (key == "prerendered_movie_status") {
         lua_pushcfunction(state, &context_prerendered_movie_status);
-    } else if (key == "select_state") {
-        lua_pushcfunction(state, &context_select_state);
     } else if (key == "restart_checkpoint") {
         lua_pushcfunction(state, &context_restart_checkpoint);
     } else if (key == "set_phase") {

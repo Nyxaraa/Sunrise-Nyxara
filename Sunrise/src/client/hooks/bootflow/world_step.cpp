@@ -7,8 +7,6 @@
 #include "../../../core/logging/log.h"
 #include "bootflow_hook_lifecycle.h"
 #include "internal.h"
-#include "../../sdk/presentation/movies.h"
-#include "../../sdk/presentation/orbit_return.h"
 #include "spawn/slice_set_sample.h"
 
 namespace sunrise::client::hooks::bootflow {
@@ -62,9 +60,6 @@ void poll_world_step() noexcept {
 /** Publishes the client's current local slice-set index. */
 void poll_current_slice_set() noexcept {
     const std::int32_t index = spawn::sample_current_slice_set();
-    sdk::presentation::observe_world(index,read_step());
-    sdk::presentation::poll(index,read_step());
-    sdk::presentation::orbit_return::poll(index,read_step());
     g_publishedSliceSet.store(index, std::memory_order_relaxed);
     g_publishedSliceSetTick.store(GetTickCount64(), std::memory_order_release);
 }

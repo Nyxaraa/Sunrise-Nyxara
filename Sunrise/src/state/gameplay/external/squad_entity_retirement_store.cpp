@@ -148,9 +148,7 @@ bool Store::capture(const identities::Source& source,
                     selected = &candidate;
                 }
             }
-            if (!selected || std::count_if(rows.begin(), rows.end(), [&](const auto& candidate) {
-                                 return !candidate.anchorPresent && actor(candidate, *selected);
-                             }) != 1) {
+            if (!selected) {
                 continue;
             }
             Release::Group group;
@@ -232,14 +230,6 @@ bool Store::prepare(const identities::Source& source,
             continue;
         }
         for (const auto& group : release.groups) {
-            if (std::count_if(rows.begin(),
-                              rows.end(),
-                              [&](const auto& row) {
-                                  return !row.anchorPresent && actor(row, group.eligibility);
-                              })
-                != 1) {
-                continue;
-            }
             Mask current{};
             if (!closure(group.root, group.eligibility, group.entities, rows, current)
                 || current != group.entities) {

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -237,6 +239,52 @@ write_root(encoding::bits::Writer& writer, std::uint32_t generation, bool enable
         || !fields::finish_exact(writer, expectedBits, expectedBytes, written)) {
         return false;
     }
+    bits = expectedBits;
+    return true;
+}
+
+/** Updates model channels without replacing the actor, its movement program or delivery. */
+inline constexpr std::size_t kChannelsBaseBits = 180;
+inline constexpr std::size_t kChannelsMaximumBytes =
+    (kChannelsBaseBits + scriptable_auth::kType2ChannelCapacity * 64 + 7) / 8;
+
+[[nodiscard]] inline bool encode_channels(
+    std::uint32_t generation,
+    std::uint32_t revision,
+    std::span<const scriptable_auth::Type2Channel> channels,
+    std::span<std::byte> output,
+    std::size_t& written,
+    std::size_t& bits) noexcept {
+    written = 0;
+    bits = 0;
+    if (!valid_counter(generation) || !valid_counter(revision)
+        || channels.size() > scriptable_auth::kType2ChannelCapacity) return false;
+    for (std::size_t i = 0; i < channels.size(); ++i) {
+        if (!std::isfinite(channels[i].value)) return false;
+        for (std::size_t j = 0; j < i; ++j)
+            if (channels[i].nameHash == channels[j].nameHash) return false;
+    }
+    const auto expectedBits = kChannelsBaseBits + channels.size() * 64;
+    const auto expectedBytes = (expectedBits + 7) / 8;
+    if (output.size() < expectedBytes) return false;
+    encoding::bits::Writer writer(output.first(expectedBytes));
+    // Native AB6600 compares .5's revision before AB2D00 applies its named channels.
+    // Use the same root mode and marker as path/delivery so the bound actor stays intact.
+    if (!write_root(writer, generation, true)
+        || !writer.write(0, 1) // .4 absent
+        || !writer.write(1, 1) // .5 present
+        || !writer.write(revision, 31)
+        || !writer.write(0, 6) || !writer.write(0, 6)
+        || !writer.write(0, 3) // no temperament overrides
+        || !fields::write_absent_client_ref(writer)
+        || !writer.write(0, 32)
+        || !writer.write(channels.size(), 5)) return false;
+    for (const auto& channel : channels)
+        if (!writer.write(channel.nameHash, 32)
+            || !writer.write(std::bit_cast<std::uint32_t>(channel.value), 32)) return false;
+    if (!writer.write(0, 1) // .6 absent: retain the movement program
+        || !writer.write(0, 1) // .7 absent: retain the manifest
+        || !fields::finish_exact(writer, expectedBits, expectedBytes, written)) return false;
     bits = expectedBits;
     return true;
 }

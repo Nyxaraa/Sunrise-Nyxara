@@ -9,7 +9,7 @@
 #include "../../patterns/signature_text.h"
 #include "readiness_rules.h"
 #include "surface_rules.h"
-namespace sunrise::client::sdk::presentation {
+namespace sunrise::client::native::presentation {
 namespace {
 using namespace patterns;
 using Manager = void*(__fastcall*)();
@@ -53,8 +53,8 @@ bool resolve_native() {
     constexpr auto surfaceSig = signature<signature_length(
         "8B 05 ? ? ? ? 48 8D 15 ? ? ? ? C7 05 ? ? ? ? FF FF FF FF 85 C0 74 0E FF C8 48 98 8B 4C 82 04 89 0D")>(
         "8B 05 ? ? ? ? 48 8D 15 ? ? ? ? C7 05 ? ? ? ? FF FF FF FF 85 C0 74 0E FF C8 48 98 8B 4C 82 04 89 0D");
-    auto* load = scan_main_image_unique(loadSig, "ember_resource_load");
-    auto* end = scan_main_image_unique(endSig, "ember_resource_release");
+    auto* load = scan_main_image_unique(loadSig, "movie_resource_load");
+    auto* end = scan_main_image_unique(endSig, "movie_resource_release");
     auto* surfaces = scan_main_image_unique(surfaceSig, "movie_surfaces");
     auto mgr = reinterpret_cast<Manager>(call(load, 0x96));
     create = reinterpret_cast<Create>(call(load, 0xD1));
@@ -137,14 +137,6 @@ bool definitions_ready(const SurfaceSet& surfaces, bool requireBuffers) {
     return true;
 }
 } // namespace
-bool effect_resident(std::uint32_t asset) noexcept {
-    if (!resolve()) return false;
-    __try {
-        return blob(asset, 0x80809C0FU) != nullptr;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
 bool MovieResource::begin(const Config& config, unsigned index) noexcept {
     if (index == 0 || index > config.movieCount) return false;
     const auto asset = config.movies[index - 1].asset;
@@ -327,4 +319,4 @@ bool MovieResource::release() noexcept {
         return false;
     }
 }
-} // namespace sunrise::client::sdk::presentation
+} // namespace sunrise::client::native::presentation

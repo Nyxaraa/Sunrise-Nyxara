@@ -738,6 +738,47 @@ constexpr std::int8_t kFilterModeInside = 1;
     return queue_slot_auth(state, squad, objective::kSchema, objective::kBits, body);
 }
 
+/** Sets a complete named-channel block on an already controlled actor. */
+[[nodiscard]] int slot_set_actor_channels(lua_State* state) {
+    namespace combatant = middleware::bap::activity_message::combatant_auth;
+    const auto* handle = static_cast<const SlotHandle*>(luaL_checkudata(state, 1, kSlotMetatable));
+    static constexpr std::array<std::string_view, 3> declared{"generation", "revision", "channels"};
+    refuse_unknown_arguments(state, declared);
+    const auto generation = checked_integer_argument(state, "generation");
+    const auto revision = checked_integer_argument(state, "revision");
+    SlotDefinition actor{};
+    if (!current_slot(state, *handle, actor) || !exact_combatant_slot(actor)
+        || !valid_counter(generation) || !valid_counter(revision))
+        return luaL_error(state, "actor channels require an exact combatant and positive counters");
+    static_cast<void>(push_argument(state, "channels"));
+    luaL_checktype(state, -1, LUA_TTABLE);
+    const auto count = lua_rawlen(state, -1);
+    std::array<scriptable_auth::Type2Channel, scriptable_auth::kType2ChannelCapacity> channels{};
+    if (count > channels.size()) return luaL_error(state, "at most 16 actor channels are supported");
+    for (std::size_t i = 0; i < count; ++i) {
+        lua_rawgeti(state, -1, static_cast<lua_Integer>(i + 1));
+        luaL_checktype(state, -1, LUA_TTABLE);
+        lua_getfield(state, -1, "channel");
+        const auto channel = luaL_checkinteger(state, -1);
+        lua_pop(state, 1);
+        lua_getfield(state, -1, "value");
+        const auto value = luaL_checknumber(state, -1);
+        lua_pop(state, 2);
+        if (channel < 0 || static_cast<std::uint64_t>(channel) > UINT32_MAX
+            || !std::isfinite(value) || std::abs(value) > (std::numeric_limits<float>::max)())
+            return luaL_error(state, "actor channel requires a 32-bit name and finite float");
+        channels[i] = {static_cast<std::uint32_t>(channel), static_cast<float>(value)};
+    }
+    lua_pop(state, 1);
+    std::array<std::byte, combatant::kChannelsMaximumBytes> body{};
+    std::size_t written{}, bits{};
+    if (!combatant::encode_channels(static_cast<std::uint32_t>(generation),
+                                    static_cast<std::uint32_t>(revision),
+                                    std::span(channels).first(count), body, written, bits))
+        return luaL_error(state, "actor channels contain duplicate names or invalid values");
+    return queue_slot_auth(state, actor, combatant::kSchema, bits, std::span(body).first(written));
+}
+
 /** Creates a named actor and starts one package-authored movement path. */
 [[nodiscard]] int slot_play_actor_path(lua_State* state) {
     namespace combatant = middleware::bap::activity_message::combatant_auth;
@@ -1357,6 +1398,8 @@ constexpr std::int8_t kFilterModeInside = 1;
         lua_pushcfunction(state, &slot_set_public_event_state);
     } else if (key == "assign_combat_objective") {
         lua_pushcfunction(state, &slot_assign_combat_objective);
+    } else if (key == "set_actor_channels") {
+        lua_pushcfunction(state, &slot_set_actor_channels);
     } else if (key == "play_actor_path") {
         lua_pushcfunction(state, &slot_play_actor_path);
     } else if (key == "deliver_squad") {

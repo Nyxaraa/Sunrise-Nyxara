@@ -77,7 +77,6 @@ enum class IntentKind : std::uint8_t {
     playPerformance,
     restartCheckpoint,
     playPrerenderedMovie,
-    returnToOrbit,
 };
 
 /** One object a mission omits, named the way a roster group is: its tag and its registry key. */

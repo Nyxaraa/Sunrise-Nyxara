@@ -1,3 +1,4 @@
+#include "../../../state/activity/presentation/runtime.h"
 /**
  * The mission-program instance table, the durable state commit, the timers and the service slice.
  * The service slice and every lifecycle entry point take the mission runtime lock.
@@ -234,7 +235,7 @@ void clear_instance(RuntimeInstance& instance, bool clearPending) noexcept {
     } else if (instance.occupied) {
         reset_pending_events_for_reattach(instance.view.binding);
     }
-    client::sdk::presentation::remove(
+    ::sunrise::state::activity::presentation::remove(
         {instance.view.binding.sessionId,instance.view.activityClientGeneration});
     lua_vm::close(instance.vm);
     instance.worldView = {};
@@ -356,7 +357,7 @@ void persist_mission_fault(RuntimeInstance& instance) noexcept {
 
 /** Faults both the VM and the exact server-owned mission record. */
 void fault_instance(RuntimeInstance& instance, std::string_view reason) noexcept {
-    client::sdk::presentation::remove(
+    ::sunrise::state::activity::presentation::remove(
         {instance.view.binding.sessionId,instance.view.activityClientGeneration});
     lua_vm::fault(instance.vm, reason);
     instance.programStatus = ProgramStatus::programError;

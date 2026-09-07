@@ -1,4 +1,3 @@
-#include "../sdk/presentation/runtime.h"
 #include "../../core/logging/log.h"
 #include "../../core/settings/settings.h"
 #include "../../server/bap/runtime.h"
@@ -85,7 +84,6 @@ bool shutdown() noexcept {
         return false;
     }
     hooks::bitmap::uninstall();
-    sdk::presentation::uninstall();
     hooks::bootflow::uninstall();
     hooks::infinite_ammo::uninstall();
     hooks::inactivity::uninstall();

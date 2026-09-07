@@ -69,9 +69,15 @@ inline constexpr std::uint32_t kActivityExactMask = kActivityRootExact | kActivi
 inline constexpr std::uint32_t kActivityBindingFullSdkAcceptable = 0x1U;
 inline constexpr std::uint32_t kActivityBindingHasInternalName = 0x2U;
 inline constexpr std::uint32_t kActivityBindingHasMatchmakingConfig = 0x4U;
+// Optional authored presentation metadata; absent in packs generated before extraction.
+inline constexpr std::uint32_t kActivityBindingHasLoadingUiFlag = 0x8U;
+inline constexpr unsigned kActivityLoadingUiFlagShift = 8;
+inline constexpr std::uint32_t kActivityLoadingUiFlagMask = 0xFF00U;
 inline constexpr std::uint32_t kActivityBindingFlagMask = kActivityBindingFullSdkAcceptable
                                                           | kActivityBindingHasInternalName
-                                                          | kActivityBindingHasMatchmakingConfig;
+                                                          | kActivityBindingHasMatchmakingConfig
+                                                          | kActivityBindingHasLoadingUiFlag
+                                                          | kActivityLoadingUiFlagMask;
 /** State rows expose only enabled and extraction-complete bits. */
 inline constexpr std::uint32_t kStateFlagMask = 0x3U;
 /** Slot-value decoding was independently verified for this row. */

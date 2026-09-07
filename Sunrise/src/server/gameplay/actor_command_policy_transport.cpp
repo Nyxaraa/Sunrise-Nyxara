@@ -41,9 +41,18 @@ volatile LONG g_lane0DecodeFailures{};
             return false;
         }
         std::copy(identity.begin(), identity.end(), sdk.begin());
+        static bool cacheFailureReported = false;
         if (!g_entityPlans.load_installed(g_entitySessions.catalog->artifact_directory(), sdk)) {
+            if (!cacheFailureReported) {
+                report(core::log::Level::warn,
+                       "ev=entity_identity stage=transport result=unavailable "
+                       "reason=decode_plan_cache "
+                       "required=rsat_decode_plans.cache,rsat_decode_plans.cache.json");
+                cacheFailureReported = true;
+            }
             return false;
         }
+        cacheFailureReported = false;
         g_entitySessions.resolvePlan = plans::resolve_plan;
         g_entitySessions.resolveSchemaLayout = plans::resolve_schema_layout;
         g_entitySessions.resolveFieldLayout = plans::resolve_field_layout;

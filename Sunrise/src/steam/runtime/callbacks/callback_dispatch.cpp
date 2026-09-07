@@ -1,4 +1,5 @@
 #include <Windows.h>
+#include "../../../client/native/presentation/runtime.h"
 
 #include <array>
 #include <atomic>
@@ -202,6 +203,7 @@ void run_slice() noexcept {
         client::hooks::feature_flags::apply_once();
         // Everything below must run on the game's thread; the server gets its own from here on.
         runtime::callbacks::start_server_thread_once();
+        client::native::presentation::service();
         client::content::investment::worker::service(now);
         client::content::activity::sdk_generation::service();
         client::content::activity::scriptables::service();

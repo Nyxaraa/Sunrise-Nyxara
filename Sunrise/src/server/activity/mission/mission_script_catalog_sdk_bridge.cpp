@@ -211,6 +211,15 @@ template <typename Row>
         CATALOG_U32("binding_evidence_basis", row.bindingEvidenceBasis)
         CATALOG_U32("runnable_status", row.runnableStatus)
         CATALOG_U32("binding_flags", row.bindingFlags)
+        if (key == "authored_loading_ui_flag") {
+            if (!(row.bindingFlags & format::kActivityBindingHasLoadingUiFlag)) {
+                output = {};
+                output.kind = lua_vm::CatalogFieldKind::absent;
+                return true;
+            }
+            return field_u32(output, (row.bindingFlags & format::kActivityLoadingUiFlagMask)
+                                     >> format::kActivityLoadingUiFlagShift);
+        }
         CATALOG_RANGE("activity_root_candidate_tags", row.activityRootCandidateTags)
         CATALOG_RANGE("scenario_name_candidate_tags", row.scenarioNameCandidateTags)
         CATALOG_RANGE("evidence_root_tags", row.evidenceRootTags)
