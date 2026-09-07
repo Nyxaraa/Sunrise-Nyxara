@@ -6,7 +6,9 @@
 #include "../../../../resources/resource.h"
 #include "../animation/transition/ui_transition_animation.h"
 #include "../components/card/ui_card_component.h"
+#include "../components/logo/ui_logo_component.h"
 #include "../components/section/ui_section_component.h"
+#include "../modules/registry/ui_module_registry.h"
 #include "../scaling/dpi/ui_dpi_scaling.h"
 #include "navigation/ui_layout_navigation.h"
 #include "ui_layout_lifecycle.h"
@@ -32,7 +34,7 @@ constexpr float kNavigationWidth = 180.0F;
 constexpr float kAutomaticWidth = 0.0F;
 /** A half-axis pivot centers the window on both viewport axes. */
 constexpr ImVec2 kCenterPivot{0.5F, 0.5F};
-/** The main surface is fixed, has no title bar, and is left out of saved Dear ImGui state. */
+/** The main surface has no title bar and is left out of saved Dear ImGui state. */
 constexpr ImGuiWindowFlags kMainWindowFlags =
     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings
     | ImGuiWindowFlags_NoTitleBar;
@@ -48,6 +50,14 @@ constexpr float kClosedProgress = 0.0F;
 constexpr float kOpeningScale = 0.96F;
 /** Full size, reached when the surface is fully open. */
 constexpr float kOpenScale = 1.0F;
+/** 34 authored pixels give the title logo presence without crowding the title row. */
+constexpr float kTitleLogoExtent = 34.0F;
+/** The title is drawn at this multiple of the body text, so it holds the logo's row. */
+constexpr float kTitleTextRatio = 1.5F;
+/** Half a difference centers one item against a taller one. */
+constexpr float kHalfExtent = 2.0F;
+/** The surface names the tool with the same wordmark the HUD card carries. */
+constexpr char kTitle[] = "SUNRISE";
 
 /**
  * Copies one display name into null-terminated component storage.
@@ -98,6 +108,44 @@ void draw_content(const navigation::Selection& selected) noexcept {
     selected.descriptor.frame_callback()();
 }
 
+/** Draws optional module-owned companion windows after the main surface. */
+void draw_companion_windows() noexcept {
+    const modules::registry::RegistrySnapshot registrySnapshot = modules::registry::snapshot();
+    for (const modules::Descriptor& descriptor : registrySnapshot.entries()) {
+        const modules::FrameCallback callback = descriptor.companion_frame_callback();
+        if (callback != nullptr) {
+            callback();
+        }
+    }
+}
+
+/** Draws the animated logo, then the name and version, on one title row. */
+void draw_title() noexcept {
+    const float extent = scaling::dpi::pixels(kTitleLogoExtent);
+    const bool logoDrawn = components::logo::draw(extent);
+    if (logoDrawn) {
+        ImGui::SameLine();
+    }
+
+    // The size is the authored one, because the style carries the display scale separately.
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * kTitleTextRatio);
+    const float titleHeight = ImGui::GetTextLineHeight();
+    const float rowY = ImGui::GetCursorPosY();
+    // The title is shorter than the logo, so it sits lower to stay level with it.
+    const float titleY =
+        logoDrawn ? rowY + ((std::max)(extent - titleHeight, 0.0F) / kHalfExtent) : rowY;
+    ImGui::SetCursorPosY(titleY);
+    ImGui::TextUnformatted(kTitle);
+    ImGui::PopFont();
+
+    ImGui::SameLine();
+    // SameLine returns to the row the logo opened, so the version is placed against the title
+    // again, centered on it because it stays at body size.
+    ImGui::SetCursorPosY(
+        titleY + ((std::max)(titleHeight - ImGui::GetTextLineHeight(), 0.0F) / kHalfExtent));
+    ImGui::TextDisabled(SUNRISE_VER_STRING);
+}
+
 } // namespace
 
 /** Draws the centered Sunrise surface inside the caller's active Dear ImGui frame. */
@@ -124,15 +172,21 @@ bool render(bool visible) noexcept {
     }
 
     const float scale = kOpeningScale + ((kOpenScale - kOpeningScale) * progress);
-    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, kCenterPivot);
+    const ImVec2 center = viewport->GetCenter();
+    if (visible && progress < 1.0F) {
+        // The opening zoom grows around the viewport centre. Only the settled window is movable.
+        ImGui::SetNextWindowPos(center, ImGuiCond_Always, kCenterPivot);
+    } else {
+        const ImVec2 centeredPosition{center.x - (size.x * kCenterPivot.x),
+                                      center.y - (size.y * kCenterPivot.y)};
+        ImGui::SetNextWindowPos(centeredPosition, ImGuiCond_FirstUseEver);
+    }
     ImGui::SetNextWindowSize({size.x * scale, size.y * scale}, ImGuiCond_Always);
     // One style alpha fades the surface and everything drawn inside it together.
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, progress);
     const bool submitContents = ImGui::Begin("Sunrise", nullptr, kMainWindowFlags);
     if (submitContents) {
-        ImGui::TextUnformatted("SUNRISE");
-        ImGui::SameLine();
-        ImGui::TextDisabled(SUNRISE_VER_STRING);
+        draw_title();
         ImGui::Separator();
 
         const StateSnapshot state = snapshot();
@@ -155,6 +209,7 @@ bool render(bool visible) noexcept {
         }
     }
     ImGui::End();
+    draw_companion_windows();
     ImGui::PopStyleVar();
     return true;
 }

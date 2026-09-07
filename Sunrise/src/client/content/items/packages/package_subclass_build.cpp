@@ -59,9 +59,8 @@ constexpr std::size_t kSubclassSlot =
 }
 
 /** @param rows Rows built so far. @return True when this list already has a resolved row. */
-[[nodiscard]] bool
-held(std::span<const state::build_data::socket_entry_buckets::Definition> rows,
-     std::uint16_t socketEntryListIndex) noexcept {
+[[nodiscard]] bool held(std::span<const state::build_data::socket_entry_buckets::Definition> rows,
+                        std::uint16_t socketEntryListIndex) noexcept {
     for (const auto& existing : rows) {
         if (existing.socketEntryListIndex == socketEntryListIndex) {
             return true;
@@ -71,8 +70,7 @@ held(std::span<const state::build_data::socket_entry_buckets::Definition> rows,
 }
 
 /** @param item Authored subclass item. @return Its 5 selected socket entries. */
-[[nodiscard]] domain::Selection
-selection_of(const state::account::inventory::Item& item) noexcept {
+[[nodiscard]] domain::Selection selection_of(const state::account::inventory::Item& item) noexcept {
     return {item.movementAbilityEntry,
             item.grenadeAbilityEntry,
             item.superAbilityEntry,
@@ -83,17 +81,17 @@ selection_of(const state::account::inventory::Item& item) noexcept {
 } // namespace
 
 /** Builds one ability bucket row per distinct subclass and ability selection in use. */
-bool build_character_abilities(const reader::Source& source,
-                               reader::Scratch& scratch,
-                               std::span<const std::byte> root,
-                               std::vector<std::byte>& table,
-                               std::vector<std::byte>& definition,
-                               std::vector<std::byte>& blob,
-                               std::span<state::build_data::abilities::Definition> output,
-                               std::size_t& count,
-                               std::span<state::build_data::socket_entry_buckets::Definition>
-                                   entryBucketOutput,
-                               std::size_t& entryBucketCount) noexcept {
+bool build_character_abilities(
+    const reader::Source& source,
+    reader::Scratch& scratch,
+    std::span<const std::byte> root,
+    std::vector<std::byte>& table,
+    std::vector<std::byte>& definition,
+    std::vector<std::byte>& blob,
+    std::span<state::build_data::abilities::Definition> output,
+    std::size_t& count,
+    std::span<state::build_data::socket_entry_buckets::Definition> entryBucketOutput,
+    std::size_t& entryBucketCount) noexcept {
     count = 0;
     entryBucketCount = 0;
     std::uint32_t tableTag = 0;
@@ -112,11 +110,9 @@ bool build_character_abilities(const reader::Source& source,
         return false;
     }
     const state::AccountState account = state::account_snapshot();
-    // First-option defaults every shipped subclass starts at (see account_state.h). Equipping a
-    // subclass always resets its picks to these (state_account_runtime.cpp), so every owned
-    // subclass publishes a row at this fixed selection regardless of which one is equipped right
-    // now. That row has to exist synchronously, ahead of time: the equip response that needs it is
-    // built inline with the commit, with no room to wait on a later refresh slice.
+    // First-option defaults every shipped subclass starts at. Equipping one resets its picks to
+    // these, so every owned subclass publishes a row at this selection. The row must exist
+    // synchronously: the equip response is built inline with the commit.
     const domain::Selection defaultSelection{state::kDefaultMovementAbilityEntry,
                                              state::kDefaultGrenadeAbilityEntry,
                                              state::kDefaultSuperAbilityEntry,
@@ -137,13 +133,15 @@ bool build_character_abilities(const reader::Source& source,
             return;
         }
         tables::IndexRow indexRow{};
-        if (!tables::index_row(std::span<const std::byte>{table}, rows, socketEntryListIndex, indexRow)
+        if (!tables::index_row(
+                std::span<const std::byte>{table}, rows, socketEntryListIndex, indexRow)
             || indexRow.targetTag == 0) {
             report_ability_failure("index_row", character, socketEntryListIndex, rows.count);
             return;
         }
         if (!reader::read_tag(source, scratch, indexRow.targetTag, definition)) {
-            report_ability_failure("definition_read", character, socketEntryListIndex, indexRow.targetTag);
+            report_ability_failure(
+                "definition_read", character, socketEntryListIndex, indexRow.targetTag);
             return;
         }
         // A bundled group can freely mix which ability slot each of its members fills (an
@@ -153,19 +151,21 @@ bool build_character_abilities(const reader::Source& source,
             && !held(entryBucketOutput.first(entryBucketCount), socketEntryListIndex)) {
             state::build_data::socket_entry_buckets::Definition entryBuckets{};
             entryBuckets.socketEntryListIndex = socketEntryListIndex;
-            if (resolve_entry_buckets(
-                    source, scratch, std::span<const std::byte>{definition}, blob,
-                    entryBuckets.buckets)) {
+            if (resolve_entry_buckets(source,
+                                      scratch,
+                                      std::span<const std::byte>{definition},
+                                      blob,
+                                      entryBuckets.buckets)) {
                 entryBucketOutput[entryBucketCount++] = entryBuckets;
             }
         }
         if (!build_ability_buckets(
                 source, scratch, std::span<const std::byte>{definition}, blob, selection, row)) {
-            const std::size_t packedSelection = selection.movementEntry
-                                                | (selection.grenadeEntry << 8U)
-                                                | (selection.superEntry << 16U)
-                                                | (selection.meleeEntry << 24U);
-            report_ability_failure("bucket_build", character, socketEntryListIndex, packedSelection);
+            const std::size_t packedSelection =
+                selection.movementEntry | (selection.grenadeEntry << 8U)
+                | (selection.superEntry << 16U) | (selection.meleeEntry << 24U);
+            report_ability_failure(
+                "bucket_build", character, socketEntryListIndex, packedSelection);
             return;
         }
         output[count++] = row;
@@ -185,14 +185,13 @@ bool build_character_abilities(const reader::Source& source,
         const auto& equippedSlot = account.characters[character].equipment.slots[kSubclassSlot];
         state::build_data::items::Definition equippedItem{};
         if (!state::build_data::find_item_definition_hash(equippedSlot->definitionHash,
-                                                           equippedItem)) {
+                                                          equippedItem)) {
             continue;
         }
 
         // Every subclass the character owns publishes a row, not just the equipped one, so a
-        // later equip swap always lands on an already-built row instead of racing the next
-        // refresh slice. When the group cannot be resolved, at least the equipped one still
-        // publishes, matching the prior single-row behaviour.
+        // later equip swap lands on an already-built row instead of racing the next refresh
+        // slice. When the group cannot be resolved, the equipped one still publishes.
         std::array<std::uint16_t, state::build_data::kSubclassGroupSize> group{};
         std::array<std::uint16_t, state::build_data::kSubclassGroupSize> members{};
         std::size_t memberCount = 1;
@@ -206,15 +205,13 @@ bool build_character_abilities(const reader::Source& source,
             const std::uint16_t memberDefinitionIndex = members[member];
             state::build_data::items::details::Definition memberDetail{};
             if (!state::build_data::find_configured_item_detail(memberDefinitionIndex,
-                                                                 memberDetail)) {
+                                                                memberDetail)) {
                 continue;
             }
             publish(character, memberDetail.socketEntryListIndex, defaultSelection);
-            // Each owned subclass remembers its own picks now, not just the equipped one, so
-            // every member is checked for a non-default selection to publish on top of the
-            // default row every member gets: a fresh boot that never swapped needs its actual
-            // selection to resolve, not the shared default, for whichever subclasses were
-            // already configured before this boot.
+            // Each owned subclass remembers its own picks, so every member is checked for a
+            // non-default selection to publish on top of its default row. A fresh boot needs the
+            // actual selection for subclasses configured before this boot.
             const domain::Selection* memberSelection = nullptr;
             domain::Selection resolvedSelection{};
             if (memberDefinitionIndex == equippedItem.definitionIndex) {
@@ -223,7 +220,7 @@ bool build_character_abilities(const reader::Source& source,
             } else {
                 state::build_data::items::Definition memberItemDefinition{};
                 if (state::build_data::find_item_definition_index(memberDefinitionIndex,
-                                                                   memberItemDefinition)) {
+                                                                  memberItemDefinition)) {
                     const auto& inventory = account.characters[character].inventory;
                     for (std::size_t itemIndex = 0; itemIndex < inventory.count; ++itemIndex) {
                         if (inventory.values[itemIndex].definitionHash

@@ -134,10 +134,4 @@ ProtectedEntries protected_entries() noexcept {
     };
 }
 
-HRESULT STDMETHODCALLTYPE present(IDXGISwapChain* swapChain,
-                                  UINT syncInterval,
-                                  UINT flags) noexcept {
-    return present_body(swapChain, syncInterval, flags);
-}
-
 } // namespace sunrise::client::hooks::graphics::replacement

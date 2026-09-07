@@ -18,9 +18,16 @@ inline constexpr std::size_t kIdentityCapacity =
            && item.mutationSerial == 0;
 }
 
+/** Tier bits 1-5 are the native rarity ladder; bit 0 (no tier) is never a payout target. */
+constexpr std::uint8_t kDismantleTierMaskBits = 0b0011'1110U;
+constexpr std::uint8_t kDismantleClassMaskBits =
+    static_cast<std::uint8_t>(DismantleGearClass::weapon)
+    | static_cast<std::uint8_t>(DismantleGearClass::armor);
+
 /** @return True when one unused dismantle policy row is canonical zero. */
 [[nodiscard]] bool empty_dismantle_reward(const DismantleRewardPolicy& reward) noexcept {
-    return reward.definitionHash == 0 && reward.quantity == 0;
+    return reward.definitionHash == 0 && reward.quantity == 0 && reward.tierMask == 0
+           && reward.classMask == 0 && reward.masterwork == DismantleMasterworkFilter::any;
 }
 
 /** Checks filled policy rows, uniqueness, and the zero tail. */
@@ -28,35 +35,30 @@ inline constexpr std::size_t kIdentityCapacity =
     if (state.dismantleRewardCount > state.dismantleRewards.size()) {
         return false;
     }
-    for (std::size_t index = 0; index < state.dismantleRewards.size(); ++index) {
+    for (std::size_t index = 0; index < state.dismantleRewardCount; ++index) {
         const DismantleRewardPolicy& reward = state.dismantleRewards[index];
-        if (index >= state.dismantleRewardCount) {
-            if (!empty_dismantle_reward(reward)) {
-                return false;
-            }
-            continue;
-        }
-        if (reward.definitionHash == inventory::kNoDefinitionHash || reward.quantity <= 0) {
+        if (reward.definitionHash == inventory::kNoDefinitionHash || reward.quantity <= 0
+            || (reward.tierMask & ~kDismantleTierMaskBits) != 0
+            || (reward.classMask & ~kDismantleClassMaskBits) != 0
+            || reward.masterwork > DismantleMasterworkFilter::notMasterworked) {
             return false;
         }
         for (std::size_t prior = 0; prior < index; ++prior) {
-            if (state.dismantleRewards[prior].definitionHash == reward.definitionHash) {
+            if (same_dismantle_policy_key(state.dismantleRewards[prior], reward)) {
                 return false;
             }
         }
     }
-    return true;
+    const auto tail =
+        state.dismantleRewards.cbegin() + static_cast<std::ptrdiff_t>(state.dismantleRewardCount);
+    return std::all_of(tail, state.dismantleRewards.cend(), empty_dismantle_reward);
 }
 
-/** Adds one nonzero globally unique key to a bounded identity set. */
+/** Adds one nonzero key to the bounded identity buffer. */
 [[nodiscard]] bool append_identity(std::array<std::uint64_t, kIdentityCapacity>& identities,
                                    std::size_t& count,
                                    std::uint64_t soid) noexcept {
     if (soid == 0 || count >= identities.size()) {
-        return false;
-    }
-    const auto end = identities.cbegin() + static_cast<std::ptrdiff_t>(count);
-    if (std::find(identities.cbegin(), end, soid) != end) {
         return false;
     }
     identities[count++] = soid;
@@ -90,20 +92,19 @@ inline constexpr std::size_t kIdentityCapacity =
     if (!append_identity(identities, identityCount, state.primarySoid)) {
         return false;
     }
-    for (std::size_t index = 0; index < state.profileItems.size(); ++index) {
+    for (std::size_t index = 0; index < state.profileItemCount; ++index) {
         const inventory::ProfileItem& item = state.profileItems[index];
-        if (index >= state.profileItemCount) {
-            if (!empty_profile_item(item)) {
-                return false;
-            }
-            continue;
-        }
         if (item.definitionHash == inventory::kNoDefinitionHash || item.quantity <= 0
             || item.mutationSerial < 0
             || (item.instanceSoid != 0
                 && !append_identity(identities, identityCount, item.instanceSoid))) {
             return false;
         }
+    }
+    const auto profileTail =
+        state.profileItems.cbegin() + static_cast<std::ptrdiff_t>(state.profileItemCount);
+    if (!std::all_of(profileTail, state.profileItems.cend(), empty_profile_item)) {
+        return false;
     }
 
     bool selected = false;
@@ -114,7 +115,7 @@ inline constexpr std::size_t kIdentityCapacity =
             || character.gender > CharacterGender::female
             || character.characterClass > CharacterClass::warlock
             || !std::isfinite(character.appearanceValue) || !inventory::valid(character.equipment)
-            || !inventory::valid(character.inventory)) {
+            || !inventory::valid(character.inventory) || !inventory::valid(character.stacks)) {
             return false;
         }
         selected = selected || character.selected;
@@ -132,7 +133,9 @@ inline constexpr std::size_t kIdentityCapacity =
             }
         }
     }
-    return true;
+    auto end = identities.begin() + static_cast<std::ptrdiff_t>(identityCount);
+    std::sort(identities.begin(), end);
+    return std::adjacent_find(identities.begin(), end) == end;
 }
 
 } // namespace

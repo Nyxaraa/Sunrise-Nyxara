@@ -117,6 +117,7 @@ void arm_encryption(Session& session, const state::BapState& bap) noexcept {
     session.sendNonce = bap.nonce;
     session.receiveNonce = bap.nonce;
     session.receiveNonce.back() ^= kReceiveDirectionMask;
+    session.sessionKey = bap.sessionKey;
     session.authenticated = true;
 }
 
@@ -138,9 +139,8 @@ void arm_encryption(Session& session, const state::BapState& bap) noexcept {
                                    std::size_t& written) noexcept {
     written = 0;
     encrypted::ServiceRoute route;
-    (void)encrypted::routing::resolve(request.messageId, route);
+    (void)encrypted::routing::resolve(request.serviceId, route);
     if (route.responseMode != encrypted::ResponseMode::reply) {
-        core::log::write(core::log::Channel::server, core::log::Level::info, route.successEvent);
         return true;
     }
     encrypted::ServiceOutcome outcome{};
@@ -149,7 +149,8 @@ void arm_encryption(Session& session, const state::BapState& bap) noexcept {
     // pending ring, so one unanswered request jams that ring for the rest of the run.
     if (!encrypted::body::process(route,
                                   session.queuez,
-                                  session.activitySessionId,
+                                  session.activity,
+                                  session.activityRosterDecode,
                                   session.matchmakingContext,
                                   request.body,
                                   scratch.responseBody,
@@ -165,12 +166,11 @@ void arm_encryption(Session& session, const state::BapState& bap) noexcept {
                                          response,
                                          written);
     SecureZeroMemory(scratch.responseBody.data(), bodySize);
-    SecureZeroMemory(&outcome, sizeof outcome);
+    outcome = {};
     if (!encoded) {
-        report_refusal(session, request.messageId, "encode");
+        report_refusal(session, request.serviceId, "encode");
         return false;
     }
-    core::log::write(core::log::Channel::server, core::log::Level::info, route.successEvent);
     return true;
 }
 
@@ -197,7 +197,7 @@ bool consume(Session& session,
     }
     // The channel-start body is a nonce the Client checks only the length of, so echoing whatever
     // arrived is always the correct reply.
-    if (frame.messageId == static_cast<std::uint16_t>(middleware::bap::RequestService::start)) {
+    if (frame.serviceId == static_cast<std::uint16_t>(middleware::bap::RequestService::start)) {
         const bool encoded =
             middleware::bap::encode_response(middleware::bap::ResponseService::start,
                                              frame.taskId,
@@ -205,31 +205,31 @@ bool consume(Session& session,
                                              frame.body,
                                              response,
                                              written);
-        if (encoded) {
-            core::log::write(core::log::Channel::server,
-                             core::log::Level::info,
-                             "ev=bap svc=30 rsp=31 result=ok");
-        }
         return encoded;
     }
-    if (frame.messageId
+    if (frame.serviceId
         != static_cast<std::uint16_t>(middleware::bap::RequestService::serverHello)) {
         return consume_service(session, scratch, frame, response, written);
     }
 
     const auto& signOnState = state::sign_on();
-    const auto& bapState = state::bap();
-    // Every service 25 is answered without reading the body, and that reaches the Tower on both
-    // links. The reply is built from State alone, so the body is logged and never refused. The
-    // activity host's hello uses other framing, and refusing it stranded that link in
-    // `_authenticating` with no service named anywhere in the log.
+    // This connection's own key, nonce and envelope IV. The envelope hands them to the client, so
+    // the material it carries and the material this link then seals with are the same object.
+    state::BapState bapState{};
+    if (!state::new_bap_session(bapState)) {
+        report_refusal(session, frame.serviceId, "session_material");
+        return false;
+    }
+    // Every service 25 is answered without reading the body, on both links. The reply is built
+    // from State alone, so the body is logged and never refused. The activity host's hello uses
+    // other framing, and refusing it strands that link in `_authenticating`.
     if (session.authenticated) {
-        report_refusal(session, frame.messageId, "reauthenticated");
+        report_refusal(session, frame.serviceId, "reauthenticated");
     }
     if (!valid_hello_shape(frame.body)) {
         report_hello_shape(session, frame.body);
     } else if (!hello_token_matches(frame.body, signOnState)) {
-        report_refusal(session, frame.messageId, "token_mismatch_accepted");
+        report_refusal(session, frame.serviceId, "token_mismatch_accepted");
     }
     // A repeat hello replaces its context, so the old one goes back before the new one is taken.
     // Holding both at once drains the small pool on the second hello of a session.
@@ -241,7 +241,7 @@ bool consume(Session& session,
     if (!state::matchmaking::acquire_context(matchmakingContext)) {
         // The svc-26 envelope is built from State alone. Refusing over a context the reply never
         // reads strands the link in its authenticating step with no service named anywhere.
-        report_refusal(session, frame.messageId, "context_unavailable");
+        report_refusal(session, frame.serviceId, "context_unavailable");
     }
     std::array<std::byte, middleware::secure_channel::kServerHelloEnvelopeSize> envelope{};
     std::size_t envelopeSize = 0;
@@ -257,15 +257,13 @@ bool consume(Session& session,
     SecureZeroMemory(envelope.data(), envelope.size());
     if (!encoded) {
         (void)state::matchmaking::release_context(matchmakingContext);
-        report_refusal(session, frame.messageId, "encode");
+        report_refusal(session, frame.serviceId, "encode");
         return false;
     }
     // Publish the context and counters only after the whole svc-26 response exists. A context that
     // was not free publishes as invalid instead of costing the reply.
     session.matchmakingContext = matchmakingContext;
     arm_encryption(session, bapState);
-    core::log::write(
-        core::log::Channel::server, core::log::Level::info, "ev=bap svc=25 rsp=26 result=ok");
     return true;
 }
 

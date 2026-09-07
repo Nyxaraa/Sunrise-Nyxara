@@ -77,20 +77,11 @@ bool decode(const VendorDefinitionRecord& record, vendors::Definition& value) no
 /** Encodes one vendor sale row. */
 bool encode(const vendors::SaleRow& value, VendorSaleRowRecord& record) noexcept {
     record = {};
-    record.vendorIndex = value.vendorIndex;
-    record.rowIndex = value.rowIndex;
     record.itemIndex = value.itemIndex;
     record.secondaryItemIndex = value.secondaryItemIndex;
-    record.installedIndex = value.installedIndex;
-    record.raw104 = value.raw104;
-    record.raw108 = value.raw108;
-    record.raw172 = value.raw172;
-    record.expressionCount8 = value.expressionCount8;
-    record.nestedRecordCount = value.nestedRecordCount;
-    record.expressionCount120 = value.expressionCount120;
-    record.count136 = value.count136;
-    record.expressionCount160 = value.expressionCount160;
-    record.featureBranch = value.featureBranch;
+    record.categoryIndex = value.categoryIndex;
+    record.costQuantity = value.costQuantity;
+    record.costItemIndex = value.costItemIndex;
     return true;
 }
 
@@ -100,35 +91,23 @@ bool decode(const VendorSaleRowRecord& record, vendors::SaleRow& value) noexcept
     if (record.reserved != decltype(record.reserved){}) {
         return false;
     }
-    value.vendorIndex = record.vendorIndex;
-    value.rowIndex = record.rowIndex;
     value.itemIndex = record.itemIndex;
     value.secondaryItemIndex = record.secondaryItemIndex;
-    value.installedIndex = record.installedIndex;
-    value.raw104 = record.raw104;
-    value.raw108 = record.raw108;
-    value.raw172 = record.raw172;
-    value.expressionCount8 = record.expressionCount8;
-    value.nestedRecordCount = record.nestedRecordCount;
-    value.expressionCount120 = record.expressionCount120;
-    value.count136 = record.count136;
-    value.expressionCount160 = record.expressionCount160;
-    value.featureBranch = record.featureBranch;
+    value.categoryIndex = record.categoryIndex;
+    value.costQuantity = record.costQuantity;
+    value.costItemIndex = record.costItemIndex;
     return true;
 }
 
-/** Encodes one vendor installed row. */
+/** Encodes one vendor category row. */
 bool encode(const vendors::InstalledRow& value, VendorInstalledRowRecord& record) noexcept {
-    record = {};
-    record.vendorIndex = value.vendorIndex;
-    record.rowIndex = value.rowIndex;
-    record.raw = value.raw;
+    record = {value.definitionHash};
     return true;
 }
 
-/** Decodes one vendor installed row. */
+/** Decodes one vendor category row. */
 bool decode(const VendorInstalledRowRecord& record, vendors::InstalledRow& value) noexcept {
-    value = {record.vendorIndex, record.rowIndex, record.raw};
+    value = {record.definitionHash};
     return true;
 }
 

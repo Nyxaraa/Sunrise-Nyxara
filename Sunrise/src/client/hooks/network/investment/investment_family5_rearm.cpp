@@ -4,7 +4,6 @@
  * reads an override list that is not there yet.
  */
 
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -31,35 +30,31 @@ constexpr auto kCommitSignature =
 
 /** Result returned when the trampoline is gone, so no commit ran. */
 constexpr std::int64_t kNoCommit = 0;
-
 using CommitFamily5 = std::int64_t(__fastcall*)(void*, std::uint64_t*);
 
 hooking::detour::Handle g_handle{};
 std::atomic<CommitFamily5> g_original{nullptr};
-std::atomic_bool g_reportedArm{false};
 
 /**
  * Runs the family-five commit, then arms one derived-state rebuild. The two callers pass different
  * second arguments, so it is passed on unread. Arming twice is harmless, and the next freshness
  * verdict uses it up, so repeat commits need no latch.
- * @param primaryRecordBlock Borrowed record block the commit writes into.
+ * @param manager Borrowed queuez manager owning the Family-5 commit.
  * @param nested4 Borrowed caller-owned argument, passed on unread.
  * @return The commit's own result, or the no-commit result when the trampoline is gone.
  */
-__declspec(noinline) std::int64_t __fastcall commit(void* primaryRecordBlock,
+__declspec(noinline) std::int64_t __fastcall commit(void* manager,
                                                     std::uint64_t* nested4) noexcept {
     const CommitFamily5 original = g_original.load(std::memory_order_acquire);
     if (original == nullptr) {
         return kNoCommit;
     }
     // Arm on the way out: the overrides are in the object only once the commit has run.
-    const std::int64_t result = original(primaryRecordBlock, nested4);
+    const std::int64_t result = original(manager, nested4);
     arm_derived_rebuild();
-    if (!g_reportedArm.exchange(true, std::memory_order_relaxed)) {
-        core::log::write(core::log::Channel::client,
-                         core::log::Level::info,
-                         "ev=investment stage=family5_commit result=armed");
-    }
+    core::log::write(core::log::Channel::client,
+                     core::log::Level::debug,
+                     "ev=investment stage=family5_commit result=armed");
     return result;
 }
 
@@ -100,7 +95,6 @@ bool uninstall_family5_rearm() noexcept {
         return false;
     }
     g_original.store(nullptr, std::memory_order_release);
-    g_reportedArm.store(false, std::memory_order_release);
     return true;
 }
 

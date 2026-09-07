@@ -9,6 +9,8 @@ namespace sunrise::middleware::bap::activity_host_manager {
 struct Request final {
     /** Holds credentials. Never keep, log, capture or save this view. */
     std::span<const std::byte> protobuf{};
+    /** Reserved producer bytes after protobuf. They share the same sensitive lifetime. */
+    std::span<const std::byte> padding{};
 };
 
 } // namespace sunrise::middleware::bap::activity_host_manager

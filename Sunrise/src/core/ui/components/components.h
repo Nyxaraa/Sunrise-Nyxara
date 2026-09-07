@@ -2,6 +2,8 @@
 
 #include "card/ui_card_component.h"
 #include "filter/ui_filter_component.h"
+#include "label/ui_label_component.h"
+#include "logo/ui_logo_component.h"
 #include "navigation/ui_navigation_component.h"
 #include "picker/ui_picker_component.h"
 #include "section/ui_section_component.h"

@@ -7,33 +7,16 @@
 namespace sunrise::steam::interfaces::methods {
 namespace {
 
-/** Steam callback id for receiving the current user stats. */
-constexpr int kUserStatsReceivedCallback = 1101;
-/** Steam result code for success. */
-constexpr int kResultOk = 1;
-/**
- * Account id for the single local user. The Client builds its whole account identity from it,
- * so the authored `primary_soid` is tied to this value and the two move together.
- */
+/** Account id for the single local user. The authored `primary_soid` must match it. */
 constexpr std::uint64_t kLocalSteamId = 0x0110000130AA9EC5ULL;
 /** Steam universe value for the public network. */
 constexpr int kConnectedUniverse = 1;
+/** An empty country token turns region filtering off. */
+constexpr char kCountry[] = "";
 /** FNV-1a 64-bit offset basis for stable action handles. */
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 /** FNV-1a 64-bit prime for stable action handles. */
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
-/** The user-stats callback is 24 bytes. */
-constexpr std::size_t kUserStatsReceivedSize = 24;
-
-/** Steam current-user-stats callback layout. */
-struct UserStatsReceived {
-    std::uint64_t gameId{};
-    int result{};
-    DWORD padding{};
-    std::uint64_t userId{};
-};
-
-static_assert(sizeof(UserStatsReceived) == kUserStatsReceivedSize);
 
 /** @param value Action name. @return FNV-1a handle, or zero for a missing name. */
 [[nodiscard]] std::uint64_t hash_name(const char* value) noexcept {
@@ -50,8 +33,8 @@ static_assert(sizeof(UserStatsReceived) == kUserStatsReceivedSize);
 
 } // namespace
 
-/** @return Zero. The call is not supported. */
-ULONG_PTR empty([[maybe_unused]] void* self) noexcept {
+/** @return Zero. The slot is not supported. */
+ULONG_PTR unsupported([[maybe_unused]] void* self) noexcept {
     return 0;
 }
 
@@ -87,26 +70,6 @@ SteamId* get_steam_id([[maybe_unused]] void* self, SteamId* result) noexcept {
  * @return True for every id.
  */
 bool app_is_installed([[maybe_unused]] void* self, [[maybe_unused]] DWORD candidate) noexcept {
-    return true;
-}
-
-/** @return True when the stats callback is queued. */
-bool request_current_stats([[maybe_unused]] void* self) noexcept {
-    const UserStatsReceived received{app_id(), kResultOk, 0, 0};
-    return queue_callback(kUserStatsReceivedCallback, 0, &received, sizeof(received));
-}
-
-/**
- * @param achieved Receives false when storage is given.
- * @return True when the output storage is valid.
- */
-bool get_achievement([[maybe_unused]] void* self,
-                     [[maybe_unused]] const char* name,
-                     bool* achieved) noexcept {
-    if (achieved == nullptr) {
-        return false;
-    }
-    *achieved = false;
     return true;
 }
 
@@ -207,6 +170,16 @@ void* get_client_http([[maybe_unused]] void* self,
 /** @return The Steam public-universe id. */
 int connected_universe([[maybe_unused]] void* self) noexcept {
     return kConnectedUniverse;
+}
+
+/** @return Empty token, so region filtering stays off. */
+const char* country([[maybe_unused]] void* self) noexcept {
+    return kCountry;
+}
+
+/** @return Active application id. */
+DWORD get_app_id([[maybe_unused]] void* self) noexcept {
+    return app_id();
 }
 
 } // namespace sunrise::steam::interfaces::methods

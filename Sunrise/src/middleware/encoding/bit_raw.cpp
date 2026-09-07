@@ -40,6 +40,19 @@ bool skip_raw(Reader& reader, std::size_t count) noexcept {
     return reader.skip(count * kByteWidth);
 }
 
+/** Copies bits straight from a reader into a writer. */
+bool copy(Reader& source, Writer& output, std::size_t bitCount) noexcept {
+    while (bitCount != 0) {
+        const auto width = static_cast<std::uint8_t>(bitCount < kByteWidth ? bitCount : kByteWidth);
+        std::uint64_t value = 0;
+        if (!source.read(width, value) || !output.write(value, width)) {
+            return false;
+        }
+        bitCount -= width;
+    }
+    return true;
+}
+
 /** Reads one raw 64-bit integer. */
 bool read_raw_u64(Reader& reader, std::uint64_t& value) noexcept {
     std::uint64_t assembled = 0;

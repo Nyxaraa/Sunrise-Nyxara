@@ -7,7 +7,7 @@
 namespace sunrise::middleware::datagen::family4::account {
 
 /**
- * Encodes a sentinel-correct account object from authored State.
+ * Encodes a sentinel-correct account object from live State.
  * @param state Account identity, roster, preferences, and selected-character state.
  * @param output Exact State-mapped account-object storage.
  * @return True when State is valid and every required fixed region fits.

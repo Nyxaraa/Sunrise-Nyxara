@@ -11,11 +11,14 @@
 #include <cstdio>
 #include <imgui.h>
 
+#include "../../../core/ui/components/label/ui_label_component.h"
 #include "../../../core/ui/components/toggle/ui_toggle_component.h"
 #include "../../movement/movement_settings_store.h"
 
 namespace sunrise::client::ui::movement {
 namespace {
+
+namespace label = core::ui::components::label;
 
 /** Lowest and highest virtual keys the picker scans. Zero is not a key. */
 constexpr int kFirstVirtualKey = 1;
@@ -29,7 +32,7 @@ enum class CaptureTarget {
     none,
     teleport,
     noclip,
-    swordSkate,
+    fly,
 };
 
 CaptureTarget g_capturing{CaptureTarget::none};
@@ -140,10 +143,11 @@ void draw() noexcept {
     ImGui::Spacing();
     // One label column and one control column, so the slider and key buttons share both edges.
     const float labelWidth =
-        ImGui::CalcTextSize("Toggle key").x + ImGui::GetStyle().ItemSpacing.x * 2;
+        label::inset() + ImGui::CalcTextSize("Toggle key").x + ImGui::GetStyle().ItemSpacing.x * 2;
     const float controlWidth = ImGui::GetContentRegionAvail().x - labelWidth;
 
     ImGui::AlignTextToFramePadding();
+    label::align();
     ImGui::TextUnformatted("Distance");
     ImGui::SameLine(labelWidth);
     ImGui::SetNextItemWidth(controlWidth);
@@ -159,6 +163,7 @@ void draw() noexcept {
 
     ImGui::Spacing();
     ImGui::AlignTextToFramePadding();
+    label::align();
     ImGui::TextUnformatted("Key");
     ImGui::SameLine(labelWidth);
     changed = key_picker("teleport_key", CaptureTarget::teleport, settings.virtualKey, controlWidth)
@@ -168,8 +173,7 @@ void draw() noexcept {
     ImGui::Spacing();
     ImGui::TextUnformatted("Noclip");
     ImGui::Separator();
-    ImGui::TextWrapped("Uses native horizontal rigid-body velocity while preserving the game's "
-                       "vertical movement. The bound key turns it on and off in game.");
+    ImGui::TextWrapped("Disable collision on the horizontal axis.");
     ImGui::Spacing();
 
     changed =
@@ -177,6 +181,7 @@ void draw() noexcept {
 
     ImGui::Spacing();
     ImGui::AlignTextToFramePadding();
+    label::align();
     ImGui::TextUnformatted("Toggle key");
     ImGui::SameLine(labelWidth);
     changed =
@@ -185,27 +190,47 @@ void draw() noexcept {
 
     ImGui::Spacing();
     ImGui::Spacing();
+    ImGui::TextUnformatted("Fly");
+    ImGui::Separator();
+    ImGui::TextWrapped("Fly with your movement keys.");
+    ImGui::Spacing();
+
+    changed = core::ui::components::toggle::control("Enabled##fly", settings.flyEnabled) || changed;
+
+    ImGui::Spacing();
+    ImGui::AlignTextToFramePadding();
+    label::align();
+    ImGui::TextUnformatted("Toggle key");
+    ImGui::SameLine(labelWidth);
+    changed =
+        key_picker("fly_key", CaptureTarget::fly, settings.flyToggleKey, controlWidth) || changed;
+
+    ImGui::Spacing();
+    ImGui::AlignTextToFramePadding();
+    label::align();
+    ImGui::TextUnformatted("Speed");
+    ImGui::SameLine(labelWidth);
+    ImGui::SetNextItemWidth(controlWidth);
+    float flySpeed = settings.flySpeed;
+    if (ImGui::SliderFloat("##fly_speed",
+                           &flySpeed,
+                           client::movement::kMinimumFlySpeed,
+                           client::movement::kMaximumFlySpeed,
+                           "%.0f units/s")) {
+        settings.flySpeed = flySpeed;
+        changed = true;
+    }
+
+    ImGui::Spacing();
+    ImGui::Spacing();
     ImGui::TextUnformatted("Sword Skate Fix");
     ImGui::Separator();
-    ImGui::TextWrapped("A sword's air attack throws you forward, and a glide started while that "
-                       "throw is still carrying you keeps the speed. The client refuses to start a "
-                       "glide during the throw. This clears that refusal on the tick you press "
-                       "jump, and the client's own glide runs from there.");
+    ImGui::TextWrapped("Disable sword swings blocking ability usage.");
     ImGui::Spacing();
 
     changed =
         core::ui::components::toggle::control("Enabled##sword_skate", settings.swordSkateEnabled)
         || changed;
-
-    ImGui::Spacing();
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Jump key");
-    ImGui::SameLine(labelWidth);
-    changed =
-        key_picker(
-            "sword_skate_key", CaptureTarget::swordSkate, settings.swordSkateJumpKey, controlWidth)
-        || changed;
-    ImGui::TextWrapped("Must match the key the game jumps on. Nothing happens on any other key.");
 
     if (changed && !client::movement::publish(settings)) {
         ImGui::Spacing();

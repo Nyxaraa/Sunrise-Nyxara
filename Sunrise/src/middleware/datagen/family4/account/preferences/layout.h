@@ -104,6 +104,7 @@ struct BindingsRecord {
     std::uint8_t voiceChatMirror{};
     std::uint8_t verticalSyncMirror{};
     std::array<std::byte, kFieldOfViewPaddingSize> fieldOfViewPadding{};
+    /** Stores the absolute FOV menu value used by the target client. */
     std::int32_t fieldOfViewAdjustment{};
     /** 0 picks this replicated array after the client's initial seed pass. */
     std::uint8_t sourceSelector{};

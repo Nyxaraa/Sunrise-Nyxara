@@ -1,5 +1,6 @@
 #include "reliable_assembly.h"
 
+#include "../../encoding/bit_raw.h"
 #include "../../encoding/bit_reader.h"
 #include "../../encoding/bit_writer.h"
 #include "peer_container.h"
@@ -91,15 +92,8 @@ bool drain_message(state::gameplay::ReliableQueue& queue, AssembledMessage& outp
             (queue.nextSequence + index) % state::gameplay::kMessageSequenceModulus);
         state::gameplay::ReliableFragment& fragment = queue.fragments[slot_of(sequence)];
         bits::Reader reader({fragment.bytes.data(), fragment.bytes.size()});
-        std::size_t remaining = fragment.bitCount;
-        while (remaining != 0) {
-            const auto width =
-                static_cast<std::uint8_t>(remaining < kByteBits ? remaining : kByteBits);
-            std::uint64_t value = 0;
-            if (!reader.read(width, value) || !writer.write(value, width)) {
-                return false;
-            }
-            remaining -= width;
+        if (!bits::copy(reader, writer, fragment.bitCount)) {
+            return false;
         }
         fragment = {};
     }

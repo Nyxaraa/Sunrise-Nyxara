@@ -58,9 +58,7 @@ bool collect_bucket_definition_tag(void* context, std::uint32_t tag) noexcept {
 
 /**
  * Locates the bucket-definition table by the class its entry record carries.
- * A tag is a package-local handle that a repack moves, so naming one pins the extraction to a
- * single install. The class belongs to the definition ABI, so it names the table wherever it was
- * packed. Entry tables are plain file data, so the sweep needs no block keys.
+ * A repack moves the tag but not the class, so search by class. Entry tables need no block keys.
  * @param source Package source.
  * @param tag Receives the located tag.
  * @return True when exactly one installed entry carries the class.

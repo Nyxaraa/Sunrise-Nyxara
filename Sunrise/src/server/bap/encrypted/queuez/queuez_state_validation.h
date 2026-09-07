@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 
 #include "../../../../middleware/queuez/queuez_update.h"
 #include "../../../../middleware/queuez/subscription.h"
@@ -29,8 +30,8 @@ namespace sunrise::server::bap::encrypted::queuez {
 
 /**
  * Decides whether one family-zero subscription publishes, and as which kind of frame.
- * Retail sets the full-snapshot flag once per family and adds one to every later push, so a
- * repeat that changes nothing is not sent at all.
+ * A repeat naming the character the pair already holds reports no publish and no version bump.
+ * Both callers send anyway, so the answer is which frame to build, not whether to answer.
  * @param before Current queuez state owned by the peer.
  * @param selectedCharacter Character the family-zero pair names now.
  * @param publish Gets whether a frame is needed.
@@ -87,6 +88,18 @@ namespace sunrise::server::bap::encrypted::queuez {
 [[nodiscard]] bool stage_equipment_swap(const SessionState& before,
                                         std::uint64_t characterSoid,
                                         EquipmentSwap& swap) noexcept;
+
+/**
+ * Stages the resident character upsert a current-activity change carries.
+ * The object is the same character re-encoded; the manifest and every other resident stay.
+ * @param before Validated queuez state for this connection.
+ * @param characterSoid Selected character, which must be resident.
+ * @param swap Receives the +1 after-image and the character's definition and key.
+ * @return True when the character is resident and the version ladder can advance.
+ */
+[[nodiscard]] bool stage_current_activity_character(const SessionState& before,
+                                                    std::uint64_t characterSoid,
+                                                    EquipmentSwap& swap) noexcept;
 
 /**
  * Stages one same-character Family-0 appearance-record increment after an equipment swap.
@@ -157,12 +170,18 @@ namespace sunrise::server::bap::encrypted::queuez {
                                           bool updatesAccount,
                                           ItemAcquisition& acquisition) noexcept;
 
+/** Validates one same-version bundle append and returns the revision its response may promise. */
+[[nodiscard]] bool stage_direct_item_bundle(const SessionState& before,
+                                            std::uint64_t accountSoid,
+                                            std::uint64_t characterSoid,
+                                            std::uint64_t firstInstanceSoid,
+                                            std::size_t itemCount,
+                                            std::int32_t& family4Version) noexcept;
+
 /**
  * Stages one Family-4 version increment for a full resident account-object upsert.
  * A profile row with a nonzero action-source SOID must already be resident when its stack grows,
- * or is appended exactly once when Collections creates the row. Currency/material rows keep a
- * zero SOID and preserve the manifest.
- *
+ * or is appended once when Collections creates it. Currency rows keep a zero SOID.
  * @param before Current active peer state.
  * @param accountSoid Account root receiving the profile stack.
  * @param acquiredInstanceSoid Profile action-source key, or zero for a non-actionable stack.
@@ -177,6 +196,13 @@ namespace sunrise::server::bap::encrypted::queuez {
                                                   bool actionSource,
                                                   bool appended,
                                                   ProfileItemAcquisition& acquisition) noexcept;
+
+/** Stages one version containing a complete multi-row record reward and claim. */
+[[nodiscard]] bool stage_record_reward_grant(const SessionState& before,
+                                             std::uint64_t accountSoid,
+                                             std::uint64_t characterSoid,
+                                             std::span<const std::uint64_t> appendedResidents,
+                                             RecordRewardGrant& grant) noexcept;
 
 /**
  * Stages one Family-4 increment that removes an item resident and updates its character.
@@ -196,8 +222,9 @@ namespace sunrise::server::bap::encrypted::queuez {
                                         bool updatesAccount,
                                         ItemDismantle& dismantle) noexcept;
 
-/** Clears state for the active root. Zero or another root leaves the state unchanged. */
+/** Clears one named family. Another family, root or an inactive record changes nothing. */
 void stage_unsubscription(const SessionState& before,
+                          std::uint32_t familyType,
                           std::uint64_t familyRootSoid,
                           SessionState& after) noexcept;
 

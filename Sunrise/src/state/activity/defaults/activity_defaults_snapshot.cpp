@@ -43,12 +43,37 @@ void apply_arrival_override(const ActivityDefaults& defaults,
             selection.arrivalBubbleOverride = row.bubble;
             selection.hasArrivalBubbleOverride = true;
         }
+        if (row.hasSliceSet) {
+            selection.sliceSetOverride = row.sliceSet;
+            selection.hasSliceSetOverride = true;
+        }
         if (row.hasSpawnSetHash) {
             selection.spawnSetOverride = row.spawnSetHash;
             selection.hasSpawnSetOverride = true;
         }
         return;
     }
+}
+
+/** @return True when the authored row for this package makes a launch its current activity. */
+bool current_activity_from_launch(std::string_view packageName) noexcept {
+    if (packageName.empty()) {
+        return false;
+    }
+    bool follows = false;
+    AcquireSRWLockShared(&runtime::storage::g_stateLock);
+    const ActivityDefaults& defaults = runtime::storage::g_state.activity.defaults;
+    const std::size_t count = (std::min)(static_cast<std::size_t>(defaults.arrivalOverrideCount),
+                                         defaults.arrivalOverrides.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        const ArrivalOverride& row = defaults.arrivalOverrides[index];
+        if (override_name(row) == packageName) {
+            follows = row.currentActivityFromLaunch;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&runtime::storage::g_stateLock);
+    return follows;
 }
 
 } // namespace sunrise::state::activity::defaults

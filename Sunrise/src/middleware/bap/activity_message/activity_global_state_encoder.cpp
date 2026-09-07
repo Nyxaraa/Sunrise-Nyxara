@@ -2,6 +2,7 @@
 
 #include "../../encoding/bit_reader.h"
 #include "../../encoding/bit_writer.h"
+#include "definition.h"
 
 namespace sunrise::middleware::bap::activity_message::global_activity_state {
 namespace {
@@ -99,6 +100,41 @@ selection_scalar(std::int32_t value, std::int32_t maximum, std::uint32_t& encode
 }
 
 /**
+ * Proves a captured descriptor names the same destination as the surrounding State. Replaying a
+ * descriptor whose name branch is absent or disagrees would overwrite the selected name.
+ * @param state Body input holding the logical name and captured descriptor metadata.
+ * @return True when the complete fixed name field is present, bounded, and byte-exact.
+ */
+[[nodiscard]] bool replay_name_matches(const GlobalActivityState& state) noexcept {
+    const std::size_t nameBits = kNameCapacity * kBitsPerByte;
+    if (!state.hasDescriptorName || state.descriptorNameBit == 0
+        || state.descriptorBitLength > state.descriptorBits.size() * kBitsPerByte
+        || state.descriptorNameBit + nameBits > state.descriptorBitLength) {
+        return false;
+    }
+
+    encoding::bits::Reader reader(state.descriptorBits);
+    std::uint64_t present = 0;
+    if (!reader.skip(state.descriptorNameBit - 1) || !reader.read(1, present) || present == 0) {
+        return false;
+    }
+    for (std::size_t index = 0; index < kNameCapacity; ++index) {
+        std::uint64_t encoded = 0;
+        if (!reader.read(8, encoded)) {
+            return false;
+        }
+        const std::uint8_t expected = index < state.nameLength
+                                          ? static_cast<std::uint8_t>(state.name[index])
+                                          : std::uint8_t{};
+        const auto decoded = static_cast<std::uint8_t>(encoded - kNameBias);
+        if (decoded != expected) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
  * Writes the minimal selection descriptor, including the name.
  * @param writer Body writer sitting at the descriptor bit.
  * @return True when the whole descriptor was written.
@@ -106,14 +142,15 @@ selection_scalar(std::int32_t value, std::int32_t maximum, std::uint32_t& encode
 [[nodiscard]] bool write_descriptor(encoding::bits::Writer& writer,
                                     const GlobalActivityState& state) noexcept {
     std::uint32_t reason = 0;
-    std::uint32_t from = 0;
+    std::uint32_t requested = 0;
     std::uint32_t activity = 0;
     if (!selection_scalar(state.reason, kReasonMaximum, reason)
-        || !selection_scalar(state.fromActivityIndex, kIndexMaximum, from)
+        || !selection_scalar(state.requestedActivityIndex, kIndexMaximum, requested)
         || !selection_scalar(state.activityIndex, kIndexMaximum, activity)) {
         return false;
     }
-    if (!writer.write(reason, kDescriptorReasonWidth) || !writer.write(from, kDescriptorIndexWidth)
+    if (!writer.write(reason, kDescriptorReasonWidth)
+        || !writer.write(requested, kDescriptorIndexWidth)
         || !writer.write(activity, kDescriptorIndexWidth)) {
         return false;
     }
@@ -140,14 +177,29 @@ selection_scalar(std::int32_t value, std::int32_t maximum, std::uint32_t& encode
     return writer.write(0, 4);
 }
 
+/**
+ * Writes the fields after the descriptor. The tail follows both the replayed and the configured
+ * descriptor, so the time base rides every mode.
+ * @param writer Body writer sitting at the first tail bit.
+ * @param state Body input holding the session's time origin.
+ * @return True when the whole tail was written.
+ */
+[[nodiscard]] bool write_tail(encoding::bits::Writer& writer,
+                              const GlobalActivityState& state) noexcept {
+    // The name hash is a hash, not a scalar, so its empty value is the FNV basis and not zero.
+    return writer.write(0, kSwitchCountWidth)
+           && writer.write(kEmptyNameHash, kDescriptorNameHashWidth)
+           && writer.write(0, kDescriptorFlagWidth) && writer.write(state.timeBase, kTimeBaseWidth);
+}
+
 } // namespace
 
-/** Encodes one global activity state body with the configured selection descriptor. */
+/** Encodes one global activity state body with an exact coherent replay or configured fallback. */
 bool encode_global_activity_state(const GlobalActivityState& state,
                                   std::span<std::byte> output,
                                   std::size_t& written) noexcept {
     written = 0;
-    if (output.size() < kEncodedSize || state.nameLength >= kNameCapacity
+    if (output.size() < kEncodedSize || state.nameLength == 0 || state.nameLength >= kNameCapacity
         || state.bubbleCount > kBubbleStateCount) {
         return false;
     }
@@ -157,7 +209,7 @@ bool encode_global_activity_state(const GlobalActivityState& state,
     // The client's own descriptor is replayed when it was captured, because it carries fields with
     // no known name. It is wider than the configured minimal form whenever it names an optional
     // field, so the body is sized for the descriptor in hand, not for the minimum.
-    const bool replayed = state.descriptorBitLength != 0;
+    const bool replayed = state.descriptorBitLength != 0 && replay_name_matches(state);
     const std::size_t descriptorBits =
         replayed ? state.descriptorBitLength : kConfiguredDescriptorBits;
     const std::size_t bodySize = body_size(descriptorBits);
@@ -203,7 +255,7 @@ bool encode_global_activity_state(const GlobalActivityState& state,
     }
     // The tail is a fixed width after the descriptor, so a descriptor of another length moves the
     // body's end instead of overrunning a fixed total.
-    if (!pad_to(writer, kDescriptorBit + descriptorBits + kTailBits)) {
+    if (writer.bit_count() != kDescriptorBit + descriptorBits || !write_tail(writer, state)) {
         return false;
     }
 

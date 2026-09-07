@@ -15,6 +15,8 @@ namespace sunrise::server::bap::encrypted::queuez {
  * @param scratch Transform buffers owned by the lock.
  * @param before Queuez state the current BAP peer can see.
  * @param outcome Body outcome carrying at most one queuez action.
+ * @param preserveAcquisitionPresentation Whether the current feed window is still active.
+ * @param acquisitionPresentationRows Item identities already pinned to feed-referenced rows.
  * @param key Active AES-GCM session key.
  * @param nonce Local send nonce, advanced only by whole staged frames.
  * @param response Whole-frame staging storage owned by the lock.
@@ -22,13 +24,16 @@ namespace sunrise::server::bap::encrypted::queuez {
  * @param publication Gets a queuez after-image when an action records state.
  * @return True when every asked-for frame fits. Unsubscription is idempotent on its own.
  */
-[[nodiscard]] bool stage_service_outcome(Scratch& scratch,
-                                         const SessionState& before,
-                                         const ServiceOutcome& outcome,
-                                         std::span<const std::byte, state::kAesKeySize> key,
-                                         std::array<std::byte, state::kBapNonceSize>& nonce,
-                                         std::span<std::byte> response,
-                                         std::size_t& written,
-                                         StagedPublication& publication) noexcept;
+[[nodiscard]] bool
+stage_service_outcome(Scratch& scratch,
+                      const SessionState& before,
+                      const ServiceOutcome& outcome,
+                      bool preserveAcquisitionPresentation,
+                      std::span<const AcquisitionPresentationRow> acquisitionPresentationRows,
+                      std::span<const std::byte, state::kAesKeySize> key,
+                      std::array<std::byte, state::kBapNonceSize>& nonce,
+                      std::span<std::byte> response,
+                      std::size_t& written,
+                      StagedPublication& publication) noexcept;
 
 } // namespace sunrise::server::bap::encrypted::queuez

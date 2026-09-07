@@ -2,10 +2,8 @@
 
 #include <Windows.h>
 
-#include <algorithm>
 #include <array>
 #include <atomic>
-#include <string_view>
 #include <type_traits>
 
 #include "../../../middleware/crypto/ecc_p224.h"
@@ -13,6 +11,7 @@
 #include "../../../middleware/gameplay/dtls/association_keys.h"
 #include "../../../middleware/gameplay/dtls/dtls_messages.h"
 #include "../../../middleware/gameplay/dtls/record.h"
+#include "../../../middleware/gameplay/dtls/replay_high_water.h"
 #include "../endpoint/gameplay_endpoint.h"
 #include "../gameplay_log.h"
 #include "../peer/peer_transport.h"
@@ -45,6 +44,8 @@ struct Association {
     std::array<std::byte, wire::kInitAckSize> issued{};
     /** Keys and tag every record of this association uses. */
     middleware::gameplay::dtls::RecordContext record{};
+    /** Authenticated record sequences already admitted on this association. */
+    middleware::gameplay::dtls::ReplayHighWater receiveHighWater{};
     /** False until one received record names the digest that authenticates it. */
     bool authKnown{};
     /** Sequence the next sent record carries. */
@@ -72,30 +73,21 @@ std::atomic<unsigned> g_recordReported{0};
 
 std::array<Association, kAssociationCapacity> g_associations{};
 
-/**
- * Formats bytes as lowercase hex for one log line.
- * @param input Bytes to render.
- * @param output Receives the text and its terminator; it must hold two characters per byte.
- */
-void to_hex(std::span<const std::byte> input, std::span<char> output) noexcept {
-    /** Digits one nibble maps to. */
-    constexpr std::string_view kDigits{"0123456789abcdef"};
-    /** Bits in one nibble. */
-    constexpr unsigned kNibbleBits = 4;
-    /** Mask of one nibble. */
-    constexpr unsigned kNibbleMask = 0xF;
-    for (std::size_t index = 0; index < input.size(); ++index) {
-        const auto value = std::to_integer<unsigned>(input[index]);
-        output[index * 2] = kDigits[(value >> kNibbleBits) & kNibbleMask];
-        output[(index * 2) + 1] = kDigits[value & kNibbleMask];
-    }
-    output[input.size() * 2] = '\0';
+/** @return True while the record report budget has room. Each call spends one. */
+[[nodiscard]] bool record_report_due() noexcept {
+    return g_recordReported.fetch_add(1, std::memory_order_relaxed) < kMaxRecordReports;
 }
 
-/** @return True when both endpoints name the same address and port. */
-[[nodiscard]] bool same_endpoint(const state::gameplay::Endpoint& left,
-                                 const state::gameplay::Endpoint& right) noexcept {
-    return left.address == right.address && left.port == right.port;
+/** @return The association for one endpoint whose handshake is still open, or null. */
+[[nodiscard]] Association* find_handshake(const state::gameplay::Endpoint& from,
+                                          const wire::SecurityId& securityId) noexcept {
+    for (Association& association : g_associations) {
+        if (association.stage != Stage::absent && association.endpoint == from
+            && association.securityId == securityId) {
+            return &association;
+        }
+    }
+    return nullptr;
 }
 
 /**
@@ -109,14 +101,14 @@ void to_hex(std::span<const std::byte> input, std::span<char> output) noexcept {
 [[nodiscard]] Association* acquire(const state::gameplay::Endpoint& from,
                                    const wire::SecurityId& securityId,
                                    std::uint64_t now) noexcept {
+    // The peer restarts its own handshake on every retry, so its own id reuses the slot.
+    Association* const held = find_handshake(from, securityId);
+    if (held != nullptr) {
+        return held;
+    }
     Association* free = nullptr;
     Association* oldest = nullptr;
     for (Association& association : g_associations) {
-        if (association.stage != Stage::absent && same_endpoint(association.endpoint, from)
-            && association.securityId == securityId) {
-            // The peer restarts its own handshake on every retry, so its own id reuses the slot.
-            return &association;
-        }
         if (free == nullptr
             && (association.stage == Stage::absent
                 || (association.stage == Stage::cookieWait
@@ -141,7 +133,7 @@ void to_hex(std::span<const std::byte> input, std::span<char> output) noexcept {
 [[nodiscard]] Association* find_addressed(const state::gameplay::Endpoint& from,
                                           std::uint16_t tag) noexcept {
     for (Association& association : g_associations) {
-        if (association.stage == Stage::established && same_endpoint(association.endpoint, from)
+        if (association.stage == Stage::established && association.endpoint == from
             && association.responderTag == tag) {
             return &association;
         }
@@ -158,7 +150,7 @@ void to_hex(std::span<const std::byte> input, std::span<char> output) noexcept {
 [[nodiscard]] Association* find_sending(const state::gameplay::Endpoint& to) noexcept {
     Association* chosen = nullptr;
     for (Association& association : g_associations) {
-        if (association.stage != Stage::established || !same_endpoint(association.endpoint, to)) {
+        if (association.stage != Stage::established || association.endpoint != to) {
             continue;
         }
         // Both stamps start at zero, so a fresh association wins only until a record arrives.
@@ -170,25 +162,13 @@ void to_hex(std::span<const std::byte> input, std::span<char> output) noexcept {
     return chosen;
 }
 
-/** @return The association for one endpoint whose handshake is still open, or null. */
-[[nodiscard]] Association* find_handshake(const state::gameplay::Endpoint& from,
-                                          const wire::SecurityId& securityId) noexcept {
-    for (Association& association : g_associations) {
-        if (association.stage != Stage::absent && same_endpoint(association.endpoint, from)
-            && association.securityId == securityId) {
-            return &association;
-        }
-    }
-    return nullptr;
-}
-
 /**
  * Draws one nonzero 16-bit tag.
  * @param output Receives the tag only on success.
  * @return True when Windows produced the bytes.
  */
 [[nodiscard]] bool generate_tag(std::uint16_t& output) noexcept {
-    /** Bits in one byte. */
+    /** The two random bytes are folded low byte first. */
     constexpr unsigned kByteBits = 8;
     std::array<std::byte, sizeof(std::uint16_t)> bytes{};
     if (!middleware::crypto::random::fill(bytes)) {
@@ -294,8 +274,10 @@ void on_cookie_echo(const state::gameplay::Endpoint& from,
         report(core::log::Level::warn, "ev=gameplay stage=dtls result=drop reason=key_agreement");
         return;
     }
-    if (!middleware::gameplay::dtls::derive(
-            agreement.sharedSecret, kJoinKey, association->record.keys)) {
+    const bool derived = middleware::gameplay::dtls::derive(
+        agreement.sharedSecret, kJoinKey, association->record.keys);
+    SecureZeroMemory(agreement.sharedSecret.data(), agreement.sharedSecret.size());
+    if (!derived) {
         report(core::log::Level::warn, "ev=gameplay stage=dtls result=drop reason=key_derivation");
         return;
     }
@@ -315,18 +297,10 @@ void on_cookie_echo(const state::gameplay::Endpoint& from,
         ++g_openClock;
         association->opened = g_openClock;
     }
-    // TODO: stop logging key material once the digest choice is settled. Secrets must not be
-    // written to a log.
-    std::array<char, (2 * middleware::crypto::ecc::kFieldSize) + 1> secretText{};
-    to_hex(agreement.sharedSecret, secretText);
-    std::array<char, (2 * middleware::gameplay::dtls::kCypherKeySize) + 1> cypherText{};
-    to_hex(association->record.keys.cypher, cypherText);
     report(core::log::Level::info,
-           "ev=gameplay stage=dtls result=%s step=cookie_ack peer_tag=0x%04X secret=%s cypher=%s",
+           "ev=gameplay stage=dtls result=%s step=cookie_ack peer_tag=0x%04X",
            sent ? "ok" : "send_failed",
-           static_cast<unsigned>(association->requesterTag),
-           secretText.data(),
-           cypherText.data());
+           static_cast<unsigned>(association->requesterTag));
 }
 
 /**
@@ -351,7 +325,7 @@ void on_record(const state::gameplay::Endpoint& from,
     if (!association->authKnown) {
         if (!middleware::gameplay::dtls::identify_auth(
                 association->record.keys, datagram, association->record.authAlgorithm)) {
-            if (g_recordReported.fetch_add(1, std::memory_order_relaxed) < kMaxRecordReports) {
+            if (record_report_due()) {
                 report(core::log::Level::warn,
                        "ev=gameplay stage=dtls result=drop reason=auth_unknown bytes=%zu",
                        datagram.size());
@@ -368,17 +342,27 @@ void on_record(const state::gameplay::Endpoint& from,
     std::size_t size = 0;
     std::uint32_t sequence = 0;
     if (!middleware::gameplay::dtls::open(association->record, datagram, payload, size, sequence)) {
-        if (g_recordReported.fetch_add(1, std::memory_order_relaxed) < kMaxRecordReports) {
+        if (record_report_due()) {
             report(core::log::Level::warn,
                    "ev=gameplay stage=dtls result=drop reason=record bytes=%zu",
                    datagram.size());
         }
         return;
     }
+    const wire::ReplayDecision replay = wire::update(association->receiveHighWater, sequence);
+    if (replay != wire::ReplayDecision::accepted) {
+        if (record_report_due()) {
+            report(core::log::Level::warn,
+                   "ev=gameplay stage=dtls result=drop reason=%s seq=%u",
+                   replay == wire::ReplayDecision::duplicate ? "replay_duplicate" : "replay_old",
+                   sequence);
+        }
+        return;
+    }
     association->touched = now;
     ++g_openClock;
     association->heard = g_openClock;
-    if (g_recordReported.fetch_add(1, std::memory_order_relaxed) < kMaxRecordReports) {
+    if (record_report_due()) {
         report(core::log::Level::info,
                "ev=gameplay stage=dtls result=ok step=record seq=%u bytes=%zu",
                sequence,

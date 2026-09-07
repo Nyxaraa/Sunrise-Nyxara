@@ -106,6 +106,7 @@ void build_vector(std::uint32_t sequence,
 }
 
 /**
+ * Rounds one plaintext length up to whole cipher blocks.
  * @param plaintext Plaintext length.
  * @return The ciphertext length that plaintext length produces.
  */
@@ -145,6 +146,21 @@ void build_vector(std::uint32_t sequence,
     return difference == std::byte{0};
 }
 
+/**
+ * Reports whether one digest reproduces the tag a record carries.
+ * @param algorithm Digest to key.
+ * @param key Authentication key.
+ * @param datagram Whole record.
+ * @return True when the record authenticates under that digest.
+ */
+[[nodiscard]] bool auth_matches(crypto::hmac::Algorithm algorithm,
+                                std::span<const std::byte> key,
+                                std::span<const std::byte> datagram) noexcept {
+    std::array<std::byte, kRecordTagSize> expected{};
+    return authenticate(algorithm, key, datagram, expected)
+           && same_tag(datagram.subspan(kAuthOffset, kRecordTagSize), expected);
+}
+
 } // namespace
 
 /** Reads the tag one received record is addressed to, without opening it. */
@@ -168,9 +184,7 @@ bool open(const RecordContext& context,
     if (!shaped(datagram, declared) || plaintext.size() < padded_length(declared)) {
         return false;
     }
-    std::array<std::byte, kRecordTagSize> expected{};
-    if (!authenticate(context.authAlgorithm, context.keys.auth, datagram, expected)
-        || !same_tag(datagram.subspan(kAuthOffset, kRecordTagSize), expected)) {
+    if (!auth_matches(context.authAlgorithm, context.keys.auth, datagram)) {
         return false;
     }
 
@@ -237,9 +251,7 @@ bool identify_auth(const Keys& keys,
     for (const crypto::hmac::Algorithm candidate : {crypto::hmac::Algorithm::murmur3,
                                                     crypto::hmac::Algorithm::sha256,
                                                     crypto::hmac::Algorithm::sha1}) {
-        std::array<std::byte, kRecordTagSize> expected{};
-        if (authenticate(candidate, keys.auth, datagram, expected)
-            && same_tag(datagram.subspan(kAuthOffset, kRecordTagSize), expected)) {
+        if (auth_matches(candidate, keys.auth, datagram)) {
             output = candidate;
             return true;
         }

@@ -12,7 +12,7 @@ inline constexpr std::size_t kPackageNameCapacity = 40;
 inline constexpr std::int8_t kMinimumReason = -1;
 /** 4 biased wire bits cannot hold a logical reason above 14. */
 inline constexpr std::int8_t kMaximumReason = 14;
-/** -1 means there is no previous activity index. */
+/** -1 means there is no activity index. */
 inline constexpr std::int16_t kAbsentActivityIndex = -1;
 /** 12 biased wire bits cannot hold a logical activity index above 4094. */
 inline constexpr std::int16_t kMaximumActivityIndex = 4'094;
@@ -36,26 +36,30 @@ struct DestinationSelection final {
     std::uint8_t packageNameLength{};
     /** Logical selection reason after removing the wire bias. */
     std::int8_t reason{kMinimumReason};
-    /** Logical source activity, or -1 when there is no previous activity. */
-    std::int16_t previousActivityIndex{kAbsentActivityIndex};
+    /** Activity the client asked from, or -1 when it named none. */
+    std::int16_t sourceActivityIndex{kAbsentActivityIndex};
     /** Destination definition index, or -1 when the destination was forced. */
     std::int16_t activityIndex{};
     /** Optional logical element index after removing the wire bias. */
     std::int16_t elementIndex{kAbsentElementIndex};
+    /** Exact selection nonce from the second optional 64-bit activity-descriptor scalar. */
+    std::uint64_t selectionNonce{};
     /** Optional arrival-bubble name hash copied as one unsigned scalar. */
     std::uint32_t arrivalBubbleHash{};
     /** Optional spawn-set name hash copied as one unsigned scalar. */
     std::uint32_t spawnSetHash{};
     /** True only when elementIndex came from a present descriptor field. */
     bool hasElementIndex{};
+    /** True only when selectionNonce came from the present second optional 64-bit scalar. */
+    bool hasSelectionNonce{};
     /** True only when arrivalBubbleHash came from a present descriptor field. */
     bool hasArrivalBubbleHash{};
     /** True only when spawnSetHash came from a present descriptor field. */
     bool hasSpawnSetHash{};
     /**
      * Authored arrival bubble for this destination, applied over every derived source.
-     * A few destinations bind their arrival when the map loads rather than declaring it in the
-     * packages, so no walk can derive those and they are authored per name instead.
+     * A few destinations bind their arrival when the map loads, rather than declaring it in the
+     * packages. No walk can derive those, so they are authored per name instead.
      */
     std::uint8_t arrivalBubbleOverride{};
     /** True only when an authored override named this destination. */

@@ -2,11 +2,19 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdio>
 
 #include "../../../core/logging/log.h"
+#include "../../../middleware/encoding/byte_order.h"
 #include "../../../middleware/secure_channel/runtime.h"
+#include "../../../state/activity/bubble_authority/runtime.h"
 #include "../../../state/runtime/runtime.h"
+#include "../../activity/host_runtime.h"
+#include "../../gameplay/peer/peer_transport.h"
+#include "../../gameplay/squad_entity_retirement.h"
+#include "../activity_authority_query_owner.h"
+#include "../activity_authority_reset_owner.h"
 #include "../internal.h"
 #include "activity_transaction/activity_transaction_notifications.h"
 #include "bap_connection_publication.h"
@@ -18,6 +26,30 @@
 namespace sunrise::server::bap::encrypted {
 namespace {
 
+/** Delay before the Family-4 copy of an artifact change, so its Family-5 refresh lands first. */
+constexpr std::uint64_t kArtifactFamily4RefreshDelayMs = 100;
+
+/** Traces one decoded service frame and the reply it produced. */
+void report_service_traffic(const middleware::bap::RequestFrame& frame,
+                            const ServiceRoute& route,
+                            std::size_t responseBodySize) noexcept {
+    std::array<char, core::log::kLineCapacity> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=bap stage=service svc=%u task=%u request_bytes=%zu "
+                                      "response_svc=%u response_bytes=%zu",
+                                      static_cast<unsigned>(frame.serviceId),
+                                      static_cast<unsigned>(frame.taskId),
+                                      frame.body.size(),
+                                      static_cast<unsigned>(route.response),
+                                      responseBodySize);
+    if (written > 0) {
+        core::log::write(core::log::Channel::server,
+                         core::log::Level::debug,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
 /**
  * Wipes the part of one scratch buffer that may hold written bytes.
  * @param buffer Lock-owned scratch storage.
@@ -25,6 +57,140 @@ namespace {
  */
 void clear_prefix(std::span<std::byte> buffer, std::size_t size) noexcept {
     SecureZeroMemory(buffer.data(), (std::min)(buffer.size(), size));
+}
+
+/** Appends one join only after its exact ActivityClient binding has committed and published. */
+void record_committed_join(Session& session, const ConnectionFields& fields) noexcept {
+    if (!fields.joinsActivity || !fields.joinIngress.prepared) {
+        return;
+    }
+    server::activity::host::ClientMessageInput input{};
+    input.binding = session.activity.session;
+    input.sourceGeneration = session.activity.bindingGeneration;
+    input.payloadFingerprint = fields.joinIngress.payloadFingerprint;
+    input.messageType = 3;
+    input.payloadBytes = fields.joinIngress.payloadBytes;
+    input.peerHeardMask = fields.joinIngress.peerHeardMask;
+    input.consumedBits = fields.joinIngress.consumedBits;
+    input.hasPayloadFingerprint = fields.joinIngress.hasPayloadFingerprint;
+    const std::uint64_t payloadBits =
+        static_cast<std::uint64_t>(input.payloadBytes) * middleware::encoding::kBitsPerByte;
+    input.status = payloadBits > input.consumedBits
+                       ? server::activity::host::ClientMessageStatus::prefixOnly
+                       : server::activity::host::ClientMessageStatus::decoded;
+    static_cast<void>(server::activity::host::record_client_message(input));
+}
+
+/** Queues one safe msg-22 after-image only after State and connection publication commit. */
+void submit_committed_client_state(const activity_message::ActivityPlan& plan,
+                                   const transactions::Publication& publication) noexcept {
+    // A committed msg 22 that changed nothing material is the client's settle report, sent once
+    // spawn-in completes. It carries no region, spawn or teleport delta, so the surface reads all
+    // three as absent, but it still arrives: the script needs it to time the opening line.
+    if (!plan.clientState.pending || !publication.clientState.committed) {
+        return;
+    }
+    server::activity::host::ClientStateChangeInput input{};
+    input.binding = plan.clientState.binding;
+    input.state = publication.clientState;
+    input.sourceGeneration = plan.clientState.sourceGeneration;
+    input.clientMessageSequence = plan.clientState.clientMessageSequence;
+    input.payloadBytes = plan.clientState.payloadBytes;
+    if (!server::activity::host::submit_client_state_change(input)) {
+        core::log::write(core::log::Channel::server,
+                         core::log::Level::warn,
+                         "ev=activity stage=client_state_ingress result=refused");
+    }
+}
+
+/** Queues exact entity-slot demand only after its grant transaction commits. */
+void submit_committed_entity_slots_requested(const activity_message::ActivityPlan& plan) noexcept {
+    if (!plan.entitySlotsRequested.pending) {
+        return;
+    }
+    server::activity::host::EntitySlotsRequestedInput input{};
+    input.binding = plan.entitySlotsRequested.binding;
+    input.sourceGeneration = plan.entitySlotsRequested.sourceGeneration;
+    input.clientMessageSequence = plan.entitySlotsRequested.clientMessageSequence;
+    input.requestedCount = plan.entitySlotsRequested.requestedCount;
+    if (!server::activity::host::submit_entity_slots_requested(input)) {
+        core::log::write(core::log::Channel::server,
+                         core::log::Level::warn,
+                         "ev=activity stage=entity_slots_requested result=refused");
+    }
+}
+
+/** Applies one query answer only after its authenticated service frame commits. */
+void submit_committed_authority_answer(Session& session,
+                                       const activity_message::ActivityPlan& plan) noexcept {
+    if (!plan.authorityQuery.pending
+        || plan.mutationDomain != activity_message::MutationDomain::authorityQuery) {
+        return;
+    }
+    const authority_query::AnswerStatus status =
+        authority_query::submit(session.activityAuthorityQuery,
+                                plan.authorityQuery.sourceGeneration,
+                                GetTickCount64(),
+                                plan.authorityQuery.answer);
+    if (status != authority_query::AnswerStatus::bubbleAccepted
+        && status != authority_query::AnswerStatus::complete) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count =
+            std::snprintf(line.data(),
+                          line.size(),
+                          "ev=activity stage=authority_query result=refused status=%u",
+                          static_cast<unsigned>(status));
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
+    }
+}
+
+/** An old ActivityClient cannot relinquish the replacement client's grant. */
+void submit_committed_authority_abdication(Session& session,
+                                           const activity_message::ActivityPlan& plan) noexcept {
+    if (plan.mutationDomain != activity_message::MutationDomain::authorityAbdication
+        || !plan.authorityAbdication.pending
+        || plan.authorityAbdication.sourceGeneration != session.activity.bindingGeneration
+        || plan.sessionId != session.activity.session.sessionId) {
+        return;
+    }
+    state::activity::bubble_authority::record_abdication(
+        plan.sessionId, plan.authorityAbdication.bubble, &plan.authorityAbdication.entities);
+    server::gameplay::squad_entity_retirement::observe_abdication(
+        session.activity.session,
+        session.activity.bindingGeneration,
+        plan.authorityAbdication.bubble,
+        plan.authorityAbdication.entities);
+}
+
+/** Applies one reset acknowledgement only after its authenticated service frame commits. */
+void submit_committed_authority_reset(Session& session,
+                                      const activity_message::ActivityPlan& plan) noexcept {
+    if (!plan.authorityReset.pending
+        || plan.mutationDomain != activity_message::MutationDomain::authorityReset) {
+        return;
+    }
+    const authority_reset::AcknowledgementStatus status =
+        authority_reset::submit(session.activityAuthorityReset,
+                                plan.authorityReset.sourceGeneration,
+                                GetTickCount64(),
+                                plan.authorityReset.answer);
+    if (status != authority_reset::AcknowledgementStatus::complete) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count =
+            std::snprintf(line.data(),
+                          line.size(),
+                          "ev=activity stage=authority_reset result=refused status=%u",
+                          static_cast<unsigned>(status));
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
+    }
 }
 
 } // namespace
@@ -54,8 +220,7 @@ bool consume(Session& session,
     }
 
     std::size_t plaintextSize = 0;
-    const auto& bapState = state::bap();
-    if (!middleware::secure_channel::open_frame(bapState.sessionKey,
+    if (!middleware::secure_channel::open_frame(session.sessionKey,
                                                 session.receiveNonce,
                                                 outer.payload,
                                                 scratch.plaintext,
@@ -86,7 +251,7 @@ bool consume(Session& session,
         middleware::bap::parse_request_payload(std::span(scratch.plaintext).first(plaintextSize),
                                                middleware::bap::FrameType::encrypted,
                                                frame)
-        && routing::resolve(frame.messageId, route);
+        && routing::resolve(frame.serviceId, route);
     if (!handled) {
         core::log::write(core::log::Channel::server,
                          core::log::Level::warn,
@@ -94,35 +259,52 @@ bool consume(Session& session,
     }
     const bool processesBody = handled && route.responseMode != ResponseMode::none;
     const bool sendsReply = handled && route.responseMode == ResponseMode::reply;
+    bool staleWebAction = false;
+    // An armed resync means this peer's published manifest predates the account it would name.
+    if (processesBody && route.bodyCodec == BodyCodec::webService && session.accountResyncArmed
+        && !web_service::encode_resident_dependent_refusal(
+            frame.body, scratch.responseBody, responseBodySize, staleWebAction)) {
+        handled = false;
+        diagnostics::report_failure(frame.serviceId, "stale_refusal");
+    }
+    if (staleWebAction) {
+        core::log::write(core::log::Channel::server,
+                         core::log::Level::warn,
+                         "ev=bap stage=web_service result=refuse reason=stale_manifest");
+    }
     // Pure one-way services consume only the authenticated receive nonce.
-    if (processesBody
+    if (!staleWebAction && processesBody
         && !body::process(route,
                           session.queuez,
-                          session.activitySessionId,
+                          session.activity,
+                          session.activityRosterDecode,
                           session.matchmakingContext,
                           frame.body,
                           scratch.responseBody,
                           responseBodySize,
                           outcome)) {
-        diagnostics::report_failure(frame.messageId, "body");
+        diagnostics::report_failure(frame.serviceId, "body");
         // A reply-mode service answers with an empty body instead of not at all. The Client
-        // matches only the head of its pending ring, so one unanswered request jams that ring for
-        // good and every later reply is rejected, which is worse than a thin reply.
+        // matches only the head of its pending ring. One unanswered request jams that ring for
+        // good, and every later reply is rejected, which is worse than a thin reply.
         clear_prefix(scratch.responseBody, responseBodySize);
         responseBodySize = 0;
         outcome = {};
         handled = sendsReply;
     }
+    if (handled) {
+        report_service_traffic(frame, route, responseBodySize);
+    }
     if (handled && sendsReply) {
         handled = reply::encode(scratch,
                                 route,
                                 frame.taskId,
-                                bapState.sessionKey,
+                                session.sessionKey,
                                 session.sendNonce,
                                 std::span(scratch.responseBody).first(responseBodySize),
                                 framedSize);
         if (!handled) {
-            diagnostics::report_failure(frame.messageId, "encode");
+            diagnostics::report_failure(frame.serviceId, "encode");
         }
     }
     // Stage every requested frame and check for caller room before committing State or the nonce.
@@ -132,10 +314,21 @@ bool consume(Session& session,
     }
     queuez::StagedPublication queuezPublication{};
     if (handled) {
+        const std::uint64_t now = GetTickCount64();
+        if (now >= session.acquisitionPresentationUntilTick) {
+            session.acquisitionPresentationRows = {};
+            session.acquisitionPresentationRowCount = 0;
+        }
+        const auto acquisitionPresentationRows =
+            std::span(session.acquisitionPresentationRows)
+                .first(session.acquisitionPresentationRowCount);
+        const bool preserveAcquisitionPresentation = now < session.acquisitionPresentationUntilTick;
         handled = queuez::stage_service_outcome(scratch,
                                                 session.queuez,
                                                 outcome,
-                                                bapState.sessionKey,
+                                                preserveAcquisitionPresentation,
+                                                acquisitionPresentationRows,
+                                                session.sessionKey,
                                                 nextSendNonce,
                                                 scratch.framed,
                                                 framedSize,
@@ -145,207 +338,203 @@ bool consume(Session& session,
             publishesQueuez = true;
         }
         if (!handled) {
-            diagnostics::report_failure(frame.messageId, "stage");
+            diagnostics::report_failure(frame.serviceId, "stage");
         }
     }
     const auto* activityPlan = transaction_if<activity_message::ActivityPlan>(outcome);
+    const bool publishesFamily4 =
+        publishesQueuez
+        && (queuezPublication.after.family4Active != session.queuez.family4Active
+            || queuezPublication.after.family4Version != session.queuez.family4Version);
     if (handled && activityPlan != nullptr) {
         handled = route.responseMode == ResponseMode::uncorrelatedPush;
         if (!handled) {
-            diagnostics::report_failure(frame.messageId, "route");
+            diagnostics::report_failure(frame.serviceId, "route");
         } else if (!activity_transaction::stage_notifications(session,
                                                               scratch,
                                                               *activityPlan,
-                                                              bapState.sessionKey,
+                                                              session.sessionKey,
                                                               nextSendNonce,
                                                               scratch.framed,
                                                               framedSize)) {
             // The transaction still commits. A push that cannot be built is one lost message, and
             // dropping the commit with it would strand the client's reported state for the session.
-            diagnostics::report_failure(frame.messageId, "notify");
+            diagnostics::report_failure(frame.serviceId, "notify");
+            if (activityPlan->mutationDomain == activity_message::MutationDomain::authorityPurge) {
+                handled = false;
+            }
         }
     }
+    const bool artifactPurchase = transaction_if<ArtifactPurchaseTransaction>(outcome) != nullptr;
     const bool mutatesAccount =
-        outcome.hasChangeCharacter || outcome.hasSelectCharacter
+        outcome.hasSelectCharacter || outcome.hasRecordClaim || outcome.hasArtifactReset
         || transaction_if<EquipmentSwapTransaction>(outcome) != nullptr
+        || transaction_if<SubclassSelectionTransaction>(outcome) != nullptr
         || transaction_if<SocketPlugTransaction>(outcome) != nullptr
-        || transaction_if<ItemStateTransaction>(outcome) != nullptr
+        || transaction_if<ItemStateTransaction>(outcome) != nullptr || artifactPurchase
+        || transaction_if<CurrentActivityTransaction>(outcome) != nullptr
         || transaction_if<ItemAcquisitionTransaction>(outcome) != nullptr
         || transaction_if<ProfileItemAcquisitionTransaction>(outcome) != nullptr
+        || transaction_if<ItemDismantleTransaction>(outcome) != nullptr
+        || transaction_if<RecordRewardGrantTransaction>(outcome) != nullptr
+        || transaction_if<SeasonPassRewardTransaction>(outcome) != nullptr
+        || transaction_if<state::PendingSettingsUpdate>(outcome) != nullptr;
+    const bool presentsAcquisition =
+        transaction_if<ItemAcquisitionTransaction>(outcome) != nullptr
+        || transaction_if<ProfileItemAcquisitionTransaction>(outcome) != nullptr
+        || transaction_if<RecordRewardGrantTransaction>(outcome) != nullptr
+        || transaction_if<SeasonPassRewardTransaction>(outcome) != nullptr;
+    const bool invalidatesAcquisitionPresentation =
+        outcome.hasChangeCharacter || outcome.hasSelectCharacter || outcome.hasArtifactReset
         || transaction_if<ItemDismantleTransaction>(outcome) != nullptr;
-    // State commits consume and clear their pending payloads. Retain only the small diagnostic
-    // fields needed after publication; QueueZ after-images stay owned by the transaction variant.
-    const auto* stagedSocket = transaction_if<SocketPlugTransaction>(outcome);
-    const std::uint8_t socketLane = stagedSocket == nullptr ? 0 : stagedSocket->pending.socketLane;
-    const std::uint16_t socketPlugDefinition =
-        stagedSocket == nullptr ? 0 : stagedSocket->pending.plugDefinitionIndex;
-    const std::uint8_t socketTargetBucket =
-        stagedSocket == nullptr ? 0 : stagedSocket->pending.targetBucketId;
-    const std::uint8_t socketPlugBucket =
-        stagedSocket == nullptr ? 0 : stagedSocket->pending.plugBucketId;
-    const auto* stagedItemState = transaction_if<ItemStateTransaction>(outcome);
-    const std::uint64_t itemStateInstance =
-        stagedItemState == nullptr ? 0 : stagedItemState->pending.targetInstanceSoid;
-    const std::uint32_t itemStateFlags =
-        stagedItemState == nullptr ? 0 : stagedItemState->pending.afterFlags;
-    const auto* stagedProfile = transaction_if<ProfileItemAcquisitionTransaction>(outcome);
-    const std::uint32_t profileDefinitionHash =
-        stagedProfile == nullptr ? 0 : stagedProfile->pending.acquiredDefinitionHash;
-    const std::int32_t profileQuantity =
-        stagedProfile == nullptr ? 0 : stagedProfile->pending.acquiredQuantity;
-    const bool profileActionSource =
-        stagedProfile != nullptr && stagedProfile->pending.actionSource;
-    const bool profileAppended = stagedProfile != nullptr && stagedProfile->pending.appended;
-    // Committing the transaction clears the mutation the member key lives in, so the connection
-    // fields are captured before the commit and published after it.
+    const bool hasPrecommittedAccountAction =
+        outcome.hasRecordClaim || outcome.hasSelectCharacter || outcome.hasArtifactReset;
+    // Commit consumes pending payloads, so retain the connection fields first.
     const ConnectionFields connection = connection_fields(outcome);
     if (handled && processesBody) {
         // State changes become visible only after every requested frame and caller byte fit.
-        handled = framedSize <= response.size() && transactions::commit(outcome, publication);
+        // A refused commit sends nothing, so the frame's own reason is the only record of why.
+        const char* commitReason = "none";
+        server::gameplay::entity_identities::PublicationLease entityLease;
+        const bool retirementValid =
+            push::activity::begin_staged_roster_publication(session, entityLease);
+        const bool fits = framedSize <= response.size();
+        if (!retirementValid) {
+            commitReason = "entity_retirement_stale";
+        }
+        handled =
+            fits && retirementValid && transactions::commit(outcome, publication, commitReason);
         if (!handled) {
-            diagnostics::report_failure(frame.messageId, "commit");
+            diagnostics::report_failure(
+                frame.serviceId, "commit", fits ? commitReason : "frame_capacity");
         }
         if (handled) {
             std::copy_n(scratch.framed.begin(), framedSize, response.begin());
             written = framedSize;
+            entityLease.release();
             // The caller copy finishes before connection fields are published.
             session.sendNonce = nextSendNonce;
             if (publishesQueuez) {
                 session.queuez = nextQueuez;
             }
             arm_repushes(session, queuezPublication);
+            if (invalidatesAcquisitionPresentation) {
+                session.acquisitionPresentationRows = {};
+                session.acquisitionPresentationRowCount = 0;
+                session.acquisitionPresentationUntilTick = 0;
+            } else if (queuezPublication.updatesAcquisitionPresentationRows) {
+                session.acquisitionPresentationRows = queuezPublication.acquisitionPresentationRows;
+                session.acquisitionPresentationRowCount =
+                    queuezPublication.acquisitionPresentationRowCount;
+                if (session.acquisitionPresentationRowCount == 0) {
+                    session.acquisitionPresentationUntilTick = 0;
+                }
+            }
+            if (presentsAcquisition && publishesQueuez) {
+                bap::arm_acquisition_presentation_hold(session);
+            }
             publish_connection_fields(session, publication, connection);
+            record_committed_join(session, connection);
             // The caller copy is done, so what the staged roster body owes is settled here.
             push::activity::commit_staged_roster(session);
-            session.accountMutationPublished = mutatesAccount;
-            if (transaction_if<EquipmentSwapTransaction>(outcome) != nullptr) {
-                std::array<char, core::log::kLineCapacity> line{};
-                const int count = std::snprintf(
-                    line.data(),
-                    line.size(),
-                    "ev=equip stage=output_publish result=ok framed_bytes=%zu queuez_published=%u "
-                    "family_version=%d family0_version=%d family3_version=%d",
-                    framedSize,
-                    static_cast<unsigned>(publishesQueuez),
-                    session.queuez.family4Version,
-                    session.queuez.family0Version,
-                    session.queuez.family3Version);
-                if (count > 0) {
-                    core::log::write(core::log::Channel::server,
-                                     core::log::Level::debug,
-                                     {line.data(), static_cast<std::size_t>(count)});
+            commit_staged_advertisement(session);
+            if (activityPlan != nullptr) {
+                submit_committed_client_state(*activityPlan, publication);
+                submit_committed_entity_slots_requested(*activityPlan);
+                submit_committed_authority_reset(session, *activityPlan);
+                submit_committed_authority_answer(session, *activityPlan);
+                submit_committed_authority_abdication(session, *activityPlan);
+                if (activityPlan->hasReturnedEntitySlots
+                    && activityPlan->sessionId == session.activity.session.sessionId) {
+                    server::gameplay::squad_entity_retirement::returned_slots(
+                        session.activity.session,
+                        session.activity.bindingGeneration,
+                        activityPlan->returnedEntitySlots);
+                }
+                if (activityPlan->mutationDomain
+                    == activity_message::MutationDomain::authorityPurge) {
+                    const auto previousEpoch = session.activity.replicationEpoch;
+                    session.activity.replicationEpoch = activityPlan->authorityPurge.body.epoch;
+                    const auto updatedViews = server::gameplay::peer::commit_replication_epoch(
+                        session.activity.session,
+                        session.activity.bindingGeneration,
+                        previousEpoch,
+                        session.activity.replicationEpoch);
+                    state::activity::bubble_authority::record_purge(
+                        activityPlan->sessionId, activityPlan->authorityPurge.body.slots);
+                    server::gameplay::squad_entity_retirement::returned_slots(
+                        session.activity.session,
+                        session.activity.bindingGeneration,
+                        activityPlan->authorityPurge.body.slots);
+                    if (session.activityReplicationEpoch.pending
+                        && session.activityReplicationEpoch.generation
+                               == session.activity.replicationEpoch) {
+                        session.activityReplicationEpoch.pending = false;
+                    }
+                    unsigned slots = 0;
+                    for (const std::byte byte : activityPlan->authorityPurge.body.slots) {
+                        slots +=
+                            static_cast<unsigned>(std::popcount(std::to_integer<unsigned>(byte)));
+                    }
+                    std::array<char, core::log::kLineCapacity> line{};
+                    const int count =
+                        std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=activity stage=purge result=published epoch=%u reason=%d "
+                                      "slots=%u views=%zu",
+                                      static_cast<unsigned>(session.activity.replicationEpoch),
+                                      static_cast<int>(activityPlan->authorityPurge.body.reason),
+                                      slots,
+                                      updatedViews);
+                    if (count > 0) {
+                        core::log::write(core::log::Channel::server,
+                                         core::log::Level::debug,
+                                         {line.data(), static_cast<std::size_t>(count)});
+                    }
                 }
             }
-            if (const auto* transaction = transaction_if<SocketPlugTransaction>(outcome)) {
-                std::array<char, core::log::kLineCapacity> line{};
-                const int count = std::snprintf(
-                    line.data(),
-                    line.size(),
-                    "ev=socket_plug stage=output_publish result=ok framed_bytes=%zu "
-                    "queuez_published=%u family_version=%d family0_version=%d "
-                    "family3_version=%d instance=0x%llX lane=%u "
-                    "plug_definition=%u target_bucket=%u plug_bucket=%u",
-                    framedSize,
-                    static_cast<unsigned>(publishesQueuez),
-                    session.queuez.family4Version,
-                    session.queuez.family0Version,
-                    session.queuez.family3Version,
-                    static_cast<unsigned long long>(transaction->update.targetInstanceSoid),
-                    static_cast<unsigned>(socketLane),
-                    static_cast<unsigned>(socketPlugDefinition),
-                    static_cast<unsigned>(socketTargetBucket),
-                    static_cast<unsigned>(socketPlugBucket));
-                if (count > 0) {
-                    core::log::write(core::log::Channel::server,
-                                     core::log::Level::debug,
-                                     {line.data(), static_cast<std::size_t>(count)});
-                }
+            // Any delivered activity notification resets the client's silence timer, so the
+            // fallback keepalive is delayed. A roster-only answer is excluded: it owes neither the
+            // global state nor the membership, and at once a second it would starve the keepalive.
+            const bool defersKeepalive =
+                activityPlan != nullptr && framedSize != 0
+                && activityPlan->delivery != activity_message::Delivery::rosterNotification;
+            if (defersKeepalive) {
+                session.activityKeepaliveDueTick = GetTickCount64() + kActivityKeepaliveIntervalMs;
             }
-            if (const auto* transaction = transaction_if<ItemStateTransaction>(outcome)) {
-                std::array<char, core::log::kLineCapacity> line{};
-                const int count = std::snprintf(
-                    line.data(),
-                    line.size(),
-                    "ev=item_state stage=output_publish result=ok framed_bytes=%zu "
-                    "queuez_published=%u family_version=%d instance=0x%llX flags=0x%X",
-                    framedSize,
-                    static_cast<unsigned>(publishesQueuez),
-                    session.queuez.family4Version,
-                    static_cast<unsigned long long>(itemStateInstance),
-                    itemStateFlags);
-                if (count > 0) {
-                    core::log::write(core::log::Channel::server,
-                                     core::log::Level::debug,
-                                     {line.data(), static_cast<std::size_t>(count)});
-                }
+            const bool resyncsCommittedAccount =
+                hasPrecommittedAccountAction && !queuezPublication.hasState;
+            if (resyncsCommittedAccount) {
+                bap::arm_account_resync_everywhere();
             }
-            if (const auto* transaction = transaction_if<ItemAcquisitionTransaction>(outcome)) {
-                std::array<char, core::log::kLineCapacity> line{};
-                const int count = std::snprintf(
-                    line.data(),
-                    line.size(),
-                    "ev=acquire stage=output_publish result=ok framed_bytes=%zu "
-                    "queuez_published=%u family_version=%d residents=%u instance=0x%llX",
-                    framedSize,
-                    static_cast<unsigned>(publishesQueuez),
-                    session.queuez.family4Version,
-                    static_cast<unsigned>(session.queuez.family4ResidentCount),
-                    static_cast<unsigned long long>(transaction->update.acquiredInstanceSoid));
-                if (count > 0) {
-                    core::log::write(core::log::Channel::server,
-                                     core::log::Level::debug,
-                                     {line.data(), static_cast<std::size_t>(count)});
-                }
+            if (artifactPurchase || outcome.hasArtifactReset) {
+                // Artifact overrides live in Family 5, so they need their own refresh. A record
+                // claim does not: its Family-4 replacement rearms the client rebuild.
+                session.artifactRefreshArmed = true;
+                session.artifactFamily4RefreshDueTick =
+                    GetTickCount64() + kArtifactFamily4RefreshDelayMs;
+                session.artifactFamily4RefreshArmed = true;
             }
-            if (const auto* transaction =
-                    transaction_if<ProfileItemAcquisitionTransaction>(outcome)) {
-                std::array<char, core::log::kLineCapacity> line{};
-                const int count = std::snprintf(
-                    line.data(),
-                    line.size(),
-                    "ev=profile_acquire stage=output_publish result=ok framed_bytes=%zu "
-                    "queuez_published=%u family_version=%d residents=%u definition_hash=0x%08X "
-                    "quantity=%d instance=0x%llX action_source=%u appended_row=%u "
-                    "appended_resident=%u",
-                    framedSize,
-                    static_cast<unsigned>(publishesQueuez),
-                    session.queuez.family4Version,
-                    static_cast<unsigned>(session.queuez.family4ResidentCount),
-                    profileDefinitionHash,
-                    profileQuantity,
-                    static_cast<unsigned long long>(transaction->update.acquiredInstanceSoid),
-                    static_cast<unsigned>(profileActionSource),
-                    static_cast<unsigned>(profileAppended),
-                    static_cast<unsigned>(transaction->update.appendedResident));
-                if (count > 0) {
-                    core::log::write(core::log::Channel::server,
-                                     core::log::Level::debug,
-                                     {line.data(), static_cast<std::size_t>(count)});
-                }
+            if (outcome.hasArtifactReset) {
+                session.artifactResetRefresh = outcome.artifactReset;
+                session.artifactResetRefreshCursor = 0;
             }
-            if (const auto* transaction = transaction_if<ItemDismantleTransaction>(outcome)) {
-                std::array<char, core::log::kLineCapacity> line{};
-                const int count = std::snprintf(
-                    line.data(),
-                    line.size(),
-                    "ev=dismantle stage=output_publish result=ok framed_bytes=%zu "
-                    "queuez_published=%u family_version=%d residents=%u instance=0x%llX",
-                    framedSize,
-                    static_cast<unsigned>(publishesQueuez),
-                    session.queuez.family4Version,
-                    static_cast<unsigned>(session.queuez.family4ResidentCount),
-                    static_cast<unsigned long long>(transaction->update.dismantledInstanceSoid));
-                if (count > 0) {
-                    core::log::write(core::log::Channel::server,
-                                     core::log::Level::debug,
-                                     {line.data(), static_cast<std::size_t>(count)});
-                }
+            session.accountMutationPublished = mutatesAccount && !resyncsCommittedAccount;
+            if (publishesFamily4) {
+                // The Family-4 store is updated in place, so pointer identity cannot detect its
+                // initial population or later revisions. Carry the exact committed publication
+                // across to the next native lookup, after the client has consumed this frame.
+                bap::notify_investment_publication();
             }
         }
     }
     if (!handled) {
+        if (hasPrecommittedAccountAction) {
+            bap::arm_account_resync_everywhere();
+        }
         // The staged body is dropped, so its grant and its state byte go back for the next push.
         push::activity::discard_staged_roster(session);
+        discard_staged_advertisement(session);
     }
     clear_prefix(scratch.plaintext, plaintextSize);
     clear_prefix(scratch.responseBody, responseBodySize);
@@ -353,9 +542,6 @@ bool consume(Session& session,
     outcome = {};
     SecureZeroMemory(&publication, sizeof publication);
     SecureZeroMemory(&queuezPublication, sizeof queuezPublication);
-    if (handled) {
-        core::log::write(core::log::Channel::server, core::log::Level::info, route.successEvent);
-    }
     return handled;
 }
 

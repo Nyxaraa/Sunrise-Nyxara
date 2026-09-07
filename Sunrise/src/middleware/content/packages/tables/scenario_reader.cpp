@@ -1,5 +1,7 @@
 #include "scenario_reader.h"
 
+#include <limits>
+
 #include "internal.h"
 
 namespace sunrise::middleware::content::packages::tables {
@@ -16,9 +18,80 @@ constexpr std::size_t kStateEntryTagOffset = 68;
 /**
  * A state carries the PUB/PRV public flag here.
  * The client getter returns the state array header plus 28, and data starts 16 bytes after that
- * header, so the byte is 12 into the record, where only 0 and 1 ever appear.
+ * header. So the byte sits 12 into the record, where only 0 and 1 ever appear.
  */
 constexpr std::size_t kStatePublicOffset = 12;
+/** Exact marker before a Tiger array header. */
+constexpr std::uint32_t kArrayMarker = 0x80809FBDU;
+/** Array headers hold count, element class, and zero padding. */
+constexpr std::size_t kArrayHeaderSize = 16;
+/** Canonical SDK extraction refuses Tiger arrays above this authored-row bound. */
+constexpr std::int64_t kObjectArrayMaximumCount = 1'000'000;
+
+/** Validates one array header reached from a known object field. */
+[[nodiscard]] bool valid_object_array_header(std::span<const std::byte> blob,
+                                             std::size_t header,
+                                             std::uint64_t count,
+                                             std::uint32_t expectedClass,
+                                             Array& output) noexcept {
+    output = {};
+    if (header < sizeof(std::uint32_t) || header > blob.size()
+        || kArrayHeaderSize > blob.size() - header) {
+        return false;
+    }
+    std::uint32_t marker = 0;
+    std::uint64_t repeated = 0;
+    std::uint32_t elementClass = 0;
+    std::uint32_t padding = 0;
+    if (!read(blob, header - sizeof marker, marker) || marker != kArrayMarker
+        || !read(blob, header, repeated) || repeated != count
+        || !read(blob, header + sizeof repeated, elementClass) || elementClass != expectedClass
+        || !read(blob, header + sizeof repeated + sizeof elementClass, padding) || padding != 0) {
+        return false;
+    }
+    output = Array{count, header + kArrayHeaderSize, elementClass};
+    return true;
+}
+
+/** Reads an exact object array while accepting both authored empty forms. */
+[[nodiscard]] bool object_array_at(std::span<const std::byte> blob,
+                                   std::size_t descriptor,
+                                   std::uint32_t expectedClass,
+                                   std::size_t stride,
+                                   Array& output) noexcept {
+    output = {};
+    std::int64_t signedCount = 0;
+    std::int64_t relative = 0;
+    if (!read(blob, descriptor, signedCount)
+        || !read(blob, descriptor + sizeof signedCount, relative) || signedCount < 0
+        || signedCount > kObjectArrayMaximumCount) {
+        return false;
+    }
+    if (signedCount == 0 && relative == 0) {
+        return true;
+    }
+    if (descriptor > static_cast<std::size_t>((std::numeric_limits<std::int64_t>::max)())
+                         - sizeof signedCount) {
+        return false;
+    }
+    const std::int64_t base = static_cast<std::int64_t>(descriptor + sizeof signedCount);
+    if ((relative > 0 && base > (std::numeric_limits<std::int64_t>::max)() - relative)
+        || (relative < 0 && base < (std::numeric_limits<std::int64_t>::min)() - relative)) {
+        return false;
+    }
+    const std::int64_t signedHeader = base + relative;
+    if (signedHeader < 0) {
+        return false;
+    }
+    const auto count = static_cast<std::uint64_t>(signedCount);
+    if (!valid_object_array_header(
+            blob, static_cast<std::size_t>(signedHeader), count, expectedClass, output)
+        || output.dataOffset > blob.size() || count > (blob.size() - output.dataOffset) / stride) {
+        output = {};
+        return false;
+    }
+    return true;
+}
 
 } // namespace
 
@@ -79,10 +152,9 @@ bool slice_state_at(std::span<const std::byte> blob,
         return false;
     }
     std::uint8_t enabled = 0;
-    std::uint8_t isPublic = 0;
     if (!read(blob, offset + kStateEnabledOffset, enabled)
         || !read(blob, offset + kStateHashOffset, output.stateHash)
-        || !read(blob, offset + kStatePublicOffset, isPublic)
+        || !read(blob, offset + kStatePublicOffset, output.rawU32At12)
         || !read(blob, offset + kStateMapBubbleIndexOffset, output.mapBubbleIndex)
         || !read(blob, offset + kStateBubbleHashOffset, output.bubbleNameHash)
         || !read(blob, offset + kStateEntryTagOffset, output.entryTag)) {
@@ -90,7 +162,7 @@ bool slice_state_at(std::span<const std::byte> blob,
         return false;
     }
     output.enabled = enabled != 0;
-    output.isPublic = isPublic != 0;
+    output.isPublic = (output.rawU32At12 & 0xFFU) != 0;
     return true;
 }
 
@@ -160,8 +232,7 @@ bool object_key(std::span<const std::byte> blob, std::uint32_t& key) noexcept {
  * @return True when the object declares slots.
  */
 bool object_slots(std::span<const std::byte> blob, Array& output) noexcept {
-    output = {};
-    return find_array_at(blob, kObjectSlotDescriptor, output);
+    return object_array_at(blob, kObjectSlotDescriptor, kObjectSlotClass, kSlotStride, output);
 }
 
 /**
@@ -194,8 +265,8 @@ bool object_slot_at(std::span<const std::byte> blob,
  * @return True when the object declares sub-blocks.
  */
 bool object_bubbles(std::span<const std::byte> blob, Array& output) noexcept {
-    output = {};
-    return find_array_at(blob, kObjectBubbleDescriptor, output);
+    return object_array_at(
+        blob, kObjectBubbleDescriptor, kObjectBubbleClass, kObjectBubbleStride, output);
 }
 
 /**
@@ -217,12 +288,18 @@ bool object_bubble_at(std::span<const std::byte> blob,
         output = {};
         return false;
     }
-    // A sub-block placing nothing is ordinary, so a descriptor that does not read is not a failure.
     Array handles{};
-    if (find_array_at(blob, offset + kObjectBubbleHandleDescriptor, handles)) {
-        output.handleCount = handles.count;
-        output.handleDataOffset = handles.dataOffset;
+    if (!object_array_at(blob,
+                         offset + kObjectBubbleHandleDescriptor,
+                         kObjectPlacedHandleClass,
+                         kObjectPlacedHandleStride,
+                         handles)) {
+        output = {};
+        return false;
     }
+    output.handleCount = handles.count;
+    output.handleDataOffset = handles.dataOffset;
+    output.sourceOffset = offset;
     return true;
 }
 

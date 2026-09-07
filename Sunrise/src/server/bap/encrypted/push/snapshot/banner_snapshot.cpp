@@ -1,9 +1,6 @@
 #include <algorithm>
-#include <array>
-#include <cstdio>
 #include <span>
 
-#include "../../../../../core/logging/log.h"
 #include "../../../../../middleware/datagen/character_record/character_record_encoder.h"
 #include "../../../../../middleware/datagen/definitions.h"
 #include "../../../../../middleware/datagen/family4/loadout/loadout_resolver.h"
@@ -17,9 +14,6 @@ namespace sunrise::server::bap::encrypted::push::snapshot {
 namespace {
 
 namespace character_record = middleware::datagen::character_record;
-
-/** The anchor and the record it names are the two objects every family-zero frame upserts. */
-constexpr std::size_t kBannerUpsertCount = 2;
 
 } // namespace
 
@@ -84,7 +78,7 @@ bool prepare_banner(Scratch& scratch,
         staged.objects[objectCount] = middleware::queuez::Object{
             middleware::datagen::kBannerCharacterObjectId,
             previousCharacter,
-            middleware::queuez::Encoding::raw,
+            middleware::queuez::Encoding::none,
             {},
         };
         ++objectCount;
@@ -124,12 +118,10 @@ bool prepare_banner(Scratch& scratch,
         middleware::queuez::kFullSnapshotFlag,
         std::span(staged.objects).first(objectCount),
     };
-    static_assert(kBannerUpsertCount == 2);
     return commit(staged, prepared);
 }
 
-/** Builds one in-place Family-0 character-record upsert from an uncommitted equipment after-image.
- */
+/** Builds one in-place Family-0 record upsert from an uncommitted equipment after-image. */
 bool prepare_character_appearance_refresh(Scratch& scratch,
                                           const queuez::CharacterAppearanceRefresh& refresh,
                                           const state::CharacterState& afterCharacter,
@@ -166,10 +158,9 @@ bool prepare_character_appearance_refresh(Scratch& scratch,
         return report_failure("equip_appearance_resolve");
     }
 
-    // The banner-facing emblem consumers bind through the Family-0 anchor rather than directly
-    // observing the character record.  A normal equipment refresh can upsert the resident record
-    // alone, but an emblem move must touch the unchanged anchor as well so those consumers are
-    // dirtied without releasing either resident key.
+    // The banner-facing emblem consumers bind through the Family-0 anchor, not the character
+    // record, so an emblem move must touch the unchanged anchor as well. That dirties those
+    // consumers without releasing either resident key.
     constexpr std::uint8_t kEmblemEquipmentSlot = 13;
     const bool refreshAnchor = nativeEquipmentSlot == kEmblemEquipmentSlot;
     const std::size_t anchorSize = refreshAnchor ? character_record::kFamily0AnchorSize : 0U;
@@ -196,7 +187,7 @@ bool prepare_character_appearance_refresh(Scratch& scratch,
         staged.objects[objectCount++] = middleware::queuez::Object{
             middleware::datagen::kBannerCharacterObjectId,
             refresh.characterSoid,
-            middleware::queuez::Encoding::raw,
+            middleware::queuez::Encoding::none,
             {},
         };
     }
@@ -209,7 +200,7 @@ bool prepare_character_appearance_refresh(Scratch& scratch,
         clear_after(scratch, reservation);
         return report_failure("equip_appearance_object");
     }
-    // On an incremental refresh the record is already resident.  Publish its new body first and
+    // On an incremental refresh the record is already resident. Publish its new body first and
     // touch the anchor second, so an anchor-driven banner observer resolves the new emblem rather
     // than the prior record during the same family update.
     if (refreshAnchor
@@ -233,31 +224,6 @@ bool prepare_character_appearance_refresh(Scratch& scratch,
     if (!commit(staged, prepared)) {
         clear_after(scratch, reservation);
         return report_failure("equip_appearance_commit");
-    }
-
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=equip stage=family0_object result=ok family_version=%d root=0x%llX "
-        "definition=%u character=0x%llX native_slot=%u items=%zu light=%d flags=0 objects=%zu "
-        "anchor=%u replace=%u order=%s",
-        refresh.after.family0Version,
-        static_cast<unsigned long long>(refresh.after.family4RootSoid),
-        middleware::datagen::kBannerCharacterObjectId,
-        static_cast<unsigned long long>(refresh.characterSoid),
-        static_cast<unsigned>(nativeEquipmentSlot),
-        instances.itemCount,
-        light,
-        objectCount,
-        refreshAnchor ? 1U : 0U,
-        replaceCharacterRecord ? 1U : 0U,
-        replaceCharacterRecord ? (refreshAnchor ? "release_character_anchor" : "release_character")
-                               : (refreshAnchor ? "character_anchor" : "character"));
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::debug,
-                         {line.data(), static_cast<std::size_t>(count)});
     }
     return true;
 }

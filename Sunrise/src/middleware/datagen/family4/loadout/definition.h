@@ -9,6 +9,9 @@
 
 namespace sunrise::middleware::datagen::family4::loadout {
 
+/** Character inventory items without an equipment slot retain an out-of-range native sentinel. */
+inline constexpr std::uint8_t kUnavailableEquipmentSlot = 0xFFU;
+
 /** Equipped plus unequipped authored items one character may publish. */
 inline constexpr std::size_t kItemCapacity = state::account::inventory::kEquipmentSlotCount
                                              + state::account::inventory::kCharacterItemCapacity;

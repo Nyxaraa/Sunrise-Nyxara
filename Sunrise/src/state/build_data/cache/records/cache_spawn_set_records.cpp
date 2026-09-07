@@ -75,4 +75,23 @@ bool decode(const SpawnNameHashRecord& record, spawn_sets::NameHash& value) noex
     return true;
 }
 
+/** Encodes one spawn point. */
+bool encode(const spawn_sets::Point& value, SpawnPointRecord& record) noexcept {
+    record = {};
+    record.position = value.position;
+    record.nameHash = value.nameHash;
+    record.stemIndex = value.stemIndex;
+    return true;
+}
+
+/** Decodes one spawn point. */
+bool decode(const SpawnPointRecord& record, spawn_sets::Point& value) noexcept {
+    value = {};
+    if (record.reserved != decltype(record.reserved){}) {
+        return false;
+    }
+    value = {record.position, record.nameHash, record.stemIndex};
+    return true;
+}
+
 } // namespace sunrise::state::build_data::cache::records

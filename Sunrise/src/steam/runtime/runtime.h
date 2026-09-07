@@ -35,6 +35,9 @@ using ApiCall = std::uint64_t;
 /** Delivers one batch of queued callbacks on the caller thread. The batch has a size cap. */
 void run_callbacks() noexcept;
 
+/** @return Times the game has called `run_callbacks`. A frozen count means it stopped calling. */
+[[nodiscard]] std::uint64_t callback_count() noexcept;
+
 /** @param appId Application id the Steam shim reports. */
 void set_app_id(DWORD appId) noexcept;
 

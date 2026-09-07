@@ -57,10 +57,7 @@ inline constexpr unsigned kMaxReports = 8;
 /** Size of one guard line, set by its reference, tag and state fields. */
 inline constexpr std::size_t kReportCapacity = 128;
 
-/**
- * New references reported per run while watching is on. It answers one question: does a bitmap
- * ever reach a widget. Repeats are dropped, so the cap counts distinct references.
- */
+/** Distinct references reported per run. Repeats are dropped, so the cap counts new ones. */
 inline constexpr unsigned kMaxSeenReports = 40;
 
 /**

@@ -6,17 +6,23 @@
 #include <span>
 
 #include "../../../content/content_catalog.h"
+#include "../../../gameplay/external/entity_position_profiles.h"
 #include "../../abilities/definition.h"
 #include "../../collectibles/collectible_catalog.h"
 #include "../../constants/definition.h"
 #include "../../definition.h"
 #include "../../hash_names/definition.h"
+#include "../../items/catalysts/definition.h"
 #include "../../items/details/definition.h"
 #include "../../items/item_catalog.h"
 #include "../../items/socket_plugs/definition.h"
 #include "../../material_requirements/material_requirement_catalog.h"
+#include "../../nodes/definition.h"
 #include "../../progressions/definition.h"
+#include "../../records/definition.h"
 #include "../../scenarios/definition.h"
+#include "../../season_pass/definition.h"
+#include "../../sobjects/sobject_catalog.h"
 #include "../../spawn_sets/definition.h"
 #include "../../vendors/definition.h"
 
@@ -25,10 +31,11 @@ namespace sunrise::state::build_data::cache::records {
 /** These 8 ASCII bytes mark a Sunrise build-data file. */
 inline constexpr std::array<char, 8> kCacheMagic{'S', 'U', 'N', 'R', 'I', 'S', 'E', 'B'};
 /**
- * Current build-data cache format. An older cache is rebuilt rather than read, so a bump needs
- * no other edit. Bump it whenever a domain's stored shape changes.
+ * Current build-data cache format. Any other version on disk is rebuilt rather than read.
+ * Bump it when a stored shape changes or when the extraction filling it changes what it writes,
+ * because a cached row survives a code change and a corrected walk keeps publishing old rows.
  */
-inline constexpr std::uint32_t kCacheFormatVersion = 34;
+inline constexpr std::uint32_t kCacheFormatVersion = 63;
 /** Signed -1 on disk means there is no equipment slot. */
 inline constexpr std::int8_t kAbsentEquipmentSlot = -1;
 /** The standard 64-bit FNV-1a offset basis starts the payload checksum. */
@@ -46,12 +53,13 @@ struct Prefix {
 /**
  * Stat rows named by the installed investment constants blob.
  * The client searches the character's stat table by these rows, so they decide which rows the
- * generated table may carry. They are 7 bytes of scalars, so they ride in the header.
+ * generated tables may carry. They ride in the fixed cache header.
  */
 struct InvestmentConstants {
     /** Stat row the banner's power number is searched by. Row 0 is a real row, so there is no
      * unset value; an unextracted blob leaves `extracted` clear instead. */
     std::uint8_t lightStatRow{};
+    std::uint8_t weaponPowerStatRow{};
     std::array<std::uint8_t, constants::kCharacterStatRowCount> characterStatRows{};
     /** One when the constants blob was read, zero when the domain has never been extracted. */
     std::uint8_t extracted{};
@@ -72,22 +80,54 @@ struct Header {
     std::uint32_t socketPlugRuleCount{};
     std::uint32_t socketPlugPoolCount{};
     std::uint32_t socketPlugMemberCount{};
+    std::uint32_t exoticCatalystCount{};
     std::uint32_t inventoryBucketCount{};
     std::uint32_t socketEntryListCount{};
     std::uint32_t socketEntryTableCount{};
     std::uint32_t abilityBucketCount{};
     std::uint32_t progressionCount{};
+    std::uint32_t recordCount{};
+    std::uint32_t nodeCount{};
+    std::uint32_t sobjectCount{};
     std::uint32_t scenarioCount{};
     std::uint32_t rosterGroupCount{};
     std::uint32_t spawnStemCount{};
     std::uint32_t spawnNameHashCount{};
+    std::uint32_t spawnPointCount{};
     std::uint32_t hashNameCount{};
     std::uint32_t vendorIndexCount{};
     std::uint32_t vendorDefinitionCount{};
     std::uint32_t vendorSaleRowCount{};
     std::uint32_t vendorInstalledRowCount{};
+    std::uint32_t positionProfileCount{};
+    std::uint32_t objectTypeCount{};
+    std::uint32_t recordObjectiveCount{};
+    std::uint32_t recordIntervalCount{};
+    std::uint32_t recordRewardCount{};
+    std::uint32_t progressionStepCount{};
+    std::uint32_t seasonPassRewardCount{};
+    std::uint32_t seasonPassPackageCount{};
+    std::uint32_t bountyCount{};
+    gameplay::entity_position_profiles::Fingerprint positionFingerprint{};
     InvestmentConstants constants{};
     std::uint64_t payloadChecksum{};
+};
+
+/** Reciprocal package object-class classification stored in the shared cache. */
+struct ObjectTypeRecord {
+    std::uint32_t rsatTag{}, definitionTag{};
+    std::uint8_t objectType{};
+    std::array<std::byte, 3> reserved{};
+};
+
+/** Disk form of one exact package-derived activity cell and its position grammar. */
+struct PositionProfileRecord {
+    std::array<char, gameplay::entity_position_profiles::kNameCapacity> activity{};
+    std::uint16_t cell{};
+    std::array<std::uint8_t, 3> axisBits{};
+    std::uint8_t bubble{};
+    std::uint8_t nameLength{};
+    std::uint8_t reserved{};
 };
 
 /** Disk form of one named mapping. Its length field has a fixed width. */
@@ -105,12 +145,15 @@ struct ItemRecord {
     std::uint32_t definitionHash{};
     std::uint16_t definitionIndex{};
     std::uint8_t bucketId{items::kUnresolvedBucketId};
-    /** Must be zero, so the packed item row matches across compilers. */
-    std::uint8_t reserved{};
+    /** Native rarity ladder byte; 0 outside the ladder. */
+    std::uint8_t tier{};
     std::uint16_t insertionMaterialRequirementSetIndex{
         items::kUnavailableMaterialRequirementSetIndex};
     std::uint16_t enabledMaterialRequirementSetIndex{
         items::kUnavailableMaterialRequirementSetIndex};
+    std::uint32_t plugCategoryHash{};
+    std::uint16_t rollSetIndex{};
+    std::uint16_t linkedPlugIndex{items::kUnavailableLinkedPlugIndex};
 };
 
 /** Disk form of one material charged by a native Collections acquisition. */
@@ -130,6 +173,8 @@ struct CollectibleRecord {
     std::uint16_t itemDefinitionIndex{collectibles::kUnavailableItemDefinitionIndex};
     std::uint16_t materialRequirementSetIndex{
         collectibles::kUnavailableMaterialRequirementSetIndex};
+    std::uint16_t acquiredFlagSlot{collectibles::kUnavailableFlagSlot};
+    std::uint16_t acquiredFlagIndex{collectibles::kUnavailableFlagIndex};
     std::uint8_t materialRequirementCount{};
     /** Must be zero, so unused bytes have one canonical representation. */
     std::uint8_t reserved{};
@@ -197,6 +242,28 @@ struct SocketPlugMemberRecord {
     std::uint16_t itemDefinitionIndex{};
 };
 
+/** Disk form of one build-derived exotic weapon catalyst relation. */
+struct ExoticCatalystRecord {
+    std::uint32_t itemDefinitionHash{};
+    std::uint16_t itemDefinitionIndex{};
+    std::uint16_t completedPlugDefinitionIndex{};
+    std::uint16_t progressPlugDefinitionIndex{};
+    std::uint16_t effectDefinitionIndex{};
+    std::uint16_t acquisitionDefinitionIndex{};
+    std::array<std::uint16_t, items::catalysts::kCompletionFlagCapacity>
+        completionAccountFlagIndices{};
+    std::array<std::uint16_t, items::catalysts::kCompletionFlagCapacity>
+        completionFlagDefinitionIndices{};
+    std::array<std::uint16_t, items::catalysts::kCompletionValueCapacity> completionValueIndices{};
+    std::uint16_t objectiveDefinitionIndex{items::catalysts::kUnavailableObjectiveIndex};
+    std::uint8_t socketLane{};
+    std::uint8_t availability{};
+    std::uint8_t completionFlagCount{};
+    std::uint8_t completionValueCount{};
+    std::array<std::int32_t, items::catalysts::kCompletionValueCapacity> completionValues{};
+    std::int32_t objectiveValue{};
+};
+
 /** Disk form of one inventory-bucket array-routing descriptor. */
 struct InventoryBucketRecord {
     std::uint8_t bucketId{};
@@ -223,12 +290,119 @@ struct AbilityBucketRecord {
     std::array<std::uint32_t, abilities::kOverflowCapacity> overflow{};
 };
 
-/** Disk form of one progression definition and the object array it routes to. */
+/** Disk form of one progression definition, the object array it routes to, and its step range. */
 struct ProgressionRecord {
     std::uint16_t definitionIndex{};
+    std::uint16_t stepOffset{};
+    std::uint8_t stepCount{};
     std::uint8_t scope{};
-    /** Must be zero, so the packed progression row always matches. */
+};
+
+/** Disk form of one progression rank step. */
+struct ProgressionStepRecord {
+    std::int32_t cost{};
+};
+
+/** Disk form of one season pass reward row. */
+struct SeasonPassRewardRecord {
+    std::uint32_t itemHash{};
+    std::uint32_t quantity{};
+    std::uint16_t itemIndex{};
+    std::uint16_t claimFlagIndex{season_pass::kUnavailableFlagIndex};
+    std::uint8_t requiredRank{};
+    /** Must be zero, so the packed reward row always matches. */
+    std::array<std::uint8_t, 3> reserved{};
+};
+
+/** Disk form of one season pass wrapper item and the set it opens into. */
+struct SeasonPassPackageRecord {
+    std::uint32_t definitionHash{};
+    std::array<std::uint32_t, season_pass::kPackageItemCapacity> items{};
+    std::uint8_t itemCount{};
+    /** Must be zero, so the packed wrapper row always matches. */
+    std::array<std::uint8_t, 3> reserved{};
+};
+
+/** Disk form of one repeatable bounty and the item-type its pool is keyed by. */
+struct BountyRecord {
+    std::uint32_t itemTypeBank{};
+    std::uint32_t itemTypeHash{};
+    std::uint16_t itemIndex{};
+    /** Must be zero, so the packed bounty row always matches. */
+    std::uint16_t reserved{};
+};
+
+/**
+ * Disk form of one record and the account flag bank row its claim sets.
+ * Carries every field of records::Definition; adding one there needs a format bump here.
+ */
+struct RecordDefinitionRecord {
+    std::uint16_t definitionIndex{};
+    std::uint32_t definitionHash{};
+    std::uint16_t completionFlagIndex{};
+    std::uint16_t loreRow{};
+    std::uint16_t scoreValue{};
+    std::uint16_t categoryValueIndex{};
+    std::uint16_t objectiveValueIndex{};
+    std::uint16_t objectiveOffset{};
+    std::uint16_t intervalOffset{};
+    std::uint16_t rewardOffset{};
+    std::uint16_t redeemedCountValueIndex{};
+    std::uint8_t objectiveCount{};
+    std::uint8_t intervalCount{};
+    std::uint8_t rewardCount{};
+    std::uint8_t hasTitle{};
     std::uint8_t reserved{};
+};
+
+/** Disk form of one record objective row. */
+struct RecordObjectiveRecord {
+    std::int32_t completionValue{};
+    std::uint16_t valueIndex{};
+    std::uint16_t sourceValueIndex{};
+    std::int16_t sourceValueSlot{};
+    /** Must be zero, so the packed objective row always matches. */
+    std::uint16_t reserved{};
+};
+
+/** Disk form of one record interval step. */
+struct RecordIntervalRecord {
+    std::int32_t completionValue{};
+    std::uint32_t score{};
+    std::uint16_t itemIndex{};
+    /** Must be zero, so the packed interval row always matches. */
+    std::uint16_t reserved{};
+};
+
+/** Disk form of one record reward row. */
+struct RecordRewardRecord {
+    std::int32_t quantity{};
+    std::uint16_t itemIndex{};
+    /** Must be zero, so the packed reward row always matches. */
+    std::uint16_t reserved{};
+};
+
+/** Disk form of one presentation node and its owned record rows. */
+struct NodeDefinitionRecord {
+    std::uint16_t definitionIndex{};
+    std::uint16_t valueIndex{nodes::kUnavailableValueIndex};
+    std::int16_t valueSlot{-1};
+    std::int16_t characterValueSlot{-1};
+    std::uint16_t parentValueIndex{nodes::kUnavailableValueIndex};
+    std::uint16_t parentCharacterValueIndex{nodes::kUnavailableValueIndex};
+    std::uint16_t visibilityFlagIndex{nodes::kUnavailableFlagIndex};
+    std::uint16_t visibilityCharacterFlagIndex{nodes::kUnavailableFlagIndex};
+    std::uint16_t characterValueIndex{nodes::kUnavailableValueIndex};
+    std::uint8_t loreBook{};
+    std::uint8_t childCount{};
+    std::array<std::uint16_t, nodes::kChildCapacity> children{};
+};
+
+/** Disk form of one incident-target definition. */
+struct SObjectDefinitionRecord {
+    std::uint32_t nameHash{};
+    std::uint32_t lane4{};
+    std::int32_t typeCode{sobjects::kAbsentTypeCode};
 };
 
 /** Disk form of one dense socket-entry-list definition. */
@@ -264,8 +438,10 @@ struct ScenarioRecord {
     std::uint8_t rosterGroupCount{};
     /** Map-package stem the destination's spawn sets are grouped under. */
     std::uint8_t spawnStemLength{};
+    /** Groups published through the delta's per-bubble sub-blocks. */
+    std::uint8_t bubbleGroupCount{};
     /** Must be zero, so the packed destination row always matches. */
-    std::array<std::uint8_t, 3> reserved{};
+    std::array<std::uint8_t, 2> reserved{};
     std::array<char, scenarios::kSpawnStemCapacity> spawnStem{};
     std::array<std::uint8_t, scenarios::kBubbleCapacity> bubbleStates{};
     /** Each bubble's own name hash, in the same order as the states. */
@@ -274,6 +450,15 @@ struct ScenarioRecord {
     std::array<std::uint8_t, scenarios::kBubbleCapacity> bubbleStateCounts{};
     /** Roster table indices, in publish order. */
     std::array<std::uint16_t, scenarios::kDestinationGroupCapacity> rosterGroups{};
+    /** Roster table indices published per bubble, in publish order. */
+    std::array<std::uint16_t, scenarios::kDestinationBubbleGroupCapacity> bubbleGroups{};
+    /**
+     * Bubbles each per-bubble group is published in, one bit per client bubble index.
+     * Stored as bytes, low bubble first, so the row keeps its one-byte alignment.
+     */
+    std::array<std::array<std::uint8_t, scenarios::kBubbleMaskBytes>,
+               scenarios::kDestinationBubbleGroupCapacity>
+        bubbleGroupMasks{};
     /** Each bubble's map-global index, which spawn-set bubble masks are keyed by. */
     std::array<std::uint16_t, scenarios::kBubbleCapacity> bubbleMapIndices{};
     /** Packages this destination loads, from its slice-set entries and its own tag. */
@@ -322,6 +507,15 @@ struct SpawnNameHashRecord {
     std::array<std::uint16_t, spawn_sets::kPackageCapacity> activityPackages{};
 };
 
+/** Disk form of one spawn point and the set it belongs to. */
+struct SpawnPointRecord {
+    std::array<float, spawn_sets::kPositionComponents> position{};
+    std::uint32_t nameHash{};
+    std::uint16_t stemIndex{};
+    /** Must be zero, so the packed point row always matches. */
+    std::array<std::uint8_t, 2> reserved{};
+};
+
 /** Disk form of one vendor index row. */
 struct VendorIndexRecord {
     std::uint32_t definitionHash{};
@@ -353,31 +547,20 @@ struct VendorDefinitionRecord {
     std::uint16_t thirdCount{};
 };
 
-/** Disk form of one vendor sale row. Unnamed fields keep their raw value. */
+/** Disk form of one vendor sale row. */
 struct VendorSaleRowRecord {
-    std::uint16_t vendorIndex{};
-    std::uint16_t rowIndex{};
+    std::int32_t categoryIndex{};
+    std::uint32_t costQuantity{};
     std::uint16_t itemIndex{};
     std::uint16_t secondaryItemIndex{};
-    std::int32_t installedIndex{};
-    std::uint32_t raw104{};
-    std::uint32_t raw108{};
-    std::int32_t raw172{};
-    std::uint32_t expressionCount8{};
-    std::uint32_t nestedRecordCount{};
-    std::uint32_t expressionCount120{};
-    std::uint32_t count136{};
-    std::uint32_t expressionCount160{};
-    std::uint8_t featureBranch{};
+    std::uint16_t costItemIndex{};
     /** Must be zero, so the packed sale row always matches. */
-    std::array<std::uint8_t, 3> reserved{};
+    std::uint16_t reserved{};
 };
 
-/** Disk form of one vendor installed row, kept whole. */
+/** Disk form of one vendor category row. */
 struct VendorInstalledRowRecord {
-    std::uint16_t vendorIndex{};
-    std::uint16_t rowIndex{};
-    std::array<std::uint8_t, vendors::kInstalledRowStride> raw{};
+    std::uint32_t definitionHash{};
 };
 
 /** Disk form of one roster group object and its slots. */
@@ -387,23 +570,27 @@ struct RosterGroupRecord {
     std::uint16_t slotCount{};
     std::array<std::uint8_t, scenarios::kRosterSlotCapacity> slotTypes{};
     std::array<std::uint8_t, scenarios::kRosterSlotCapacity> slotFlags{};
+    /** Each slot's own index, from its descriptor. */
+    std::array<std::uint16_t, scenarios::kRosterSlotCapacity> slotIndices{};
 };
 
 #pragma pack(pop)
 
 static_assert(sizeof(Prefix) == kCacheMagic.size() + sizeof(std::uint32_t));
 static_assert(sizeof(InvestmentConstants)
-              == constants::kCharacterStatRowCount + 2 * sizeof(std::uint8_t));
+              == constants::kCharacterStatRowCount + 3 * sizeof(std::uint8_t));
 static_assert(sizeof(Header)
-              == kCacheMagic.size() + 25 * sizeof(std::uint32_t) + 2 * sizeof(std::uint64_t)
-                     + sizeof(InvestmentConstants));
+              == kCacheMagic.size() + 39 * sizeof(std::uint32_t) + 2 * sizeof(std::uint64_t)
+                     + sizeof(InvestmentConstants)
+                     + sizeof(gameplay::entity_position_profiles::Fingerprint));
+static_assert(sizeof(SpawnPointRecord)
+              == spawn_sets::kPositionComponents * sizeof(float) + sizeof(std::uint32_t)
+                     + sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t));
 static_assert(sizeof(VendorIndexRecord) == 2 * sizeof(std::uint32_t) + 2 * sizeof(std::uint16_t));
 static_assert(sizeof(VendorDefinitionRecord)
               == 14 * sizeof(std::uint32_t) + 4 * sizeof(std::uint16_t));
-static_assert(sizeof(VendorSaleRowRecord)
-              == 4 * sizeof(std::uint16_t) + 9 * sizeof(std::uint32_t) + 4 * sizeof(std::uint8_t));
-static_assert(sizeof(VendorInstalledRowRecord)
-              == 2 * sizeof(std::uint16_t) + vendors::kInstalledRowStride);
+static_assert(sizeof(VendorSaleRowRecord) == 4 * sizeof(std::uint16_t) + 2 * sizeof(std::uint32_t));
+static_assert(sizeof(VendorInstalledRowRecord) == sizeof(std::uint32_t));
 static_assert(sizeof(HashNameRecord)
               == hash_names::kNameLength + sizeof(std::uint32_t) + 4 * sizeof(std::uint8_t));
 static_assert(sizeof(ScenarioRecord)
@@ -413,8 +600,10 @@ static_assert(sizeof(ScenarioRecord)
                      + scenarios::kBubbleCapacity * sizeof(std::uint32_t)
                      + scenarios::kBubbleCapacity * sizeof(std::uint16_t)
                      + (scenarios::kDestinationGroupCapacity
-                        + scenarios::kDestinationPackageCapacity)
-                           * sizeof(std::uint16_t));
+                        + scenarios::kDestinationPackageCapacity
+                        + scenarios::kDestinationBubbleGroupCapacity)
+                           * sizeof(std::uint16_t)
+                     + scenarios::kDestinationBubbleGroupCapacity * scenarios::kBubbleMaskBytes);
 static_assert(sizeof(SpawnStemRecord)
               == spawn_sets::kStemNameCapacity + sizeof(std::uint32_t) + 3 * sizeof(std::uint16_t)
                      + 2 * sizeof(std::uint8_t));
@@ -424,8 +613,26 @@ static_assert(sizeof(SpawnNameHashRecord)
                      + 6 * sizeof(std::uint8_t) + spawn_sets::kBubbleMaskBytes);
 static_assert(sizeof(RosterGroupRecord)
               == 2 * sizeof(std::uint32_t) + sizeof(std::uint16_t)
-                     + 2 * scenarios::kRosterSlotCapacity * sizeof(std::uint8_t));
-static_assert(sizeof(ProgressionRecord) == sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t));
+                     + 2 * scenarios::kRosterSlotCapacity * sizeof(std::uint8_t)
+                     + scenarios::kRosterSlotCapacity * sizeof(std::uint16_t));
+static_assert(sizeof(ProgressionRecord) == 2 * sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t));
+static_assert(sizeof(ProgressionStepRecord) == sizeof(std::int32_t));
+static_assert(sizeof(SeasonPassRewardRecord)
+              == 2 * sizeof(std::uint32_t) + 2 * sizeof(std::uint16_t) + 4 * sizeof(std::uint8_t));
+static_assert(sizeof(SeasonPassPackageRecord)
+              == (1 + season_pass::kPackageItemCapacity) * sizeof(std::uint32_t)
+                     + 4 * sizeof(std::uint8_t));
+static_assert(sizeof(BountyRecord) == 2 * sizeof(std::uint32_t) + 2 * sizeof(std::uint16_t));
+static_assert(sizeof(RecordDefinitionRecord)
+              == sizeof(std::uint32_t) + 10 * sizeof(std::uint16_t) + 5 * sizeof(std::uint8_t));
+static_assert(sizeof(RecordObjectiveRecord) == sizeof(std::int32_t) + 4 * sizeof(std::uint16_t));
+static_assert(sizeof(RecordIntervalRecord)
+              == sizeof(std::int32_t) + sizeof(std::uint32_t) + 2 * sizeof(std::uint16_t));
+static_assert(sizeof(RecordRewardRecord) == sizeof(std::int32_t) + 2 * sizeof(std::uint16_t));
+static_assert(sizeof(NodeDefinitionRecord)
+              == 9 * sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t)
+                     + nodes::kChildCapacity * sizeof(std::uint16_t));
+static_assert(sizeof(SObjectDefinitionRecord) == 2 * sizeof(std::uint32_t) + sizeof(std::int32_t));
 static_assert(sizeof(AbilityBucketRecord)
               == sizeof(std::uint16_t) + 6 * sizeof(std::uint8_t)
                      + 2 * abilities::kBucketCapacity * sizeof(std::uint8_t)
@@ -436,11 +643,11 @@ static_assert(sizeof(NamedRecord)
               == content::kDefinitionNameCapacity + 2 * sizeof(std::uint16_t)
                      + 2 * sizeof(std::uint32_t));
 static_assert(sizeof(ItemRecord)
-              == sizeof(std::uint32_t) + 3 * sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t));
+              == 2 * sizeof(std::uint32_t) + 5 * sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t));
 static_assert(sizeof(MaterialRequirementRecord)
               == sizeof(std::uint32_t) + 2 * sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t));
 static_assert(sizeof(CollectibleRecord)
-              == 2 * sizeof(std::uint32_t) + 3 * sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t)
+              == 2 * sizeof(std::uint32_t) + 5 * sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t)
                      + collectibles::kMaterialRequirementCapacity
                            * sizeof(MaterialRequirementRecord));
 static_assert(sizeof(MaterialRequirementSetRecord)
@@ -459,6 +666,8 @@ static_assert(sizeof(SocketPlugRuleRecord)
               == sizeof(std::uint16_t) + 2 * sizeof(std::uint8_t) + sizeof(std::uint32_t));
 static_assert(sizeof(SocketPlugPoolRecord) == 2 * sizeof(std::uint32_t));
 static_assert(sizeof(SocketPlugMemberRecord) == sizeof(std::uint16_t));
+static_assert(sizeof(ExoticCatalystRecord)
+              == 6 * sizeof(std::uint32_t) + 18 * sizeof(std::uint16_t) + 4 * sizeof(std::uint8_t));
 static_assert(sizeof(InventoryBucketRecord)
               == 4 * sizeof(std::uint8_t) + 2 * sizeof(std::uint16_t));
 static_assert(sizeof(SocketEntryListRecord)

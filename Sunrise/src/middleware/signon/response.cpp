@@ -6,10 +6,10 @@
 #include <span>
 #include <string_view>
 
-#include "config/signon_config_blob.h"
-#include "extended/signon_extended_fields.h"
 #include "internal.h"
-#include "ownership/signon_ownership_encoder.h"
+#include "signon_config_blob.h"
+#include "signon_extended_fields.h"
+#include "signon_ownership_encoder.h"
 
 namespace sunrise::middleware::signon {
 namespace {
@@ -62,6 +62,7 @@ bool encode_success(const state::SignOnState& state,
                     const state::entitlements::Table& entitlements,
                     std::uint64_t expirySeconds,
                     std::uint64_t serverTimeSeconds,
+                    std::uint32_t observedClientAddress,
                     std::span<std::byte> output,
                     std::size_t& written) noexcept {
     written = 0;
@@ -76,7 +77,7 @@ bool encode_success(const state::SignOnState& state,
                                 && success.varint(kExpiryField, expirySeconds)
                                 && success.varint(kRelayAddressField, state.relayAddress)
                                 && success.varint(kRelayPortField, state.relayPort)
-                                && extended::append(success, state.relayAddress);
+                                && extended::append(success);
     if (!successEncoded) {
         SecureZeroMemory(successBuffer.data(), successBuffer.size());
         return false;
@@ -110,7 +111,8 @@ bool encode_success(const state::SignOnState& state,
         && response.bytes(kOwnedEntitlementsField, std::span(ownedBuffer).first(ownedSize))
         && response.varint(kServerTimeField, serverTimeSeconds)
         && response.bytes(kEnvironmentField, text_bytes(kEnvironment))
-        && response.varint(kExternalAddressField, state.relayAddress);
+        // The client saves field 14 as its own external address, so it is never the relay address.
+        && response.varint(kExternalAddressField, observedClientAddress);
     SecureZeroMemory(successBuffer.data(), successBuffer.size());
     SecureZeroMemory(commonInfoBuffer.data(), commonInfoBuffer.size());
     if (!responseEncoded) {

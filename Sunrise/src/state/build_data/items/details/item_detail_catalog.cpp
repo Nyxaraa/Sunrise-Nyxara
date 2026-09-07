@@ -4,11 +4,13 @@
 #include <array>
 #include <bitset>
 #include <limits>
+#include <shared_mutex>
 #include <span>
 #include <vector>
 
 #include "../../table.h"
 #include "../item_catalog.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::state::build_data::items::details {
 namespace {
@@ -19,7 +21,7 @@ constexpr std::size_t kNativeDefinitionIndexCapacity =
 /** An all-one row marks a native index with no published configured detail. */
 constexpr std::uint16_t kEmptyLookupRow = (std::numeric_limits<std::uint16_t>::max)();
 
-Lock g_lock;
+core::threading::SrwLock g_lock;
 std::vector<Definition> g_definitions;
 std::size_t g_definitionCount{};
 // Native definition index to detail row, rebuilt with the table under the same exclusive hold.
@@ -83,7 +85,7 @@ static_assert(kDefinitionCapacity < kEmptyLookupRow);
 
 /** Clears every generated configured item detail under the catalog lock. */
 void clear() noexcept {
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_definitions.clear();
     g_definitions.shrink_to_fit();
     g_definitionCount = 0;
@@ -114,7 +116,7 @@ bool replace(std::span<const Definition> definitions) noexcept {
 
     std::vector<Definition> staged(definitions.begin(), definitions.end());
 
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     std::fill(g_lookup.begin(), g_lookup.end(), kEmptyLookupRow);
     for (std::size_t index = 0; index < definitions.size(); ++index) {
         g_lookup[definitions[index].definitionIndex] = static_cast<std::uint16_t>(index);
@@ -127,7 +129,7 @@ bool replace(std::span<const Definition> definitions) noexcept {
 /** Finds one configured item detail by native definition index. */
 bool find(std::uint16_t definitionIndex, Definition& definition) noexcept {
     definition = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const Definition> rows{g_definitions.data(), g_definitionCount};
     const std::uint16_t row = g_lookup[definitionIndex];
     const bool found = row != kEmptyLookupRow && row < rows.size();
@@ -139,7 +141,7 @@ bool find(std::uint16_t definitionIndex, Definition& definition) noexcept {
 
 /** Copies details in publication order, without exposing the catalog storage. */
 bool snapshot(std::span<Definition> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     count = 0;
     if (output.size() < g_definitionCount) {
         return false;
@@ -153,7 +155,7 @@ bool snapshot(std::span<Definition> output, std::size_t& count) noexcept {
 
 /** @return Number of configured item details, read under the lock. */
 std::size_t count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitionCount;
 }
 

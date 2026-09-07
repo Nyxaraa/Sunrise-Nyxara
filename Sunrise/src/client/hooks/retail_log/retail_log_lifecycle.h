@@ -8,7 +8,4 @@ namespace sunrise::client::hooks::retail_log {
 /** Removes the retail-log capture hook. */
 [[nodiscard]] bool uninstall() noexcept;
 
-/** @return True while the retail-log capture hook is attached. */
-[[nodiscard]] bool is_installed() noexcept;
-
 } // namespace sunrise::client::hooks::retail_log

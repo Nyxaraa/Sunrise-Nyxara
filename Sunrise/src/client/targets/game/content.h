@@ -11,6 +11,8 @@ namespace sunrise::client::targets::game::content {
 /** Unowned main-image entry points required only by runtime content extraction. */
 struct Targets {
     std::byte* queuezObjectStoreGetter{};
+    /** Native schema-object resolver retained for checked live-layout diagnostics. */
+    std::byte* queuezObjectResolver{};
     std::byte* contentHandleTablesSlot{};
     std::byte* getItemStatValue{};
     std::byte* lightValueToScalar{};

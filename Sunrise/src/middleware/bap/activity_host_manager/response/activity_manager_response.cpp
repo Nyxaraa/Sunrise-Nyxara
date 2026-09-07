@@ -8,49 +8,72 @@
 namespace sunrise::middleware::bap::activity_host_manager::response {
 namespace {
 
-/** The fixed service-7 tail reserves 128 opaque activity-data bytes. */
-constexpr std::size_t kActivityDataSize = 128;
-
-/** Complete typed service-7 body before it is copied to caller-owned storage. */
-struct ResponseBody final {
-    /** Discriminator 2 selects the activity-host-manager response variant. */
-    std::byte discriminator;
-    /** The client reads the session id as one big-endian u64. */
-    std::array<std::byte, encoding::kU64Size> sessionId;
-    /** Our minimal policy leaves all 128 opaque activity-data bytes zero. */
-    std::array<std::byte, kActivityDataSize> activityData;
+/** Fixed offsets in the exact service-7 response body. */
+struct ResponseLayout final {
+    /** Byte offsets from the start of the body. */
+    static constexpr std::size_t discriminator = 0;
+    static constexpr std::size_t sessionId = discriminator + sizeof(std::byte);
+    static constexpr std::size_t activityData = sessionId + encoding::kU64Size;
+    static constexpr std::size_t size = activityData + kActivityDataSize;
 };
 
 /** Service 7 rejects a response body with discriminator zero or any value other than 2. */
 constexpr std::byte kResponseDiscriminator{2};
 /** A zero session id does not move the activity-host request on. */
 constexpr std::uint64_t kInvalidSessionId = 0;
-/** A failed encode publishes no response bytes. */
-constexpr std::size_t kNoBytesWritten = 0;
-/** Service 7 needs one discriminator, one u64 and 128 opaque bytes. */
-constexpr std::size_t kResponseBodySize = 137;
 
-static_assert(sizeof(ResponseBody) == kResponseBodySize);
+static_assert(ResponseLayout::size == kResponseBodySize);
 
 } // namespace
 
-/** Encodes a service-7 response with the minimal local activity-data policy. */
-bool encode_response(std::uint64_t sessionId,
+/** Decodes one exact service-7 response and retains the opaque activity data. */
+bool decode_response(std::span<const std::byte> input, Response& response) noexcept {
+    response = {};
+    if (input.size() != ResponseLayout::size
+        || input[ResponseLayout::discriminator] != kResponseDiscriminator) {
+        return false;
+    }
+    Response parsed{};
+    parsed.sessionId =
+        encoding::read_u64_be(input.subspan<ResponseLayout::sessionId, encoding::kU64Size>());
+    if (parsed.sessionId == kInvalidSessionId) {
+        return false;
+    }
+    std::copy_n(input.begin() + ResponseLayout::activityData,
+                parsed.activityData.size(),
+                parsed.activityData.begin());
+    response = parsed;
+    return true;
+}
+
+/** Encodes one complete service-7 response losslessly. */
+bool encode_response(const Response& response,
                      std::span<std::byte> output,
                      std::size_t& written) noexcept {
-    written = kNoBytesWritten;
-    if (sessionId == kInvalidSessionId || output.size() < kResponseBodySize) {
+    written = 0;
+    if (response.sessionId == kInvalidSessionId || output.size() < ResponseLayout::size) {
         return false;
     }
 
-    ResponseBody body{};
-    body.discriminator = kResponseDiscriminator;
-    encoding::write_u64_be(body.sessionId, sessionId);
-
-    const auto bytes = std::as_bytes(std::span{&body, 1});
-    std::copy(bytes.begin(), bytes.end(), output.begin());
-    written = bytes.size();
+    std::array<std::byte, ResponseLayout::size> body{};
+    body[ResponseLayout::discriminator] = kResponseDiscriminator;
+    encoding::write_u64_be(std::span(body).subspan<ResponseLayout::sessionId, encoding::kU64Size>(),
+                           response.sessionId);
+    std::copy(response.activityData.begin(),
+              response.activityData.end(),
+              body.begin() + ResponseLayout::activityData);
+    std::copy(body.begin(), body.end(), output.begin());
+    written = body.size();
     return true;
+}
+
+/** Encodes a service-7 response with the compatibility zero activity-data policy. */
+bool encode_response(std::uint64_t sessionId,
+                     std::span<std::byte> output,
+                     std::size_t& written) noexcept {
+    Response response{};
+    response.sessionId = sessionId;
+    return encode_response(response, output, written);
 }
 
 } // namespace sunrise::middleware::bap::activity_host_manager::response

@@ -1,5 +1,6 @@
 #include "sunrise_ui_theme.h"
 
+#include <algorithm>
 #include <imgui.h>
 
 #include "../scaling/dpi/ui_dpi_scaling.h"
@@ -44,6 +45,14 @@ constexpr ImVec4 kAccentActive{0.82F, 0.31F, 0.10F, 1.0F};
 constexpr ImVec4 kBorder{0.16F, 0.19F, 0.24F, 1.0F};
 /** Selection uses a translucent accent so selected text stays readable. */
 constexpr ImVec4 kSelection{0.95F, 0.42F, 0.16F, 0.28F};
+/** An unselected tab sits between the panel and a passive control. */
+constexpr ImVec4 kTab{0.075F, 0.088F, 0.113F, 1.0F};
+/** A selected tab reads as part of the panel below it. */
+constexpr ImVec4 kTabSelected{0.12F, 0.14F, 0.175F, 1.0F};
+/** A table header sits one step above the panel it is drawn on. */
+constexpr ImVec4 kTableHeader{0.10F, 0.12F, 0.155F, 1.0F};
+/** Alternate table rows shift just enough to follow a wide row across. */
+constexpr ImVec4 kTableRowAlt{1.0F, 1.0F, 1.0F, 0.025F};
 /** A zero-alpha shadow turns off the unused second window edge. */
 constexpr ImVec4 kTransparent{};
 
@@ -103,10 +112,30 @@ void apply() noexcept {
     colors[ImGuiCol_ResizeGripActive] = kAccentHovered;
     colors[ImGuiCol_TextSelectedBg] = kSelection;
     colors[ImGuiCol_NavCursor] = kAccent;
+    // Dear ImGui defaults these to its own blue, which is the only non-Sunrise colour left on a
+    // page built from tab bars and tables.
+    colors[ImGuiCol_Tab] = kTab;
+    colors[ImGuiCol_TabHovered] = kControlHovered;
+    colors[ImGuiCol_TabSelected] = kTabSelected;
+    colors[ImGuiCol_TabSelectedOverline] = kAccent;
+    colors[ImGuiCol_TabDimmed] = kPanel;
+    colors[ImGuiCol_TabDimmedSelected] = kControl;
+    colors[ImGuiCol_TabDimmedSelectedOverline] = kBorder;
+    colors[ImGuiCol_TableHeaderBg] = kTableHeader;
+    colors[ImGuiCol_TableBorderStrong] = kBorder;
+    colors[ImGuiCol_TableBorderLight] = kBorder;
+    colors[ImGuiCol_TableRowBg] = kTransparent;
+    colors[ImGuiCol_TableRowBgAlt] = kTableRowAlt;
+    colors[ImGuiCol_TextLink] = kAccent;
+    colors[ImGuiCol_TreeLines] = kBorder;
+    colors[ImGuiCol_DragDropTarget] = kAccent;
 
     // Scaling a fresh default style stops repeated monitor changes from building up error.
     const float scale = scaling::dpi::current();
     style.ScaleAllSizes(scale);
+    // ScaleAllSizes truncates this one to a whole number, so any factor below 1 zeroes it and the
+    // cursor draws with no area. Held at 1 instead, which is the size it is authored at.
+    style.MouseCursorScale = (std::max)(1.0F, style.MouseCursorScale);
     style.FontSizeBase = fontSizeBase;
     style.FontScaleMain = scale;
     ImGui::GetStyle() = style;

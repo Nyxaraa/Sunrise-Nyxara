@@ -1,4 +1,5 @@
 #include "../../internal.h"
+#include "../../policy/egress_policy_logging.h"
 #include "../../policy/policy.h"
 #include "replacements.h"
 
@@ -37,6 +38,7 @@ INT PASCAL send_message(SOCKET socket,
         return call(socket, message, flags, bytesSent, overlapped, completion);
     }
 
+    policy::log_send_target(policy::SocketOperation::send, message->name, message->namelen, 0);
     sockaddr_in redirectedAddress{};
     const bool targetsRedirect =
         policy::redirect_ipv4(message->name, message->namelen, redirectedAddress);

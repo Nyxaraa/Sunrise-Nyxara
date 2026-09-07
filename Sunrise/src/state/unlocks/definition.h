@@ -32,7 +32,12 @@ using ProgressionBank = std::array<ProgressionLanes, build_data::progressions::k
 
 /** A set acquired flag is stored as its biased 2-bit true value. */
 inline constexpr std::uint8_t kFlagSet = 2;
-/** A clear acquired flag is stored as zero. */
+
+/**
+ * A clear acquired flag is stored as zero.
+ * The 2-bit field encodes redeemed state only; no value of it means claimable. Claimable is an
+ * objective value equal to its record's completionValue while this flag stays clear.
+ */
 inline constexpr std::uint8_t kFlagClear = 0;
 
 /**

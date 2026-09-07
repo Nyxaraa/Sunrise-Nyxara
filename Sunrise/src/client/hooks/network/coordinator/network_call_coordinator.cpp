@@ -46,8 +46,6 @@ ingress_body(CallLease& lease, HookSlot slot, ConsumerKind consumer) noexcept {
     lease.accepting = g_accepting[static_cast<std::size_t>(slot)];
     if (consumer == ConsumerKind::http) {
         lease.httpConsumer = g_httpConsumer.load(std::memory_order_acquire);
-    } else if (consumer == ConsumerKind::bap) {
-        lease.bapConsumer = g_bapConsumer.load(std::memory_order_acquire);
     }
     ++g_callDepth;
     ReleaseSRWLockShared(&g_lock);

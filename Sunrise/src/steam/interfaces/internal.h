@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 #include "../runtime/runtime.h"
 
@@ -13,6 +14,8 @@ namespace sunrise::steam::interfaces {
 inline constexpr std::size_t kQuaternionComponents = 4;
 /** A motion vector has 3 components. */
 inline constexpr std::size_t kVectorComponents = 3;
+/** Steam result code for success. */
+inline constexpr int kResultOk = 1;
 
 #pragma pack(push, 1)
 struct InputDigitalActionData {
@@ -40,25 +43,16 @@ struct SteamId {
 
 namespace versions {
 
-/** The exact apps interface version the Client asks for. */
+/** Exact interface version strings the callers ask for. Only these are answered. */
 inline constexpr char kApps[] = "STEAMAPPS_INTERFACE_VERSION008";
-/** The exact input interface version the Client asks for. */
 inline constexpr char kInput[] = "SteamInput001";
-/** The exact utils interface version the Client asks for. */
 inline constexpr char kUtils[] = "SteamUtils009";
-/** The exact friends interface version the Client asks for. */
 inline constexpr char kFriends[] = "SteamFriends017";
-/** The exact user interface version the Client asks for. */
 inline constexpr char kUser[] = "SteamUser020";
-/** The exact user-stats interface version the Client asks for. */
 inline constexpr char kUserStats[] = "STEAMUSERSTATS_INTERFACE_VERSION011";
-/** The exact matchmaking interface version the Client asks for. */
 inline constexpr char kMatchmaking[] = "SteamMatchMaking009";
-/** The exact legacy client interface version the exports ask for. */
 inline constexpr char kLegacyClient[] = "SteamClient018";
-/** The exact serialized networking interface version the Client asks for. */
 inline constexpr char kSerializedNetworking[] = "SteamNetworkingSocketsSerialized003";
-/** The exact HTTP interface version the Client asks for. */
 inline constexpr char kHttp[] = "STEAMHTTP_INTERFACE_VERSION003";
 
 } // namespace versions
@@ -66,8 +60,8 @@ inline constexpr char kHttp[] = "STEAMHTTP_INTERFACE_VERSION003";
 /** Owns and sets up the Steam interface vtables. */
 namespace tables {
 
-/** @return True once every interface table is set up. */
-[[nodiscard]] bool initialize() noexcept;
+/** Sets every interface table up once, on the first interface request. */
+void initialize() noexcept;
 [[nodiscard]] void* apps() noexcept;
 [[nodiscard]] void* input() noexcept;
 [[nodiscard]] void* utils() noexcept;
@@ -84,7 +78,7 @@ namespace tables {
 /** The Steam interface methods installed into the vtable slots. */
 namespace methods {
 
-ULONG_PTR empty(void*) noexcept;
+ULONG_PTR unsupported(void*) noexcept;
 bool return_true(void*) noexcept;
 const char* persona_name(void*) noexcept;
 const char* language(void*) noexcept;
@@ -102,6 +96,14 @@ int get_dlc_count(void*) noexcept;
 bool get_dlc_data(void*, int, DWORD*, bool*, char*, int) noexcept;
 bool request_current_stats(void*) noexcept;
 bool get_achievement(void*, const char*, bool*) noexcept;
+bool set_achievement(void*, const char*) noexcept;
+bool store_stats(void*) noexcept;
+bool set_rich_presence(void*, const char*, const char*) noexcept;
+void clear_rich_presence(void*) noexcept;
+const char* friend_rich_presence(void*, std::uint64_t, const char*) noexcept;
+int friend_rich_presence_key_count(void*, std::uint64_t) noexcept;
+const char* friend_rich_presence_key(void*, std::uint64_t, int) noexcept;
+bool invite_user_to_game(void*, std::uint64_t, const char*) noexcept;
 std::uint64_t input_handle(void*, const char*) noexcept;
 InputDigitalActionData input_digital_data(void*, std::uint64_t, std::uint64_t) noexcept;
 InputAnalogActionData input_analog_data(void*, std::uint64_t, std::uint64_t) noexcept;
@@ -126,6 +128,18 @@ int serialized_get_relay_ticket(void*, DWORD, void*, DWORD) noexcept;
 void serialized_post_connection_state(void*, const void*, DWORD) noexcept;
 ApiCall request_encrypted_app_ticket(void*, const void*, int) noexcept;
 bool get_encrypted_app_ticket(void*, void*, int, DWORD*) noexcept;
+
+/** @return The single local Steam identity this shim answers for. */
+[[nodiscard]] inline std::uint64_t local_steam_id() noexcept {
+    SteamId identity{};
+    (void)get_steam_id(nullptr, &identity);
+    return identity.value;
+}
+
+/** @param text Optional C string from a caller. @return Its view, or an empty view. */
+[[nodiscard]] inline std::string_view text_view(const char* text) noexcept {
+    return text != nullptr ? std::string_view{text} : std::string_view{};
+}
 
 } // namespace methods
 } // namespace sunrise::steam::interfaces

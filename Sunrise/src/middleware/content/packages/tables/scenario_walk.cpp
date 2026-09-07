@@ -103,9 +103,10 @@ struct StateContext {
             return false;
         }
         Array slots{};
-        if (object_slots(objectBlob, slots)) {
-            placement.slotCount = slots.count;
+        if (!object_slots(objectBlob, slots)) {
+            return false;
         }
+        placement.slotCount = slots.count;
         placement.objectBytes = objectBlob;
         ++result.placements;
         if (!visitor(visitorContext, placement)) {

@@ -19,29 +19,19 @@ inline constexpr std::size_t kResetIntervalOffset = 20;
 /** Raw reset phase, paired with the interval. */
 inline constexpr std::size_t kResetPhaseOffset = 24;
 
-/** Sale row expression array descriptor. */
-inline constexpr std::size_t kSaleExpression8Offset = 8;
-/** Sale row nested-record array descriptor. */
-inline constexpr std::size_t kSaleNestedRecordOffset = 32;
+/** Sale row price-override array descriptor, which is what the row charges. */
+inline constexpr std::size_t kSaleCostArrayDescriptor = 32;
+/** Cost item-definition index inside one price-override row. */
+inline constexpr std::size_t kSaleCostItemIndexOffset = 0;
+/** Units the price-override row charges. */
+inline constexpr std::size_t kSaleCostQuantityOffset = 4;
 /** Sale row main item-definition index. */
 inline constexpr std::size_t kSaleItemIndexOffset = 70;
-/** Sale row installed/runtime table index. */
-inline constexpr std::size_t kSaleInstalledIndexOffset = 100;
-/** Sale row scalar with no closed consumer. */
-inline constexpr std::size_t kSaleRaw104Offset = 104;
-/** Sale row scalar with no closed consumer. */
-inline constexpr std::size_t kSaleRaw108Offset = 108;
-/** Sale row second expression array descriptor. */
-inline constexpr std::size_t kSaleExpression120Offset = 120;
-/** Sale row array descriptor with no closed consumer. */
-inline constexpr std::size_t kSaleCount136Offset = 136;
-/** Sale row feature branch byte. */
-inline constexpr std::size_t kSaleFeatureBranchOffset = 154;
-/** Sale row inline expression array descriptor. */
-inline constexpr std::size_t kSaleExpression160Offset = 160;
-/** Sale row scalar with no closed consumer. It is not the field the runtime selector reads. */
-inline constexpr std::size_t kSaleRaw172Offset = 172;
+/** Sale row vendor category index. */
+inline constexpr std::size_t kSaleCategoryIndexOffset = 100;
 /** Sale row secondary item-definition index. */
 inline constexpr std::size_t kSaleSecondaryItemOffset = 176;
+/** A category row names its item by definition hash at this offset. */
+inline constexpr std::size_t kInstalledRowHashOffset = 0;
 
 } // namespace sunrise::client::content::vendors

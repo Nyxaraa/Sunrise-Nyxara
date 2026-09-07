@@ -1,19 +1,26 @@
 #include "spawn_set_catalog.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
+#include <shared_mutex>
 #include <string_view>
 
 #include "../table.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::state::build_data::spawn_sets {
 namespace {
 
-// One lock covers both tables: a stem names a range inside the hash bank, so the pair must move
-// together or a stem could point past the end of the bank a reader sees.
-Lock g_lock;
+/** Widest world coordinate a point may carry. Maps are far smaller, so this rejects junk only. */
+constexpr float kPositionBound = 1.0e9F;
+
+// One lock covers all three tables. A stem names a hash range and a point names a stem row, so
+// replacing one alone would leave a reader resolving past the end.
+core::threading::SrwLock g_lock;
 Table<Stem, kStemCapacity> g_stems;
 Table<NameHash, kNameHashCapacity> g_nameHashes;
+Table<Point, kPointCapacity> g_points;
 
 /** @param stem Stem row. @return Its bounded logical name. */
 [[nodiscard]] std::string_view name_of(const Stem& stem) noexcept {
@@ -63,13 +70,40 @@ Table<NameHash, kNameHashCapacity> g_nameHashes;
     return points == stem.pointCount && points <= (std::numeric_limits<std::uint32_t>::max)();
 }
 
+/** Finds one stem row by name, under the caller's lock. @param index Receives its row index. */
+[[nodiscard]] bool stem_index_locked(std::string_view name, std::size_t& index) noexcept {
+    index = 0;
+    const std::span<const Stem> rows = g_stems.rows();
+    const auto found =
+        std::lower_bound(rows.begin(), rows.end(), name, [](const Stem& row, auto key) {
+            return name_of(row) < key;
+        });
+    if (found == rows.end() || name_of(*found) != name) {
+        return false;
+    }
+    index = static_cast<std::size_t>(found - rows.begin());
+    return true;
+}
+
+/** @return The squared distance between two world positions. */
+[[nodiscard]] float distance_squared(const std::array<float, kPositionComponents>& from,
+                                     const std::array<float, kPositionComponents>& to) noexcept {
+    float total = 0.0F;
+    for (std::size_t lane = 0; lane < kPositionComponents; ++lane) {
+        const float delta = to[lane] - from[lane];
+        total += delta * delta;
+    }
+    return total;
+}
+
 } // namespace
 
-/** Clears every extracted stem and name-hash row under the catalog lock. */
+/** Clears every extracted stem, name-hash and point row under the catalog lock. */
 void clear() noexcept {
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_stems.clear();
     g_nameHashes.clear();
+    g_points.clear();
 }
 
 /** Checks one complete spawn-set catalog in canonical stem and hash order. */
@@ -88,23 +122,88 @@ bool valid(std::span<const Stem> stems, std::span<const NameHash> nameHashes) no
     return expectedOffset == nameHashes.size();
 }
 
-/** Replaces the complete spawn-set catalog in one step. */
-bool replace(std::span<const Stem> stems, std::span<const NameHash> nameHashes) noexcept {
-    if (!valid(stems, nameHashes)) {
+/** Checks the point bank against the stems it names. */
+bool valid_points(std::span<const Point> points, std::span<const Stem> stems) noexcept {
+    if (points.size() > kPointCapacity) {
         return false;
     }
-    const Lock::Exclusive guard(g_lock);
-    // Both run, with no short-circuit, so the pair cannot be left half replaced. valid() already
-    // checked each against its size, which is the only reason either can refuse.
+    for (const Point& point : points) {
+        if (point.stemIndex >= stems.size()) {
+            return false;
+        }
+        for (const float lane : point.position) {
+            // A not-a-number lane would win every distance comparison it entered.
+            if (!(lane == lane) || lane > kPositionBound || lane < -kPositionBound) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/** Replaces the complete spawn-set catalog in one step. */
+bool replace(std::span<const Stem> stems,
+             std::span<const NameHash> nameHashes,
+             std::span<const Point> points) noexcept {
+    if (!valid(stems, nameHashes) || !valid_points(points, stems)) {
+        return false;
+    }
+    const std::lock_guard guard(g_lock);
+    // All three run with no short-circuit, so the set is never left half replaced.
     const bool storedStems = g_stems.replace(stems);
     const bool storedHashes = g_nameHashes.replace(nameHashes);
-    return storedStems && storedHashes;
+    const bool storedPoints = g_points.replace(points);
+    return storedStems && storedHashes && storedPoints;
+}
+
+/** Finds the spawn point of one stem nearest a world position. */
+bool nearest_point(std::string_view stem,
+                   const std::array<float, kPositionComponents>& position,
+                   Point& point,
+                   float& distance) noexcept {
+    point = {};
+    distance = 0.0F;
+    const std::shared_lock guard(g_lock);
+    std::size_t stemIndex = 0;
+    if (!stem_index_locked(stem, stemIndex)) {
+        return false;
+    }
+    const Point* found = nullptr;
+    float best = 0.0F;
+    for (const Point& row : g_points.rows()) {
+        if (row.stemIndex != stemIndex) {
+            continue;
+        }
+        const float candidate = distance_squared(position, row.position);
+        if (found == nullptr || candidate < best) {
+            found = &row;
+            best = candidate;
+        }
+    }
+    if (found == nullptr) {
+        return false;
+    }
+    point = *found;
+    distance = std::sqrt(best);
+    return true;
+}
+
+/** Copies the whole point bank. */
+bool snapshot_points(std::span<Point> output, std::size_t& count) noexcept {
+    const std::shared_lock guard(g_lock);
+    return g_points.snapshot(output, count);
+}
+
+/** @return The point row count, read under the lock. */
+std::size_t point_count() noexcept {
+    const std::shared_lock guard(g_lock);
+    return g_points.count();
 }
 
 /** Finds one stem by its normalized name. */
 bool find(std::string_view name, Stem& stem) noexcept {
     stem = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const Stem> rows = g_stems.rows();
     const auto found =
         std::lower_bound(rows.begin(), rows.end(), name, [](const Stem& row, auto key) {
@@ -120,7 +219,7 @@ bool find(std::string_view name, Stem& stem) noexcept {
 /** Finds one spawn-name hash inside one stem. */
 bool find_hash(std::string_view stem, std::uint32_t value, NameHash& nameHash) noexcept {
     nameHash = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const Stem> stemRows = g_stems.rows();
     const auto foundStem =
         std::lower_bound(stemRows.begin(), stemRows.end(), stem, [](const Stem& row, auto key) {
@@ -144,7 +243,7 @@ bool find_hash(std::string_view stem, std::uint32_t value, NameHash& nameHash) n
 /** Copies the name-hash rows one stem owns. */
 bool stem_hashes(const Stem& stem, std::span<NameHash> output, std::size_t& count) noexcept {
     count = 0;
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const NameHash> bank = g_nameHashes.rows();
     const std::size_t offset = stem.nameHashOffset;
     const std::size_t rows = stem.nameHashCount;
@@ -160,25 +259,25 @@ bool stem_hashes(const Stem& stem, std::span<NameHash> output, std::size_t& coun
 
 /** Copies every stem row in ascending name order. */
 bool snapshot(std::span<Stem> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_stems.snapshot(output, count);
 }
 
 /** Copies the whole flat name-hash bank. */
 bool snapshot_hashes(std::span<NameHash> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_nameHashes.snapshot(output, count);
 }
 
 /** @return The stem row count, read under the lock. */
 std::size_t count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_stems.count();
 }
 
 /** @return The name-hash row count, read under the lock. */
 std::size_t hash_count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_nameHashes.count();
 }
 

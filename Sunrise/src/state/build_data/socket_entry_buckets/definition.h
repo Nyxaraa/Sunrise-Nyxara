@@ -15,10 +15,8 @@ inline constexpr std::uint8_t kNoDestinationBucket = 0xFF;
 
 /**
  * One socket-entry list's resolved ability-bucket destination per entry.
- * A pick's socket-entry-table position does not say which ability slot it fills; only its
- * selector chain does. This is computed once from the installed pool data during content
- * extraction, so runtime code can route a click to the right character field without re-reading
- * raw content.
+ * A pick's table position does not say which slot it fills; only its selector chain does. Computed
+ * once during content extraction so runtime code can route a click without re-reading content.
  */
 struct Definition {
     std::uint16_t socketEntryListIndex{};

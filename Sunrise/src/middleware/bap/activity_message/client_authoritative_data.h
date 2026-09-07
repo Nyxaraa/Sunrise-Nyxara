@@ -16,7 +16,7 @@ inline constexpr std::int8_t kMaximumState = 6;
 inline constexpr std::int32_t kAbsentSliceSetIndex = -1;
 /** The 10-bit teleport slice-set field reaches logical 1022. */
 inline constexpr std::int32_t kMaximumSliceSetIndex = 1022;
-/** Wire zero names no region once the bias is removed. The client sends it on its way out. */
+/** Logical -1 names no region; D6 field 2 encodes it as wire 0x7FFFFFFF. */
 inline constexpr std::int32_t kAbsentRegionIndex = -1;
 
 /** Complete spawn-state snapshot mirrored between activity messages 22 and 12. */
@@ -34,30 +34,46 @@ struct TeleportState final {
     std::uint32_t sliceSetHash{};
 };
 
+/** Wire zero names no slice set after the 10-bit leg field's bias is removed. */
+inline constexpr std::int32_t kAbsentLegSliceSetIndex = -1;
+/** The two 2-bit leg fields decode from wire zero to logical -1 and reach 2. */
+inline constexpr std::int8_t kMinimumLegState = -1;
+inline constexpr std::int8_t kMaximumLegState = 2;
+
 /**
- * The region the client says it is in, and that region's name hash. It moves as the player
- * crosses a bubble boundary, so it beats the destination's own slice set everywhere the host has
- * to name the player's position.
+ * One D6 region leg as the client reports it. The host mirrors these fields back into the
+ * client's own msg-12 member record, so they are kept exactly as sent.
  */
 struct RegionState final {
     std::int32_t index{kAbsentRegionIndex};
     std::uint32_t hash{};
+    std::int32_t sliceSetIndex{kAbsentLegSliceSetIndex};
+    /** Field 3, the region's `PUB` or `PRV` policy as the client formats it. */
+    std::int8_t publicState{kMinimumLegState};
+    /** Field 4, stored and copied by the client; no reader is known. */
+    std::int8_t auxState{kMinimumLegState};
     bool hasHash{};
 };
 
-/** Typed changes kept from one sparse client-authoritative delta. */
+/**
+ * Typed client-reported state from one sparse delta; this does not grant mission authority.
+ * `currentRegion` is the region of the slice set the client holds, -1 while none is instantiated.
+ * `region` is the pending leg: what it is loading, or what is behind it after a z-leg switch.
+ */
 struct ClientAuthoritativeData final {
     SpawnState spawn{};
     TeleportState teleport{};
+    RegionState currentRegion{};
     RegionState region{};
     std::uint8_t transitionToken{};
     bool hasTransitionToken{};
     bool hasSpawn{};
     bool hasTeleport{};
+    bool hasCurrentRegion{};
     bool hasRegion{};
 };
 
-/** Client-authoritative deltas use activity message type 22. */
+/** Client-reported state deltas use activity message type 22; the host remains authoritative. */
 inline constexpr std::uint32_t kMessageType = 22;
 /** The root presence bit needs at least one padded byte. */
 inline constexpr std::size_t kMinimumEncodedSize = 1;
@@ -67,7 +83,8 @@ inline constexpr std::size_t kMaximumMeaningfulBitCount = 86'661;
 inline constexpr std::size_t kMaximumEncodedSize = 10'833;
 
 /**
- * Parses one sparse authoritative delta and keeps only the reflected typed state.
+ * Parses one sparse client-state delta and keeps only the reflected typed report. This wire input
+ * does not grant mission authority.
  * @param input Exact message-22 body, with zero padding in its last byte.
  * @param update Cleared first. Filled in only on success.
  * @return True when the whole schema walk uses up the exact padded body.
@@ -91,10 +108,10 @@ inline constexpr std::size_t kMaximumEncodedSize = 10'833;
 [[nodiscard]] bool skip_opaque_root_branch(encoding::bits::Reader& reader) noexcept;
 
 /**
- * Reads the D4 branch and keeps only its optional transition token.
+ * Reads the D4 branch and keeps its optional transition token and both region legs.
  * @param reader Reader sitting at the first D4 field.
- * @param update Candidate result that receives a present token.
- * @return True when both opaque legs and all scalar fields fit.
+ * @param update Candidate result that receives the present legs and token.
+ * @return True when both legs and all scalar fields fit.
  */
 [[nodiscard]] bool read_transition_branch(encoding::bits::Reader& reader,
                                           ClientAuthoritativeData& update) noexcept;

@@ -13,10 +13,11 @@
 namespace sunrise::client::hooks::bootflow {
 namespace {
 
+using core::log::kLineCapacity;
+
 /**
- * The matchmaking composition check. Its prologue repeats across the image, so the pattern runs
- * on to the properties byte read, which is unique to this function. Every branch displacement is
- * wildcarded.
+ * The matchmaking composition check, whose prologue repeats across the image.
+ * The pattern runs on to the properties byte read, which is unique to it; branches are wildcarded.
  */
 constexpr std::string_view kCheckSignatureText =
     "48 89 5C 24 ? 57 48 83 EC ? 48 8B DA 48 8B F9 48 85 C9 0F 84 ? ? ? ? 48 85 D2 0F 84 ? ? ? ? "
@@ -40,14 +41,8 @@ constexpr std::int32_t kSolo = 0;
 /** Check result meaning an argument was null; also returned when the trampoline is gone. */
 constexpr std::int64_t kNullArgument = 3;
 
-/**
- * Lines allowed per run. The check runs on every composition test, so an uncapped report buries
- * the rest of the log. This budget still shows the count the boot started with.
- */
+/** Lines allowed per run. The check runs on every composition test, so reports are capped. */
 constexpr unsigned kMaxReports = 4;
-
-/** Size of one zeroing line, set by its stage and count fields. */
-constexpr std::size_t kLineCapacity = 96;
 
 using Check = std::int64_t(__fastcall*)(void*, std::byte*);
 
@@ -78,8 +73,8 @@ void report(std::int32_t count) noexcept {
 
 /**
  * Clears the big fireteam count so the composition check passes.
- * The write repeats on every call because the field's producer rewrites it each run.
- * Nothing between entry and the compare rebuilds it, so the entry write is the one compared.
+ * The write repeats every call because the field's producer rewrites it each run; nothing
+ * between entry and the compare rebuilds it, so the entry write is the one compared.
  * @param config Borrowed composition config, passed through untouched.
  * @param props Borrowed composition properties whose count is cleared.
  * @return The check's own result, or the null-argument result when the trampoline is gone.
@@ -104,32 +99,38 @@ __declspec(noinline) std::int64_t __fastcall check(void* config, std::byte* prop
 } // namespace
 
 /**
- * Attaches the solo composition fix.
- * @return True when the target is found and the detour attaches.
+ * Stages the solo composition fix.
+ * @param spec Receives the target and replacement.
+ * @return staged when the target is found, unavailable on a miss.
  */
-bool install_composition_check() noexcept {
+StageResult stage_composition_check(hooking::detour::Spec& spec) noexcept {
     if (g_handle.attached) {
-        return true;
+        return StageResult::attached;
     }
     std::byte* const target = scan_main_image_unique(kCheckSignature, "matchmaking_composition");
     if (target == nullptr) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=composition result=fail reason=target");
-        return false;
+        return StageResult::unavailable;
     }
-    const hooking::detour::Spec spec{target, reinterpret_cast<void*>(&check)};
-    if (!hooking::detour::install(spec, g_handle)) {
+    spec = hooking::detour::Spec{target, reinterpret_cast<void*>(&check)};
+    return StageResult::staged;
+}
+
+/** Takes the solo composition fix's attached handle, or a detached one. */
+void publish_composition_check(const hooking::detour::Handle& handle) noexcept {
+    if (!handle.attached) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=composition result=fail reason=attach");
-        return false;
+        return;
     }
+    g_handle = handle;
     g_original.store(reinterpret_cast<Check>(g_handle.original), std::memory_order_release);
     core::log::write(core::log::Channel::client,
                      core::log::Level::info,
                      "ev=bootflow stage=composition result=ok");
-    return true;
 }
 
 /** Detaches the solo composition fix. */

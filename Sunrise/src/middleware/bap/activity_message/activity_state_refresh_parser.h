@@ -18,10 +18,10 @@ struct StateRefresh final {
 };
 
 /**
- * Parses the fixed state-refresh request prefix.
- * @param input Activity message body holding the whole 8-byte prefix.
+ * Parses the complete fixed state-refresh request body.
+ * @param input Activity message body holding exactly 8 bytes.
  * @param refresh Cleared first. Filled in only on success.
- * @return True when both big-endian fields are there in full.
+ * @return True only when both big-endian fields are present with no tail.
  */
 [[nodiscard]] bool parse_state_refresh(std::span<const std::byte> input,
                                        StateRefresh& refresh) noexcept;

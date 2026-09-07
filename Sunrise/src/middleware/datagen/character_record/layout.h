@@ -93,6 +93,24 @@ struct RenderEntry {
     std::array<MaterialPair, kMaterialPairCapacity> materialPairs{};
 };
 
+/**
+ * The periodic-reset block the family-three record carries, and character object B repeats.
+ * Both stamps are Unix seconds of the last applied reset. Zero makes that rollover due.
+ */
+struct PeriodicReset {
+    std::int32_t counterA{};
+    std::int32_t counterB{};
+    std::uint64_t reserved{};
+    std::uint64_t lastDailyResetSeconds{};
+    std::uint64_t lastWeeklyResetSeconds{};
+    std::int32_t rewardedLevelHighWater{};
+    std::array<std::byte, 4> highWaterPadding{};
+    /** False selects the live client clock and leaves the override seconds beside it inert. */
+    std::uint8_t overrideClockPresent{};
+    std::array<std::byte, 7> overridePadding{};
+    std::uint64_t overrideClockSeconds{};
+};
+
 /** One keyed 64-bit row. */
 struct KeyedRow {
     std::int8_t key{kEmptyKey};
@@ -110,10 +128,12 @@ struct StatRow {
 /** The appearance block shared byte-for-byte by the family-three and family-zero records. */
 struct Appearance {
     std::int32_t level{};
-    float unusedFloatA{};
-    float unusedFloatB{};
-    /** The light the banner shows, compared as a float by its only reader. */
-    float light{};
+    /** Level carrying fractional progress. The card splits it into whole and partial parts. */
+    float levelProgress{};
+    /** The power the card, the banner and the inventory row all read. */
+    float primaryLight{};
+    /** A second power float the banner publishes on its own output row. */
+    float auxiliaryLight{};
     std::array<AbilityBucket, kAbilityBucketCapacity> abilityBuckets{};
     std::array<std::uint32_t, kOverflowHashCapacity> overflowHashes{};
     std::array<RenderEntry, kRenderSlotCapacity> render{};
@@ -175,6 +195,14 @@ inline constexpr std::size_t kIdentitySize = 48;
 inline constexpr std::size_t kAppearanceSize = 3'752;
 /** The summary block follows the appearance block in both records. */
 inline constexpr std::size_t kSummarySize = 32;
+/** The periodic-reset block sits between identity and appearance in the family-three record. */
+inline constexpr std::size_t kPeriodicResetSize = 56;
+/** Both reset stamps are placed by the native block layout, not by C++ packing. */
+struct PeriodicResetOffsets {
+    /** Byte offsets from the start of the periodic-reset block. */
+    static constexpr std::size_t lastDailyResetSeconds = 16;
+    static constexpr std::size_t lastWeeklyResetSeconds = 24;
+};
 /** Each bank below is walked by its record stride, so every one must pack to an exact width. */
 inline constexpr std::size_t kAbilityBucketSize = 68;
 inline constexpr std::size_t kMaterialPairSize = 4;
@@ -208,6 +236,12 @@ static_assert(sizeof(MaterialPair) == kMaterialPairSize);
 static_assert(sizeof(UnlockPair) == kUnlockPairSize);
 static_assert(sizeof(RenderEntry) == kRenderEntrySize);
 static_assert(sizeof(KeyedRow) == kKeyedRowSize);
+static_assert(sizeof(PeriodicReset) == kPeriodicResetSize);
+static_assert(offsetof(PeriodicReset, lastDailyResetSeconds)
+              == PeriodicResetOffsets::lastDailyResetSeconds);
+static_assert(offsetof(PeriodicReset, lastWeeklyResetSeconds)
+              == PeriodicResetOffsets::lastWeeklyResetSeconds);
+static_assert(std::is_trivially_copyable_v<PeriodicReset>);
 static_assert(sizeof(StatRow) == kStatRowSize);
 static_assert(sizeof(Identity) == kIdentitySize);
 static_assert(sizeof(Appearance) == kAppearanceSize);

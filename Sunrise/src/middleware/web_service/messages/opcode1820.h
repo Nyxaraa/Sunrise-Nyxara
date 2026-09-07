@@ -16,10 +16,8 @@ struct Request {
 
 /**
  * Parses the exact reflected opcode-1820 Collections descriptor.
- *
- * The collectible is an optional native field, so the descriptor carries a presence bit before its
- * fifteen-bit row. A request naming no collectible is not a pull and is refused here.
- *
+ * The collectible is optional, so a presence bit precedes its fifteen-bit row. A request naming
+ * no collectible is not a pull and is refused here.
  * @param message Parsed Web Service envelope.
  * @param request Receives the named collectible row.
  * @return True only for the complete canonical three-byte request naming a collectible.

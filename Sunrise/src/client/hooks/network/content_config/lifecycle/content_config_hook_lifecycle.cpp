@@ -9,7 +9,6 @@ bool is_installed() noexcept {
     AcquireSRWLockShared(&g_lifecycleLock);
     const bool installed = !lifecycle::g_transitionActive && lifecycle::all_installed()
                            && g_trackCalls && lifecycle::all_accepting()
-                           && g_contentFetch != nullptr
                            && gate::is_disabled(lifecycle::g_gateOwnership);
     ReleaseSRWLockShared(&g_lifecycleLock);
     return installed;

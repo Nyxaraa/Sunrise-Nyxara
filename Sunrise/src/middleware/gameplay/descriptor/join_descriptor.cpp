@@ -19,6 +19,9 @@ constexpr std::size_t kPortOffset = 4;
 constexpr std::size_t kPublicAddressOffset = 30;
 /** The public UDP port follows the public address, low byte first. */
 constexpr std::size_t kPublicPortOffset = 34;
+/** The direct form keeps the IPv4 at 4, a zero address id at 8 and the port at 10. */
+constexpr std::size_t kDirectAddressOffset = 4;
+constexpr std::size_t kDirectPortOffset = 10;
 /** The NAT type closes the address body at offset 40. */
 constexpr std::size_t kNatTypeOffset = 40;
 /** NAT type 1 reads as open. Zero reads as unknown and leaves the address unroutable. */
@@ -81,7 +84,23 @@ void write_net_addr(std::uint32_t address,
     write_memory_order(output, kPortOffset, port, sizeof(std::uint16_t));
     write_network_order(output, kPublicAddressOffset, address, sizeof(std::uint32_t));
     write_memory_order(output, kPublicPortOffset, port, sizeof(std::uint16_t));
+    // The 4-byte address id at offset 36 stays zero, as the captured retail descriptor leaves it.
+    // A nonzero id made the client stop sending to every private-session region host.
     output[kNatTypeOffset] = kNatTypeOpen;
+    output[kMethodOffset] = kDirectMethod;
+}
+
+/** Builds one direct-form NetAddr; the client decodes it as one big-endian bitstream. */
+void write_direct_net_addr(std::uint32_t address,
+                           std::uint16_t port,
+                           std::array<std::byte, kNetAddrSize>& output) noexcept {
+    output = {};
+    /** The client reads these four bytes as the direct-form tag. */
+    static constexpr std::array<std::byte, 4> kDirectMagic{
+        std::byte{'D'}, std::byte{'R'}, std::byte{'C'}, std::byte{'T'}};
+    std::copy(kDirectMagic.begin(), kDirectMagic.end(), output.begin());
+    write_network_order(output, kDirectAddressOffset, address, sizeof(std::uint32_t));
+    write_network_order(output, kDirectPortOffset, port, sizeof(std::uint16_t));
     output[kMethodOffset] = kDirectMethod;
 }
 

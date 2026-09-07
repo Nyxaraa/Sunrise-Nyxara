@@ -1,10 +1,10 @@
 #include "server_http.h"
 
-#include <chrono>
 #include <cstdint>
 #include <string_view>
 
 #include "../../core/logging/log.h"
+#include "../../core/runtime/server_clock.h"
 #include "../../middleware/signon/response.h"
 #include "../../state/entitlements/entitlement_runtime.h"
 #include "../../state/runtime/runtime.h"
@@ -16,6 +16,8 @@ namespace {
 constexpr std::string_view kSignOnPath = "/SignOn";
 /** HTTP success status written to the Client result prefix. */
 constexpr unsigned kHttpOk = 200;
+/** Network-order IPv4 loopback. The route answers in process, so the client is always local. */
+constexpr std::uint32_t kObservedClientAddress = 0x7F000001;
 
 } // namespace
 
@@ -25,16 +27,14 @@ bool consume(const client::network::HttpRequest& request,
     if (request.url.find(kSignOnPath) == std::string_view::npos) {
         return false;
     }
-    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
-                         std::chrono::system_clock::now().time_since_epoch())
-                         .count();
     const auto& signOnState = state::sign_on();
-    const auto serverTime = static_cast<std::uint64_t>(now);
+    const auto serverTime = static_cast<std::uint64_t>(core::runtime::server_clock_seconds());
     const std::uint64_t expiry = serverTime + signOnState.tokenLifetimeSeconds;
     if (!middleware::signon::encode_success(signOnState,
                                             state::entitlements::get(),
                                             expiry,
                                             serverTime,
+                                            kObservedClientAddress,
                                             request.response,
                                             response.size)) {
         core::log::write(core::log::Channel::server,
@@ -43,6 +43,9 @@ bool consume(const client::network::HttpRequest& request,
         return false;
     }
     response.statusCode = kHttpOk;
+    // The answered sign-on moment is the account's session clock, and the character records
+    // publish it as the last reset before sign-in.
+    state::publish_sign_in_time(serverTime);
     core::log::write(core::log::Channel::server,
                      core::log::Level::info,
                      "ev=http method=post route=signon result=ok");

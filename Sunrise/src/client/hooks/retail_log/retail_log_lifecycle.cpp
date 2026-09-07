@@ -53,12 +53,4 @@ bool uninstall() noexcept {
     return removed;
 }
 
-/** @return True while the retail-log capture hook is attached. */
-bool is_installed() noexcept {
-    AcquireSRWLockShared(&g_lock);
-    const bool attached = g_handle.attached;
-    ReleaseSRWLockShared(&g_lock);
-    return attached;
-}
-
 } // namespace sunrise::client::hooks::retail_log

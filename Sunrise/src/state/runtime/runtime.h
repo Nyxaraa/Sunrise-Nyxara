@@ -4,8 +4,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <variant>
 
+#include "../build_data/records/definition.h"
 #include "state.h"
+
+namespace sunrise::state::account::settings {
+
+struct SettingsDelta;
+
+} // namespace sunrise::state::account::settings
 
 namespace sunrise::state {
 
@@ -15,12 +23,23 @@ namespace sunrise::state {
  */
 [[nodiscard]] bool ensure_profile_item_identities() noexcept;
 
+/** Why one attempt to canonicalize the "Emotes" collection item ended. */
+enum class EmoteCollectionOutcome : std::uint8_t {
+    /** Every character carries a sound collection item, either already or as of this call. */
+    ready,
+    /** The build data or account this reads is not published yet, so a retry is still owed. */
+    notReady,
+    /** The installed content does not carry the item this expects, so it can never be applied. */
+    unsupported,
+    /** The item could not be placed, so no character was changed and a retry is still owed. */
+    failed,
+};
+
 /**
- * Grants each character the other 2 subclasses of the class its equipped subclass belongs to,
- * placing any missing ones into unequipped inventory with native socket defaults. Idempotent:
- * a subclass already equipped or already sitting in inventory is left alone.
- * @return True when every character with an equipped subclass ends up holding its whole class,
- * or there was nothing to check (no account, or no character carries a subclass yet).
+ * Grants each character the other 2 subclasses of its equipped subclass's class, placing missing
+ * ones into unequipped inventory with native socket defaults. Idempotent: one already equipped or
+ * already in inventory is left alone.
+ * @return True when every such character holds its whole class, or there was nothing to check.
  */
 [[nodiscard]] bool ensure_character_subclasses() noexcept;
 
@@ -45,8 +64,7 @@ struct PendingSubclassSelection {
 /**
  * Prepares one opcode-801 selection against the selected character's exact equipped subclass.
  * The installed socket-entry table maps the request to whichever of the character's 5 authored
- * ability picks currently competes in the same group; no class-specific node indices are
- * authored in State.
+ * picks competes in the same group; no class-specific node indices are authored in State.
  */
 [[nodiscard]] bool prepare_subclass_selection(std::uint64_t subclassInstanceSoid,
                                               std::uint8_t requestedEntry,
@@ -58,6 +76,13 @@ struct PendingSubclassSelection {
 
 /** Commits a prepared subclass selection behind the exact full-character staleness guard. */
 [[nodiscard]] bool commit_subclass_selection(PendingSubclassSelection& mutation) noexcept;
+
+/**
+ * Equips the "Emotes" collection item in each character's emote slot, with seeded default lanes.
+ * Idempotent and safe from more than one boundary: a sound copy is left alone and a broken one is
+ * repaired in place, keeping its instance identity.
+ */
+[[nodiscard]] EmoteCollectionOutcome ensure_character_emote_collection() noexcept;
 
 /** Direction of one checked character equipment mutation. */
 enum class EquipmentMutationKind : std::uint8_t {
@@ -88,8 +113,7 @@ struct PendingEquipmentSwap {
 struct PendingItemAcquisition {
     CharacterState beforeCharacter{};
     CharacterState afterCharacter{};
-    /** Exact profile material view observed before and after charging the native requirement set.
-     */
+    /** Profile material view, before and after charging the native requirement set. */
     std::array<account::inventory::ProfileItem, account::inventory::kProfileItemCapacity>
         beforeProfileItems{};
     std::array<account::inventory::ProfileItem, account::inventory::kProfileItemCapacity>
@@ -99,7 +123,6 @@ struct PendingItemAcquisition {
     std::uint64_t acquiredInstanceSoid{};
     std::uint32_t acquiredDefinitionHash{};
     std::uint32_t materialRequirementSetHash{};
-    std::uint32_t expectedNextInventorySerial{};
     std::size_t characterIndex{};
     std::size_t expectedInventoryCount{};
     std::size_t expectedProfileItemCount{};
@@ -110,8 +133,19 @@ struct PendingItemAcquisition {
     std::uint8_t equipmentSlot{};
     std::uint8_t materialRequirementCount{};
     bool profileChanged{};
+    /** Skips Collections revalidation for direct rewards. */
+    bool directGrant{};
     bool prepared{};
 };
+
+/** One profile row an exchange changed, named the way the account's change ring names it. */
+struct ProfileStackChange {
+    std::int32_t mutationSerial{};
+    std::int32_t afterQuantity{};
+};
+
+/** Rows one exchange may announce. Shader recycling announces two: Glimmer and Legendary Shards. */
+inline constexpr std::size_t kProfileStackChangeCapacity = 4;
 
 /** Prepared account-profile stack insertion kept private until its reply and account upsert fit. */
 struct PendingProfileItemAcquisition {
@@ -136,9 +170,96 @@ struct PendingProfileItemAcquisition {
     std::uint16_t collectibleIndex{};
     std::uint8_t bucketId{};
     std::uint8_t materialRequirementCount{};
+    /**
+     * Rows this mutation announces to the account's change ring, which is the only way the Client
+     * is told of a currency gain. Empty marks an ordinary acquisition, which announces its one
+     * acquired row instead; non-empty marks an exchange.
+     */
+    std::array<ProfileStackChange, kProfileStackChangeCapacity> changes{};
+    std::size_t changeCount{};
     /** True only for installed profile mod/shader rows materialized as Family-4 residents. */
     bool actionSource{};
     bool appended{};
+    /** Skips Collections revalidation for direct rewards. */
+    bool directGrant{};
+    bool prepared{};
+};
+
+/** Prepared fixed package expansion kept private until every object and response byte fits. */
+struct PendingDirectItemBundle {
+    CharacterState beforeCharacter{};
+    CharacterState afterCharacter{};
+    std::uint64_t accountSoid{};
+    std::uint64_t characterSoid{};
+    std::uint64_t firstInstanceSoid{};
+    std::uint32_t sourceDefinitionHash{};
+    std::size_t characterIndex{};
+    std::size_t expectedInventoryCount{};
+    std::size_t itemCount{};
+    bool prepared{};
+};
+
+/** Shared batch capacity covers both Triumph rewards and the nine-row Season package. */
+inline constexpr std::size_t kRecordRewardGrantCapacity = 9;
+static_assert(kRecordRewardGrantCapacity >= build_data::records::kRewardPerRecordCapacity);
+
+/** One direct item requested by a record reward policy. */
+struct DirectRecordReward {
+    std::uint16_t itemDefinitionIndex{};
+    std::int32_t quantity{};
+};
+
+enum class RecordRewardKind : std::uint8_t {
+    characterInstance,
+    characterStack,
+    profileStack,
+};
+
+/** Native row identity of one item inside a prepared record-reward batch. */
+struct PreparedRecordReward {
+    std::uint64_t instanceSoid{};
+    std::uint32_t definitionHash{};
+    std::size_t stateIndex{};
+    std::int32_t quantity{};
+    std::int32_t afterQuantity{};
+    std::int32_t mutationSerial{};
+    std::uint16_t inventoryRow{};
+    RecordRewardKind kind{};
+    bool appendedProfileResident{};
+};
+
+/** A reward grant that claims no record carries this instead of a record row. */
+inline constexpr std::uint16_t kUnclaimedRecordIndex = 0xFFFFU;
+
+/** Record claim and all of its item rows committed as one transaction. */
+struct PendingRecordRewardGrant {
+    CharacterState beforeCharacter{};
+    CharacterState afterCharacter{};
+    std::array<account::inventory::ProfileItem, account::inventory::kProfileItemCapacity>
+        beforeProfileItems{};
+    std::array<account::inventory::ProfileItem, account::inventory::kProfileItemCapacity>
+        afterProfileItems{};
+    std::array<PreparedRecordReward, kRecordRewardGrantCapacity> rewards{};
+    /** Record claimed with this grant, already written to the banks, or the unclaimed row. */
+    std::uint16_t claimedRecordIndex{kUnclaimedRecordIndex};
+    std::uint64_t accountSoid{};
+    std::uint64_t characterSoid{};
+    std::size_t characterIndex{};
+    std::size_t beforeProfileItemCount{};
+    std::size_t afterProfileItemCount{};
+    std::size_t rewardCount{};
+    bool prepared{};
+};
+
+/** One uncommitted Season reward and the exact native row or bundle it will claim. */
+struct PendingSeasonPassReward {
+    std::variant<PendingItemAcquisition,
+                 PendingProfileItemAcquisition,
+                 PendingDirectItemBundle,
+                 PendingRecordRewardGrant>
+        grant{};
+    std::uint32_t sourceDefinitionHash{};
+    std::uint16_t rewardIndex{};
     bool prepared{};
 };
 
@@ -207,7 +328,10 @@ struct PendingSocketPlug {
     /** Equipment semantic index or dense inventory index, selected by `targetEquipped`. */
     std::size_t itemIndex{};
     std::uint16_t targetDefinitionIndex{};
+    /** Plug that lands in the lane. Differs from the request only for a rolled socket. */
     std::uint16_t plugDefinitionIndex{};
+    /** Plug the Client asked for, which decides the pool check and the material charge. */
+    std::uint16_t requestedPlugDefinitionIndex{};
     std::uint16_t materialRequirementSetIndex{0xFFFFU};
     std::uint8_t socketLane{};
     std::uint8_t targetBucketId{};
@@ -231,6 +355,50 @@ struct PendingItemState {
     std::uint32_t beforeFlags{};
     std::uint32_t afterFlags{};
     bool targetEquipped{};
+    bool prepared{};
+};
+
+/** Prepared artifact ownership transition for the selected character. */
+struct PendingArtifactPurchase {
+    std::uint64_t accountSoid{};
+    std::uint64_t characterSoid{};
+    std::size_t characterIndex{};
+    std::uint32_t beforeMask{};
+    std::uint32_t afterMask{};
+    std::uint16_t saleIndex{};
+    bool prepared{};
+};
+
+/** Item residents whose authored artifact sockets were cleared by one reset. */
+struct ArtifactResetResult {
+    std::array<std::uint64_t,
+               account::inventory::kEquipmentSlotCount + account::inventory::kCharacterItemCapacity>
+        instanceSoids{};
+    std::size_t instanceCount{};
+};
+
+/** Prepared current-activity change for the selected character, private until it publishes. */
+struct PendingCurrentActivity {
+    CharacterState beforeCharacter{};
+    CharacterState afterCharacter{};
+    std::uint64_t characterSoid{};
+    std::size_t characterIndex{};
+    std::uint16_t activityIndex{};
+    bool prepared{};
+};
+
+/** Result of validating one sparse settings writeback against authoritative State. */
+enum class SettingsUpdateDisposition : std::uint8_t {
+    rejected,
+    acceptedNoChange,
+    preparedMutation,
+};
+
+/** Complete checked settings before/after images held until the BAP transaction commits. */
+struct PendingSettingsUpdate {
+    account::settings::AccountSettings beforeSettings{};
+    account::settings::AccountSettings afterSettings{};
+    std::uint64_t accountSoid{};
     bool prepared{};
 };
 
@@ -263,8 +431,24 @@ void shutdown() noexcept;
 
 [[nodiscard]] bool publish_bootstrap_token(std::span<const std::byte> token) noexcept;
 
+/**
+ * Records when the account signed in.
+ * Every character record publishes this as its last applied daily and weekly reset.
+ * @param seconds Unix seconds taken when the SignOn success is answered.
+ */
+void publish_sign_in_time(std::uint64_t seconds) noexcept;
+
 /** @return Immutable generated BAP session fields. */
 [[nodiscard]] const BapState& bap() noexcept;
+
+/**
+ * Generates one connection's own secure-channel material.
+ * Two links sharing a key and a starting nonce would encrypt different plaintexts under the same
+ * pair, so every accepted connection gets its own.
+ * @param output Cleared, then filled with a fresh nonce, session key and envelope IV.
+ * @return True when the system generated every byte.
+ */
+[[nodiscard]] bool new_bap_session(BapState& output) noexcept;
 
 /**
  * Stores the active nonzero account key when the account remains complete.
@@ -272,6 +456,14 @@ void shutdown() noexcept;
  * @return False when the key or resulting account State is invalid.
  */
 [[nodiscard]] bool set_primary_soid(std::uint64_t primarySoid) noexcept;
+
+/**
+ * Permanently closes the process-local one-time profile-setup gate for the active account.
+ *
+ * The transition is monotonic: repeated profile-setting writes after completion are harmless.
+ * @return False only when no complete active account can be updated.
+ */
+[[nodiscard]] bool complete_profile_setup() noexcept;
 
 /**
  * Moves the selection to one authored character.
@@ -284,14 +476,22 @@ void shutdown() noexcept;
 [[nodiscard]] bool set_selected_character(std::uint64_t characterSoid, bool& changed) noexcept;
 
 /**
+ * Stores the selected character's equipped title row. The caller proves the record is a claimed
+ * title; this only writes it.
+ * @param recordIndex Title record row, or kUnequippedTitleRecordIndex to clear it.
+ * @param characterSoid Receives the selected character's key, or zero on failure.
+ * @param changed Receives whether the stored row moved.
+ * @return False when no character is selected or the account would stop being valid.
+ */
+[[nodiscard]] bool
+set_selected_title(std::uint16_t recordIndex, std::uint64_t& characterSoid, bool& changed) noexcept;
+
+/**
  * Prepares an equip operation for one unequipped instance on the selected character.
  * An occupied slot is swapped; an empty semantic slot receives the requested item directly.
- *
  * @param requestedInstanceSoid Unequipped item instance selected by the Client.
- * @param mutation
- * Gets the checked after-image without changing account State.
- * @return True when the instance is
- * owned, unequipped, and maps to one supported native equipment slot.
+ * @param mutation Gets the checked after-image without changing account State.
+ * @return True when the instance is owned, unequipped, and maps to one native equipment slot.
  */
 [[nodiscard]] bool prepare_equipment_swap(std::uint64_t requestedInstanceSoid,
                                           PendingEquipmentSwap& mutation) noexcept;
@@ -312,8 +512,7 @@ void shutdown() noexcept;
  * Commits a prepared equipment mutation only while the full captured character still matches.
  *
  * @param mutation Prepared mutation, always cleared before this function returns.
- * @return True
- * when the equip or unequip commits atomically and leaves the whole account valid.
+ * @return True when the equip or unequip commits atomically and leaves the account valid.
  */
 [[nodiscard]] bool commit_equipment_swap(PendingEquipmentSwap& mutation) noexcept;
 
@@ -331,6 +530,44 @@ void shutdown() noexcept;
 [[nodiscard]] bool prepare_item_acquisition(std::uint16_t collectibleIndex,
                                             std::uint32_t definitionHash,
                                             PendingItemAcquisition& mutation) noexcept;
+
+/** Prepares a direct character-item grant without a Collections charge. */
+[[nodiscard]] bool prepare_item_acquisition_for_item(std::uint16_t itemDefinitionIndex,
+                                                     PendingItemAcquisition& mutation) noexcept;
+
+/** Prepares one fixed wrapper expansion without changing account State. */
+[[nodiscard]] bool prepare_direct_item_bundle(std::uint32_t sourceDefinitionHash,
+                                              std::span<const std::uint16_t> itemDefinitionIndices,
+                                              PendingDirectItemBundle& mutation) noexcept;
+
+/** Builds the full account after-image while a prepared bundle remains current. */
+[[nodiscard]] bool preview_direct_item_bundle(const PendingDirectItemBundle& mutation,
+                                              AccountState& after) noexcept;
+
+/** Atomically commits one prepared reward grant and its durable Season claim. */
+[[nodiscard]] bool commit_season_pass_reward(PendingSeasonPassReward& mutation) noexcept;
+
+/** Atomically commits one prepared Triumph reward and its durable record claim. */
+[[nodiscard]] bool commit_record_reward(PendingRecordRewardGrant& mutation) noexcept;
+
+/**
+ * Prepares all direct reward rows over one shared account after-image.
+ * @param rewards Item rows the record grants.
+ * @param claimedRecordIndex Record already claimed in the banks, or kUnclaimedRecordIndex.
+ * @param mutation Receives the prepared grant.
+ * @return True when every row fits the account after-image.
+ */
+[[nodiscard]] bool prepare_record_reward_grant(std::span<const DirectRecordReward> rewards,
+                                               std::uint16_t claimedRecordIndex,
+                                               PendingRecordRewardGrant& mutation) noexcept;
+
+/** Builds the full account after-image while a record reward remains current. */
+[[nodiscard]] bool preview_record_reward_grant(const PendingRecordRewardGrant& mutation,
+                                               AccountState& after) noexcept;
+
+/** Reserves the selected character's next mutation serial for a transient inventory update. */
+[[nodiscard]] bool
+reserve_selected_character_inventory_serial(std::int32_t& mutationSerial) noexcept;
 
 /** Builds the exact full-account after-image while a prepared item pull remains current. */
 [[nodiscard]] bool preview_item_acquisition(const PendingItemAcquisition& mutation,
@@ -361,6 +598,12 @@ prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
                                  std::uint32_t definitionHash,
                                  PendingProfileItemAcquisition& mutation) noexcept;
 
+/** Prepares a direct profile-stack grant without a Collections charge. */
+[[nodiscard]] bool
+prepare_profile_item_acquisition_for_item(std::uint16_t itemDefinitionIndex,
+                                          std::int32_t quantity,
+                                          PendingProfileItemAcquisition& mutation) noexcept;
+
 /**
  * Materializes a prepared profile acquisition over the current account only while its complete
  * profile-inventory view is unchanged. This is the account object encoded before commit.
@@ -383,14 +626,11 @@ commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) noexcep
 
 /**
  * Prepares removal of one unequipped instance from the selected character.
- *
  * The authored inventory prefix is compacted. Any surviving item whose installed native row
  * changes receives a fresh mutation generation. Equipped items are never accepted.
- *
  * @param instanceSoid Unequipped item-instance key selected by the Client.
  * @param mutation Gets checked before/after images without changing account State.
- * @return True when the instance is uniquely owned by the selected character and both loadouts
- * resolve completely.
+ * @return True when the selected character uniquely owns it and both loadouts resolve.
  */
 [[nodiscard]] bool prepare_item_dismantle(std::uint64_t instanceSoid,
                                           PendingItemDismantle& mutation) noexcept;
@@ -410,11 +650,8 @@ commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) noexcep
 
 /**
  * Prepares one exact opcode-903 ordinary-socket selection on a selected-character item.
- *
- * The target may be equipped or unequipped. Native defaults are first materialized into a complete
- * authored socket block, then only the requested lane changes. Item identity, native row,
- * quantity, level, and mutation generation remain byte-for-byte stable.
- *
+ * The target may be equipped or unequipped. Native defaults are materialized into a complete
+ * authored socket block, then only the requested lane changes; everything else stays byte-stable.
  * @param targetInstanceSoid Selected-character item-instance key named by the Client.
  * @param socketLane Zero-based ordinary socket lane.
  * @param plugDefinitionIndex Installed plug-definition row selected by the Client.
@@ -428,18 +665,13 @@ commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) noexcep
 
 /**
  * Prepares one ordinary-socket selection for an exact character-screen item selector.
- *
- * The resolved selected-character instance is passed through the same checked transition as an
- * instance-addressed action, so acquired and unequipped items do not depend on a coincidental
- * menu-row ordinal.
- *
+ * The resolved instance runs through the same checked transition as an instance-addressed action,
+ * so acquired and unequipped items do not depend on a coincidental menu-row ordinal.
  * @param instanceIdentityToken Item-instance identity decoded from the opcode-1901 selector.
- * @param requestedSocketLane Native socket action lane; the installed compatibility relation
- * resolves the target's exact physical lane.
+ * @param requestedSocketLane Native socket action lane; compatibility resolves the physical lane.
  * @param plugDefinitionIndex Installed plug-definition row selected by the Client.
  * @param mutation Gets the checked before/after images without changing account State.
- * @return True when the location has one matching item, the plug resolves to exactly the
- * requested compatible ordinary socket lane, and the socket transition is valid.
+ * @return True when one item matches, the plug resolves to that lane, and the transition is valid.
  */
 [[nodiscard]] bool prepare_character_selector_socket_plug(std::uint64_t instanceIdentityToken,
                                                           std::uint8_t requestedSocketLane,
@@ -466,10 +698,121 @@ commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) noexcep
 /** Commits one prepared item-state change behind an exact full-character staleness guard. */
 [[nodiscard]] bool commit_item_state(PendingItemState& mutation) noexcept;
 
+/**
+ * Prepares the selected character's current activity, family-4 `+45896`, without changing State.
+ * @param activityIndex Activity the character is launching into.
+ * @param mutation Gets the checked after-image.
+ * @return True when a character is selected and the value changes.
+ */
+[[nodiscard]] bool prepare_current_activity(std::uint16_t activityIndex,
+                                            PendingCurrentActivity& mutation) noexcept;
+
+/** Commits one prepared current-activity change behind an exact character staleness guard. */
+[[nodiscard]] bool commit_current_activity(PendingCurrentActivity& mutation) noexcept;
+
+/**
+ * Merges and validates a sparse WS-701 settings update without publishing it.
+ * @param delta Supported fields decoded from one reflected settings request.
+ * @param mutation Receives a complete before/after pair only when State would change.
+ * @return Rejection, an accepted no-op, or a prepared mutation.
+ */
+[[nodiscard]] SettingsUpdateDisposition
+prepare_settings_update(const account::settings::SettingsDelta& delta,
+                        PendingSettingsUpdate& mutation) noexcept;
+
+/**
+ * Publishes one prepared settings after-image behind account-key and settings staleness guards.
+ * @param mutation Prepared update, always cleared before this function returns.
+ * @return True when the after-image was already current or was committed successfully.
+ */
+[[nodiscard]] bool commit_settings_update(PendingSettingsUpdate& mutation) noexcept;
+
+/** One credited side of a vendor exchange: an authored profile stack and how much to add. */
+struct ProfileExchangePayout {
+    std::uint32_t definitionHash{};
+    std::int32_t quantity{};
+};
+
+/**
+ * Prepares one vendor recycle row: charges the stack it names and credits what it pays out.
+ * It rides the profile-stack mutation because the change ring is the only way the Client is told
+ * of a gain. Each credited row gets a fresh serial; only an already-held payout stack is credited.
+ * @param costDefinitionHash Stack the row charges against.
+ * @param costQuantity Units of it the row consumes.
+ * @param payouts Stacks to credit, each clamped to its own native stack limit.
+ * @param mutation Gets the checked profile before/after images without changing account State.
+ * @return True only when the charge and every credit fit and the whole account stayed valid.
+ */
+[[nodiscard]] bool prepare_vendor_exchange(std::uint32_t costDefinitionHash,
+                                           std::int32_t costQuantity,
+                                           std::span<const ProfileExchangePayout> payouts,
+                                           PendingProfileItemAcquisition& mutation) noexcept;
+
 /** @return A copy of the active account state, read under the lock. */
 [[nodiscard]] AccountState account_snapshot() noexcept;
 
-/** @return A copy of the evaluated content state, read under the lock. */
-[[nodiscard]] InvestmentState investment_snapshot() noexcept;
+/**
+ * Copies the evaluated content state and adds build-derived catalyst completion overrides.
+ * @param output Receives one complete Family-5 snapshot on success.
+ * @return False when the fixed override banks cannot hold the complete state.
+ */
+[[nodiscard]] bool investment_snapshot(InvestmentState& output) noexcept;
+
+/** Seasonal artifact item definition, whose equipped row carries the Power bonus stat. */
+inline constexpr std::uint32_t kSeasonalArtifactItemHash = 0x613A3DA6U;
+
+/** Native progression row carrying the seasonal artifact Power ladder. */
+inline constexpr std::uint16_t kArtifactPowerProgressionIndex = 38;
+/** Native progression row carrying the seasonal artifact unlock-point ladder. */
+inline constexpr std::uint16_t kArtifactUnlockProgressionIndex = 39;
+
+/** @return Seasonal XP published in the account progression bank. */
+[[nodiscard]] std::int32_t seasonal_experience() noexcept;
+
+/** Publishes every seasonal value the seeded XP and artifact ownership imply. */
+[[nodiscard]] bool seed_seasonal_progression() noexcept;
+
+/** @return One-based Season of Arrivals rank the published XP earns. */
+[[nodiscard]] std::uint16_t seasonal_rank() noexcept;
+
+/** @return Account-wide Power bonus published by the seasonal artifact. */
+[[nodiscard]] std::uint16_t artifact_power_bonus() noexcept;
+
+/**
+ * Adds base XP to the seasonal lanes and republishes every value derived from the total.
+ * @param amount Positive XP to grant.
+ * @return False when the amount is not positive or the total would overflow.
+ */
+[[nodiscard]] bool grant_seasonal_experience(std::int32_t amount) noexcept;
+
+/** @param rewardIndex Native reward-array index. @return True when the row is claimed. */
+[[nodiscard]] bool season_pass_reward_claimed(std::uint16_t rewardIndex) noexcept;
+
+/**
+ * Claims one Season pass reward row into the account flag its row names.
+ * @param rewardIndex Native reward-array index.
+ * @return False when the row names no flag or is already claimed.
+ */
+[[nodiscard]] bool claim_season_pass_reward(std::uint16_t rewardIndex) noexcept;
+
+/** Undoes one Season pass claim so a refused commit cannot leave it held. */
+void revoke_season_pass_reward(std::uint16_t rewardIndex) noexcept;
+
+/** @return Purchased artifact sale rows, one bit per row. */
+[[nodiscard]] std::uint32_t artifact_mod_mask() noexcept;
+
+/** Replaces the exact published artifact mask, refusing when it already moved. */
+[[nodiscard]] bool replace_artifact_mod_mask(std::uint32_t expected,
+                                             std::uint32_t replacement) noexcept;
+
+/** Writes one affordable artifact purchase and keeps its before-image for the commit. */
+[[nodiscard]] bool prepare_artifact_mod_unlock(std::uint16_t saleIndex,
+                                               PendingArtifactPurchase& mutation) noexcept;
+
+/** Keeps a prepared artifact purchase only while its character and mask are still current. */
+[[nodiscard]] bool commit_artifact_mod_unlock(PendingArtifactPurchase& mutation) noexcept;
+
+/** Charges Glimmer, removes artifact mods, and refunds every spent unlock point. */
+[[nodiscard]] bool reset_artifact(std::int32_t glimmerCost, ArtifactResetResult& result) noexcept;
 
 } // namespace sunrise::state

@@ -17,10 +17,10 @@ struct MembershipAcknowledgement final {
 };
 
 /**
- * Parses the fixed membership-acknowledgement prefix.
- * @param input Activity message body holding the whole 4-byte prefix.
+ * Parses the complete fixed membership-acknowledgement body.
+ * @param input Activity message body holding exactly 4 bytes.
  * @param acknowledgement Cleared first. Filled in only on success.
- * @return True when the whole big-endian revision is there.
+ * @return True only when the whole big-endian revision is present with no tail.
  */
 [[nodiscard]] bool
 parse_membership_acknowledgement(std::span<const std::byte> input,

@@ -1,4 +1,5 @@
 #include "../../internal.h"
+#include "../../policy/egress_policy_logging.h"
 #include "../../policy/policy.h"
 #include "replacements.h"
 
@@ -20,6 +21,7 @@ void clear_bytes(LPDWORD bytes) noexcept {
 /** Sends contiguous bytes to a connected exact IPv4 redirect target. */
 int WSAAPI send_bytes(SOCKET socket, const char* buffer, int length, int flags) noexcept {
     const auto call = original<decltype(&::send)>(HookSlot::send);
+    policy::log_send_peer(socket, static_cast<std::size_t>(length >= 0 ? length : 0));
     const bool targetsRedirect = policy::has_redirect_target_peer(socket);
     if (call == nullptr
         || !policy::allow_socket_call(policy::SocketOperation::send, targetsRedirect, true)) {
@@ -37,6 +39,7 @@ int WSAAPI send_buffers(SOCKET socket,
                         LPWSAOVERLAPPED overlapped,
                         LPWSAOVERLAPPED_COMPLETION_ROUTINE completion) noexcept {
     const auto call = original<decltype(&::WSASend)>(HookSlot::wsaSend);
+    policy::log_send_peer(socket, buffers != nullptr && bufferCount == 1 ? buffers[0].len : 0);
     const bool targetsRedirect = policy::has_redirect_target_peer(socket);
     if (call == nullptr
         || !policy::allow_socket_call(policy::SocketOperation::send, targetsRedirect, true)) {

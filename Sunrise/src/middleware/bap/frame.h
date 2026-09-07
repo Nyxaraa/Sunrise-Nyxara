@@ -58,6 +58,8 @@ enum class RequestService : std::uint16_t {
     matchmaking = 42,
     /** Carries the unnamed request paired with response service 49. */
     request48 = 48,
+    /** Carries the unnamed request paired with response service 51. Every field is optional. */
+    request50 = 50,
     /** Carries a clan protobuf request that the minimal liveness route leaves unparsed. */
     clan = 44,
     /** Registers the client as a notification subscriber. */
@@ -112,6 +114,8 @@ enum class ResponseService : std::uint16_t {
     matchmaking = 43,
     /** Acknowledges service 48 with an empty status-200 body. */
     response49 = 49,
+    /** Acknowledges service 50 with an empty status-200 body. */
+    response51 = 51,
     /** Returns schema-valid empty clan data with status 200. */
     clan = 45,
     /** Acknowledges notification subscriber registration. */
@@ -137,7 +141,7 @@ enum class NotificationService : std::uint16_t {
 /** Parsed BAP request header and borrowed body. */
 struct RequestFrame {
     FrameType frameType{};
-    std::uint16_t messageId{};
+    std::uint16_t serviceId{};
     std::uint32_t taskId{};
     std::span<const std::byte> body{};
 };
@@ -148,7 +152,12 @@ struct OuterFrame {
     std::span<const std::byte> payload{};
 };
 
-/** Reads one BAP outer header and borrows the payload its length names. */
+/**
+ * Reads one whole BAP outer frame and borrows the payload its length names.
+ * @param input Exactly one frame: magic 1, the six-byte header, and the bytes it declares.
+ * @param frame Receives the frame type and the borrowed payload.
+ * @return True when the magic matches and the input holds no byte past the declared payload.
+ */
 [[nodiscard]] bool parse_frame(std::span<const std::byte> input, OuterFrame& frame) noexcept;
 
 /** Parses one decrypted or plaintext BAP request payload. */

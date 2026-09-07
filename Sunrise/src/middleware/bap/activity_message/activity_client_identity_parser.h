@@ -30,10 +30,10 @@ inline constexpr std::size_t kMeaningfulBitCount = 362;
 inline constexpr std::size_t kEncodedSize = 46;
 
 /**
- * Parses the fixed client-identity prefix into logical signed and identity fields.
- * @param input Activity message body holding the whole 46-byte identity prefix.
+ * Parses the complete fixed client-identity body into logical signed and identity fields.
+ * @param input Activity message body holding exactly 46 bytes.
  * @param identity Cleared first. Filled in only on success.
- * @return True when every field and all 6 trailing padding bits are there.
+ * @return True only when every field and all 6 trailing padding bits are present with no tail.
  */
 [[nodiscard]] bool parse_client_identity(std::span<const std::byte> input,
                                          ClientIdentity& identity) noexcept;

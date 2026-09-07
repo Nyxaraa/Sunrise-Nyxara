@@ -1,7 +1,7 @@
 #include <array>
 #include <span>
-#include <vector>
 
+#include "../../../../state/build_data/items/catalysts/exotic_catalyst_builder.h"
 #include "../../../../state/build_data/items/details/item_detail_catalog.h"
 #include "../../../../state/build_data/runtime.h"
 #include "internal.h"
@@ -12,6 +12,13 @@ namespace {
 
 namespace build_details = state::build_data::items::details;
 namespace build_items = state::build_data::items;
+
+/**
+ * Set when a derivation reports the installed executable is not the one the catalyst facts pin.
+ * A build identity cannot change while the process runs, so the catalog will never derive here.
+ * TODO: replace with a build_data predicate for catalyst build support; nothing exports one yet.
+ */
+bool g_catalystsUnsupported = false;
 
 /** @return True when one extracted detail can join the currently published numeric domains. */
 [[nodiscard]] bool publishable_detail(const build_details::Definition& detail) noexcept {
@@ -34,6 +41,11 @@ namespace build_items = state::build_data::items;
 
 } // namespace
 
+/** @return True when the catalyst catalog is published or cannot exist on this executable. */
+bool exotic_catalysts_settled() noexcept {
+    return state::build_data::exotic_catalysts_ready() || g_catalystsUnsupported;
+}
+
 /** Walks the located item index table, then publishes every domain that depends on it. */
 bool build_item_rows(const reader::Source& source,
                      Storage& storage,
@@ -43,22 +55,33 @@ bool build_item_rows(const reader::Source& source,
     const bool needDefinitions = !state::build_data::item_definitions_ready();
     const bool needDetails = !state::build_data::configured_item_details_ready();
     const bool needSocketPlugs = !state::build_data::socket_plug_rules_ready();
+    const bool needCatalysts = !exotic_catalysts_settled();
     const bool needBuckets = !state::build_data::inventory_bucket_descriptors_ready();
-    const bool needDetailRows = needDetails || needSocketPlugs;
+    const bool retainDetails = needDetails || needCatalysts;
+    const bool needSocketRows = needSocketPlugs || needCatalysts;
+    const bool needDetailRows = needDetails || needSocketRows;
     // Bucket equipment slots are derived from this same complete item walk, so a partial retry
     // must still revisit the table even when definitions and detail domains already published.
     const bool needRows = needDefinitions || needDetailRows || needBuckets;
     bool published = !needRows;
-    if (needDetails && storage.details.size() != kDetailCapacity) {
+    if (retainDetails && storage.details.size() != kDetailCapacity) {
         storage.details.assign(kDetailCapacity, build_details::Definition{});
     }
-    const bool detailStorageReady = !needDetails || storage.details.size() == kDetailCapacity;
+    if (needCatalysts) {
+        storage.catalystCompletionConditions.assign(
+            static_cast<std::size_t>(table.count),
+            state::build_data::items::catalysts::CompletionCondition{});
+        for (std::size_t item = 0; item < storage.catalystCompletionConditions.size(); ++item) {
+            storage.catalystCompletionConditions[item].itemDefinitionIndex =
+                static_cast<std::uint16_t>(item);
+        }
+    }
+    const bool detailStorageReady = !retainDetails || storage.details.size() == kDetailCapacity;
     const std::span<const std::byte> container{storage.child};
     reason = "rows";
     // The detail closure is gathered during this one walk. Collections can name any installed
-    // item row, including profile-owned shaders and modifications, so retain every readable row
-    // rather than only startup-authored/equippable definitions. The fixed request bitset still
-    // bounds this to the installed 16-bit item-table domain.
+    // item row, including profile-owned shaders and modifications, so retain every readable row.
+    // The fixed request bitset bounds this to the installed 16-bit item-table domain.
     storage.detailRequests.reset();
     storage.specialPlugCategories.fill(0);
     std::size_t detailCount = 0;
@@ -79,15 +102,21 @@ bool build_item_rows(const reader::Source& source,
                                                item)) {
             continue;
         }
+        const std::uint32_t plugCategoryHash =
+            corrected_plug_category(item.definitionHash, item.plugCategoryHash);
         storage.rows[rowCount++] =
             state::build_data::items::Definition{item.definitionHash,
                                                  item.definitionIndex,
                                                  item.bucketId,
                                                  item.insertionMaterialRequirementSetIndex,
-                                                 item.enabledMaterialRequirementSetIndex};
-        if (needSocketPlugs) {
+                                                 item.enabledMaterialRequirementSetIndex,
+                                                 item.tier,
+                                                 plugCategoryHash,
+                                                 item.rollSetIndex,
+                                                 item.linkedPlugIndex};
+        if (needSocketRows) {
             storage.specialPlugCategories[item.definitionIndex] =
-                special_plug_category(item.plugCategoryHash);
+                special_plug_category(plugCategoryHash);
         }
         if (needDetailRows) {
             request(item.definitionIndex, storage.detailRequests);
@@ -116,7 +145,7 @@ bool build_item_rows(const reader::Source& source,
     }
     SocketPlugBuild socketPlugBuild;
     const bool socketStorageReady =
-        !needSocketPlugs
+        !needSocketRows
         || socketPlugBuild.prepare(storage.specialPlugCategories,
                                    std::span(storage.rows).first(rowCount));
     if (published && !socketStorageReady) {
@@ -138,10 +167,17 @@ bool build_item_rows(const reader::Source& source,
                 report_detail_failure(slot, storage.requestedDetailIndices[slot]);
                 continue;
             }
-            if (needDetails) {
+            if (retainDetails) {
                 storage.details[builtDetailCount++] = detail;
             }
-            if (needSocketPlugs) {
+            if (needCatalysts
+                && detail.definitionIndex < storage.catalystCompletionConditions.size()) {
+                read_catalyst_completion_condition(
+                    std::span<const std::byte>{storage.definition},
+                    detail.definitionIndex,
+                    storage.catalystCompletionConditions[detail.definitionIndex]);
+            }
+            if (needSocketRows) {
                 (void)socketPlugBuild.append(item,
                                              std::span<const std::byte>{storage.definition},
                                              std::span<const std::byte>{storage.plugSetTable},
@@ -152,6 +188,36 @@ bool build_item_rows(const reader::Source& source,
             published = state::build_data::publish_configured_item_details(
                 std::span<build_details::Definition>{storage.details}.first(builtDetailCount));
             report_detail_count(detailCount, builtDetailCount);
+        }
+        std::array<state::build_data::items::catalysts::Definition,
+                   state::build_data::items::catalysts::kDefinitionCapacity>
+            catalystRows{};
+        std::size_t catalystCount = 0;
+        state::build_data::items::catalysts::Report catalystReport{};
+        const state::build_data::items::catalysts::Source catalystSource{
+            {},
+            std::span(storage.rows).first(rowCount),
+            std::span(storage.details).first(builtDetailCount),
+            socketPlugBuild.rules(),
+            socketPlugBuild.pools(),
+            socketPlugBuild.members(),
+            storage.catalystCompletionConditions,
+            storage.catalystAcquisitionGates,
+            storage.catalystObjectiveValues,
+            storage.slotMaps.accountFlag,
+        };
+        bool catalystBuilt = false;
+        if (published && needCatalysts) {
+            reason = "exotic_catalysts";
+            catalystBuilt = state::build_data::derive_exotic_catalysts(
+                catalystSource, catalystRows, catalystCount, catalystReport);
+            report_catalyst_catalog(catalystReport, catalystBuilt);
+            // An unsupported executable settles the domain: retrying repeats the whole item walk
+            // on every refresh slice and reaches the same verdict.
+            g_catalystsUnsupported =
+                catalystReport.error
+                == state::build_data::items::catalysts::Error::unsupportedBuild;
+            published = catalystBuilt || g_catalystsUnsupported;
         }
         if (published && needSocketPlugs) {
             const std::size_t rules = socketPlugBuild.rule_count();
@@ -164,11 +230,15 @@ bool build_item_rows(const reader::Source& source,
                 report_socket_plug_count(rules, pools, members, skipped);
             }
         }
+        if (published && needCatalysts && catalystBuilt) {
+            reason = "exotic_catalysts";
+            published = state::build_data::publish_exotic_catalysts(
+                catalystSource, std::span(catalystRows).first(catalystCount));
+        }
     }
     // Ability buckets read the socket entry list table again and depend on the detail domain, so
-    // they run last. The entry-bucket table is resolved in the same pass but never joins the
-    // on-disk cache, so a warm boot that finds the ability buckets already cached still has to
-    // run this once to fill it in for the session.
+    // they run last. The entry-bucket table never joins the on-disk cache, so a warm boot still
+    // has to run this once to fill it in for the session.
     if (published
         && (!state::build_data::ability_buckets_ready()
             || !state::build_data::socket_entry_buckets_ready())) {
@@ -196,7 +266,7 @@ bool build_item_rows(const reader::Source& source,
     }
     return published && state::build_data::item_definitions_ready()
            && state::build_data::configured_item_details_ready()
-           && state::build_data::socket_plug_rules_ready()
+           && state::build_data::socket_plug_rules_ready() && exotic_catalysts_settled()
            && state::build_data::ability_buckets_ready();
 }
 

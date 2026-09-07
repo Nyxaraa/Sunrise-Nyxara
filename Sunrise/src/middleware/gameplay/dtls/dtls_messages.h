@@ -19,9 +19,11 @@ inline constexpr std::size_t kInitAckSize = 52;
 inline constexpr std::size_t kCookieSize = 16;
 /** An exported public key is padded to this length whatever the curve produced. */
 inline constexpr std::size_t kPublicKeySize = 100;
+/** The address block a cookie echo carries between the echoed init ack and the security id. */
+inline constexpr std::size_t kCookieEchoAddressBlockSize = 41;
 /** A cookie echo is header, the whole init ack, an address block, the security id, and the key. */
 inline constexpr std::size_t kCookieEchoSize =
-    kHeaderSize + kInitAckSize + 41 + kSecurityIdSize + kPublicKeySize;
+    kHeaderSize + kInitAckSize + kCookieEchoAddressBlockSize + kSecurityIdSize + kPublicKeySize;
 /** A cookie ack is header, the public key, and the security id. */
 inline constexpr std::size_t kCookieAckSize = kHeaderSize + kPublicKeySize + kSecurityIdSize;
 

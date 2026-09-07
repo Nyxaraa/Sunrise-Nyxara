@@ -22,6 +22,39 @@ struct Header {
 };
 
 /**
+ * Sizes one key-to-slot index and drops every chain it held.
+ * @param index Index to size.
+ * @param slots Cache slots the index must cover.
+ * @return True when the storage was reserved.
+ */
+[[nodiscard]] bool prepare_slot_index(SlotIndex& index, std::size_t slots) noexcept;
+
+/** @param index Index whose chains are dropped, keeping the storage it already holds. */
+void clear_slot_index(SlotIndex& index) noexcept;
+
+/** @return First slot chained under one key, or kNoSlot. */
+[[nodiscard]] std::size_t slot_index_first(const SlotIndex& index, std::uint64_t key) noexcept;
+
+/** @return Next slot sharing one slot's bucket, or kNoSlot. */
+[[nodiscard]] std::size_t slot_index_next(const SlotIndex& index, std::size_t slot) noexcept;
+
+/**
+ * Chains one slot under a key. The slot must hold no key.
+ * @param index Index to change.
+ * @param key Key the slot now holds.
+ * @param slot Cache slot being chained.
+ */
+void slot_index_insert(SlotIndex& index, std::uint64_t key, std::size_t slot) noexcept;
+
+/**
+ * Unchains one slot from the key it was chained under.
+ * @param index Index to change.
+ * @param key Key the slot was chained under.
+ * @param slot Cache slot being released.
+ */
+void slot_index_erase(SlotIndex& index, std::uint64_t key, std::size_t slot) noexcept;
+
+/**
  * Parses the public header prefix.
  * @param bytes Whole header prefix.
  * @param header Receives the fields it reads.
@@ -55,6 +88,20 @@ struct Header {
                                std::uint32_t& patchIndex) noexcept;
 
 /**
+ * Resolves one package through storage owned by this reader.
+ * The first package read reaches the shared directory catalog; later reads are lock-free.
+ * @param scratch Reader-local location storage.
+ * @param directory Installed packages directory, immutable while this Scratch is in use.
+ * @param packageId Package id from the tag handle.
+ * @param output Receives the cached location on success.
+ * @return True when at least one matching package exists.
+ */
+[[nodiscard]] bool resolve_latest(Scratch& scratch,
+                                  std::wstring_view directory,
+                                  std::uint16_t packageId,
+                                  const PackageLocation*& output) noexcept;
+
+/**
  * Builds the full path of one patch of a package stem.
  * @param stem Stem produced by find_latest.
  * @param patchIndex Requested patch index.
@@ -62,6 +109,9 @@ struct Header {
  * @return True when the path fits fixed storage.
  */
 [[nodiscard]] bool build_path(const Path& stem, std::uint32_t patchIndex, Path& path) noexcept;
+
+/** @param scratch Reader whose held package locations are dropped. */
+void release_locations(Scratch& scratch) noexcept;
 
 /**
  * Reads an exact byte range from one file, through files no reader owns.

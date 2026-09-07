@@ -1,5 +1,4 @@
 #include <cstddef>
-#include <limits>
 
 #include "../../encoding/bit_reader.h"
 #include "opcode903.h"
@@ -55,8 +54,7 @@ bool parse_request(const Message& message, Request& request) noexcept {
         || !reader.read(kOuterTrailerWidth, outerTrailer)
         || !reader.read(kFinalPaddingWidth, finalPadding) || reader.remaining_bits() != 0
         || innerPadding != 0 || outerTrailer != 0 || finalPadding != 0
-        || encodedSocketIndex < kSocketIndexBias
-        || encodedSocketIndex - kSocketIndexBias > (std::numeric_limits<std::uint32_t>::max)()) {
+        || encodedSocketIndex < kSocketIndexBias) {
         request = {};
         return false;
     }

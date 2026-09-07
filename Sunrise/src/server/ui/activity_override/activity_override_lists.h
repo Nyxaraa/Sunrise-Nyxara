@@ -17,6 +17,8 @@ inline constexpr std::size_t kSliceCapacity = 8;
 inline constexpr std::size_t kSpawnCapacity = 1'024;
 /** Index of no row, which is what every list starts on. */
 inline constexpr std::size_t kNoRow = static_cast<std::size_t>(-1);
+/** Definition rows for one destination name. The widest real destination declares twenty. */
+inline constexpr std::size_t kDefinitionCapacity = 64;
 
 /** One null-terminated row label. */
 using Label = std::array<char, kLabelCapacity>;
@@ -38,6 +40,18 @@ struct Lists {
     std::array<std::uint16_t, kSliceCapacity> sliceValues{};
     std::size_t sliceCount{};
 
+    /**
+     * Generated activity definitions whose internal name is the selected destination.
+     * A name maps to several, and only a named one lets the SDK and the mission script bind.
+     */
+    std::array<Label, kDefinitionCapacity> definitions{};
+    std::array<std::uint16_t, kDefinitionCapacity> definitionIndices{};
+    std::size_t definitionCount{};
+    /** Set when the generated estate is not loaded, so no definition can be listed. */
+    bool definitionsUnavailable{};
+    /** Rows this destination declares past the listed ones. */
+    std::size_t definitionsHidden{};
+
     std::array<Label, kSpawnCapacity> spawns{};
     std::array<std::uint32_t, kSpawnCapacity> spawnHashes{};
     std::size_t spawnCount{};
@@ -56,6 +70,9 @@ struct Lists {
 
 /** Rebuilds the destination rows when the published layout count has changed. */
 void refresh_activities(Lists& rows) noexcept;
+
+/** Rebuilds the definition rows for one destination name from the generated estate. */
+void refresh_definitions(Lists& rows, std::string_view destination) noexcept;
 
 /**
  * Rebuilds the bubble and spawn-set rows for one destination, and clears the slice-set rows.

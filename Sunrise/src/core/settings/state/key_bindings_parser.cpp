@@ -89,8 +89,8 @@ struct InputName {
 };
 
 /**
- * The Client's own input names and codes, read from its name table at `0x7FF7438A3400`. The names
- * are its strings. The last four rows are its own aliases, and the JSON escape for the backslash.
+ * The Client's own input names and codes, read from its name table. The names are its strings.
+ * The last four rows are its own aliases, and the JSON escape for the backslash.
  */
 constexpr std::array<InputName, 121> kInputNames{{
     {"escape", 0},
@@ -209,17 +209,12 @@ constexpr std::array<InputName, 121> kInputNames{{
     {"extra mouse button 2", 113},
     {"mouse wheel up", 114},
     {"mouse wheel down", 115},
-    {"unused", 116},
+    {"unused", bindings::kUnboundInputCode},
     {"ctrl", 106},
     {"left ctrl", 69},
     {"right ctrl", 76},
     {"\\\\", 43},
 }};
-
-/** A binding half carries its key code in the low byte and one modifier above it. */
-constexpr std::uint16_t kAltFlag = 0x0100;
-constexpr std::uint16_t kControlFlag = 0x0200;
-constexpr std::uint16_t kShiftFlag = 0x0400;
 
 /** One code that may prefix another key, and the flag it sets there. */
 struct ModifierName {
@@ -229,15 +224,15 @@ struct ModifierName {
 
 /** Both sides of a modifier fold onto the same flag, as they do in the Client. */
 constexpr std::array<ModifierName, 9> kModifiers{{
-    {57, kShiftFlag},
-    {68, kShiftFlag},
-    {105, kShiftFlag},
-    {69, kControlFlag},
-    {76, kControlFlag},
-    {106, kControlFlag},
-    {71, kAltFlag},
-    {73, kAltFlag},
-    {108, kAltFlag},
+    {57, bindings::kShiftModifierFlag},
+    {68, bindings::kShiftModifierFlag},
+    {105, bindings::kShiftModifierFlag},
+    {69, bindings::kControlModifierFlag},
+    {76, bindings::kControlModifierFlag},
+    {106, bindings::kControlModifierFlag},
+    {71, bindings::kAltModifierFlag},
+    {73, bindings::kAltModifierFlag},
+    {108, bindings::kAltModifierFlag},
 }};
 
 /** @return The name without leading and trailing ASCII blanks. */
@@ -386,6 +381,15 @@ bool Parser::optional_input_code(std::optional<std::uint16_t>& output) noexcept 
     std::string_view name;
     std::uint16_t code = 0;
     if (!string(name) || !input_code_value(name, code)) {
+        return false;
+    }
+    if (code == bindings::kUnboundInputCode) {
+        // The Client's "unused" table row is the wire sentinel, not a bindable input.
+        output.reset();
+        return true;
+    }
+    if ((code & bindings::kInputCodeMask) == bindings::kUnboundInputCode) {
+        // A modifier cannot turn the unbound sentinel into a real key.
         return false;
     }
     output = code;

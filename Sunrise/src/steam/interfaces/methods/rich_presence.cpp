@@ -1,0 +1,86 @@
+#include <array>
+#include <cstdio>
+
+#include "../../../core/logging/log.h"
+#include "../../../state/steam/steam_state.h"
+#include "../internal.h"
+
+namespace sunrise::steam::interfaces::methods {
+namespace {
+
+namespace presence = sunrise::state::steam;
+
+/** Bounds the connect string in a log line, well above the Client's 81-byte connect value. */
+constexpr int kLoggedConnectBytes = 256;
+
+} // namespace
+
+/**
+ * Retains one rich-presence pair for the local user.
+ * @param key Exact Client key, such as `status`, `connect` or `steam_player_group`.
+ * @param value Exact Client value. An empty value drops the key.
+ * @return True once the pair is retained. False makes the Client's publication aggregate fail.
+ */
+bool set_rich_presence([[maybe_unused]] void* self, const char* key, const char* value) noexcept {
+    const bool stored = presence::set_rich_presence(text_view(key), text_view(value));
+    core::log::write(core::log::Channel::client,
+                     core::log::Level::debug,
+                     stored ? "ev=steam stage=rich_presence result=ok"
+                            : "ev=steam stage=rich_presence result=refuse");
+    return stored;
+}
+
+/** Drops every retained rich-presence pair for the local user. */
+void clear_rich_presence([[maybe_unused]] void* self) noexcept {
+    presence::clear_rich_presence();
+}
+
+/**
+ * Serves a retained rich-presence value back.
+ * @param steamId Friend asked about. Only the local user has retained presence here.
+ * @return Retained value, or an empty string. Never null.
+ */
+const char*
+friend_rich_presence([[maybe_unused]] void* self, std::uint64_t steamId, const char* key) noexcept {
+    return steamId == local_steam_id() ? presence::rich_presence_value(text_view(key)) : "";
+}
+
+/** @return Retained pair count for the local user, and zero for every other identity. */
+int friend_rich_presence_key_count([[maybe_unused]] void* self, std::uint64_t steamId) noexcept {
+    return steamId == local_steam_id() ? presence::rich_presence_key_count() : 0;
+}
+
+/**
+ * Serves a retained rich-presence key by table position.
+ * @return Retained key, or an empty string. Never null.
+ */
+const char*
+friend_rich_presence_key([[maybe_unused]] void* self, std::uint64_t steamId, int index) noexcept {
+    return steamId == local_steam_id() ? presence::rich_presence_key(index) : "";
+}
+
+/**
+ * Refuses a game invite. This build has no friend service, so no friend can receive one and a
+ * true return would report an invitation that was never sent.
+ * @return False, always.
+ */
+bool invite_user_to_game([[maybe_unused]] void* self,
+                         std::uint64_t steamId,
+                         const char* connectString) noexcept {
+    std::array<char, core::log::kLineCapacity> line{};
+    const int written =
+        std::snprintf(line.data(),
+                      line.size(),
+                      "ev=steam stage=friend_invite result=refuse target=0x%016llX connect=%.*s",
+                      static_cast<unsigned long long>(steamId),
+                      kLoggedConnectBytes,
+                      connectString != nullptr ? connectString : "");
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::debug,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+    return false;
+}
+
+} // namespace sunrise::steam::interfaces::methods

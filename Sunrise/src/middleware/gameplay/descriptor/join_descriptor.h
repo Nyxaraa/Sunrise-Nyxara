@@ -37,6 +37,17 @@ void write_net_addr(std::uint32_t address,
                     std::array<std::byte, kNetAddrSize>& output) noexcept;
 
 /**
+ * Builds one NetAddr in the direct form the client's direct security manager decodes.
+ * The fields are the `DRCT` magic, the IPv4, a zero address id and the port, high byte first.
+ * @param address IPv4 in host order.
+ * @param port UDP port in host order.
+ * @param output Receives all 86 bytes.
+ */
+void write_direct_net_addr(std::uint32_t address,
+                           std::uint16_t port,
+                           std::array<std::byte, kNetAddrSize>& output) noexcept;
+
+/**
  * Builds one join descriptor for the direct method-0 path.
  * @param endpoint Advertised identity and endpoint.
  * @param output Receives all 128 bytes only on success.

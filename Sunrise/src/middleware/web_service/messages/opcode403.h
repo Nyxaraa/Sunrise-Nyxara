@@ -18,10 +18,8 @@ struct Request {
 
 /**
  * Parses the exact shared opcode-403 and opcode-404 item-instance descriptor.
- *
- * Both actions name one item instance and differ only in direction, so they share this
- * descriptor. The trailing byte is a required alignment pad and has to be clear.
- *
+ * Both actions name one item instance and differ only in direction, so they share it. The
+ * trailing byte is a required alignment pad and has to be clear.
  * @param message Parsed Web Service envelope.
  * @param request Receives the named item-instance identity.
  * @return True only for the complete canonical nine-byte request naming a nonzero instance.

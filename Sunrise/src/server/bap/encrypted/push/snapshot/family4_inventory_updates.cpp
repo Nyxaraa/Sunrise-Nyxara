@@ -1,24 +1,123 @@
 #include <algorithm>
-#include <array>
 #include <cstddef>
-#include <cstdio>
+#include <limits>
 #include <optional>
 #include <span>
 
-#include "../../../../../core/logging/log.h"
 #include "../../../../../middleware/datagen/family4/account/account_encoder.h"
 #include "../../../../../middleware/datagen/family4/account/layout.h"
 #include "../../../../../middleware/datagen/family4/character/character_encoder.h"
 #include "../../../../../middleware/datagen/family4/character/layout.h"
 #include "../../../../../middleware/datagen/family4/instance/instance_encoder.h"
 #include "../../../../../middleware/datagen/family4/instance/layout.h"
+#include "../../../../../state/build_data/runtime.h"
 #include "../../../../../state/runtime/runtime.h"
+#include "../../queuez/queuez_state_validation.h"
 #include "internal.h"
 #include "snapshot_storage.h"
 
 namespace sunrise::server::bap::encrypted::push::snapshot {
 
 namespace family4_datagen = middleware::datagen::family4;
+
+namespace {
+
+namespace account_layout = middleware::datagen::family4::account::layout;
+
+/** @return True when the ring carries no record, which is how every snapshot encodes it. */
+[[nodiscard]] bool ring_is_empty(const account_layout::Object& accountObject) noexcept {
+    return accountObject.profileInventoryChanges.writeSlot == 0
+           && accountObject.profileInventoryChanges.nextSequence == 0
+           && std::all_of(accountObject.profileInventoryChanges.records.cbegin(),
+                          accountObject.profileInventoryChanges.records.cend(),
+                          kChangeRecordIsZero);
+}
+
+/** Points one ring record at one profile row. */
+void name_row(account_layout::ProfileInventoryChangeRecord& record,
+              std::size_t sequence,
+              std::int32_t mutationSerial) noexcept {
+    record.sequence = static_cast<std::uint16_t>(sequence);
+    record.mutationSerial = mutationSerial;
+    record.kind = kChangeKind;
+    record.flags = kChangeFlags;
+}
+
+/**
+ * Names every row an exchange credited, so each gain is drawn and repeats accumulate.
+ *
+ * @param accountObject Encoded account object being upserted.
+ * @param mutation Prepared exchange carrying the rows it credited.
+ * @return Null on success, or the reason the ring could not be written.
+ */
+[[nodiscard]] const char*
+write_exchange_changes(account_layout::Object& accountObject,
+                       const state::PendingProfileItemAcquisition& mutation) noexcept {
+    if (mutation.changeCount > accountObject.profileInventoryChanges.records.size()
+        || !ring_is_empty(accountObject)) {
+        return "exchange_inventory_change_state";
+    }
+    for (std::size_t change = 0; change < mutation.changeCount; ++change) {
+        const state::ProfileStackChange& announced = mutation.changes[change];
+        std::size_t matchedRows = 0;
+        for (const auto& row : accountObject.profileItems) {
+            if (row.mutationSerial != announced.mutationSerial) {
+                continue;
+            }
+            if (row.quantity != announced.afterQuantity) {
+                return "exchange_change_quantity";
+            }
+            ++matchedRows;
+        }
+        if (matchedRows != 1) {
+            return "exchange_change_row";
+        }
+        name_row(accountObject.profileInventoryChanges.records[change],
+                 change,
+                 announced.mutationSerial);
+    }
+    accountObject.profileInventoryChanges.writeSlot =
+        static_cast<std::uint16_t>(mutation.changeCount);
+    accountObject.profileInventoryChanges.nextSequence =
+        static_cast<std::uint16_t>(mutation.changeCount);
+    return nullptr;
+}
+
+/**
+ * Names the one row an ordinary acquisition added to or grew.
+ *
+ * @param accountObject Encoded account object being upserted.
+ * @param mutation Prepared acquisition naming its acquired row.
+ * @param acquiredRow Receives that row's position, for the checkpoint line.
+ * @return Null on success, or the reason the ring could not be written.
+ */
+[[nodiscard]] const char*
+write_acquisition_change(account_layout::Object& accountObject,
+                         const state::PendingProfileItemAcquisition& mutation,
+                         std::size_t& acquiredRow) noexcept {
+    acquiredRow = accountObject.profileItems.size();
+    for (std::size_t row = 0; row < accountObject.profileItems.size(); ++row) {
+        if (accountObject.profileItems[row].mutationSerial != mutation.acquiredMutationSerial) {
+            continue;
+        }
+        if (acquiredRow != accountObject.profileItems.size()) {
+            return "profile_acquire_row_duplicate";
+        }
+        acquiredRow = row;
+    }
+    if (acquiredRow >= accountObject.profileItems.size()
+        || accountObject.profileItems[acquiredRow].quantity != mutation.acquiredQuantity
+        || !ring_is_empty(accountObject)) {
+        return "profile_acquire_inventory_change_state";
+    }
+    accountObject.profileInventoryChanges.writeSlot = 1;
+    accountObject.profileInventoryChanges.nextSequence = 1;
+    name_row(
+        accountObject.profileInventoryChanges.records.front(), 0, mutation.acquiredMutationSerial);
+    return nullptr;
+}
+
+} // namespace
 
 /** Builds a single full account-object upsert from an uncommitted profile-stack after-image. */
 bool prepare_profile_item_acquisition(Scratch& scratch,
@@ -55,51 +154,18 @@ bool prepare_profile_item_acquisition(Scratch& scratch,
         return report_failure("profile_acquire_account_encode");
     }
 
-    // The native account observer compares profile quantities but only emits pickup feedback when
-    // the changed row's mutation serial also appears in this transient 16-record bank at 0x6978.
-    // Keep the descriptor local to this one incremental upsert; ordinary snapshots encode an empty
-    // bank, while the row's rising mutation serial remains persistent State.
-    constexpr std::uint16_t kAcquisitionChangeSequence = 0;
-    constexpr std::uint16_t kAcquisitionChangeNextWriteSlot = 1;
-    constexpr std::uint16_t kAcquisitionChangeNextSequence = 1;
-    constexpr std::uint8_t kAcquisitionChangeKind = 1;
-    constexpr std::uint16_t kAcquisitionChangeFlags = 0;
     auto& accountObject =
         *reinterpret_cast<family4_datagen::account::layout::Object*>(accountBytes.data());
     std::size_t acquiredRow = accountObject.profileItems.size();
-    for (std::size_t row = 0; row < accountObject.profileItems.size(); ++row) {
-        const auto& inventoryRow = accountObject.profileItems[row];
-        if (inventoryRow.mutationSerial != mutation.acquiredMutationSerial) {
-            continue;
-        }
-        if (acquiredRow != accountObject.profileItems.size()) {
-            clear_after(scratch, reservation);
-            return report_failure("profile_acquire_row_duplicate");
-        }
-        acquiredRow = row;
-    }
-    const auto recordIsZero =
-        [](const family4_datagen::account::layout::ProfileInventoryChangeRecord& record) noexcept {
-            return record.sequence == 0 && record.reserved == 0 && record.mutationSerial == 0
-                   && record.kind == 0 && record.reservedKind == 0 && record.flags == 0;
-        };
-    const bool recordsAreZero = std::all_of(accountObject.profileInventoryChanges.records.cbegin(),
-                                            accountObject.profileInventoryChanges.records.cend(),
-                                            recordIsZero);
-    if (acquiredRow >= accountObject.profileItems.size()
-        || accountObject.profileItems[acquiredRow].quantity != mutation.acquiredQuantity
-        || accountObject.profileInventoryChanges.writeSlot != 0
-        || accountObject.profileInventoryChanges.nextSequence != 0 || !recordsAreZero) {
+    // An exchange names every row it credited; an ordinary acquisition names the one row it added
+    // to or grew. Both write the same kind of record, which is what the observer draws.
+    const char* const ringFailure =
+        mutation.changeCount != 0 ? write_exchange_changes(accountObject, mutation)
+                                  : write_acquisition_change(accountObject, mutation, acquiredRow);
+    if (ringFailure != nullptr) {
         clear_after(scratch, reservation);
-        return report_failure("profile_acquire_inventory_change_state");
+        return report_failure(ringFailure);
     }
-    accountObject.profileInventoryChanges.writeSlot = kAcquisitionChangeNextWriteSlot;
-    accountObject.profileInventoryChanges.nextSequence = kAcquisitionChangeNextSequence;
-    auto& acquisitionChange = accountObject.profileInventoryChanges.records.front();
-    acquisitionChange.sequence = kAcquisitionChangeSequence;
-    acquisitionChange.mutationSerial = mutation.acquiredMutationSerial;
-    acquisitionChange.kind = kAcquisitionChangeKind;
-    acquisitionChange.flags = kAcquisitionChangeFlags;
 
     Prepared staged{};
     staged.rawClearSize =
@@ -150,41 +216,174 @@ bool prepare_profile_item_acquisition(Scratch& scratch,
         return report_failure("profile_acquire_commit");
     }
 
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=profile_acquire stage=account_object result=ok family_version=%d "
-        "account=0x%llX definition=%u item_count=%zu definition_hash=0x%08X quantity=%d "
-        "native_row=%zu mutation_serial=%d change_slot=%u change_next_sequence=%u "
-        "change_kind=%u account_payload_bytes=%zu objects=%zu object_order=%s",
-        acquisition.after.family4Version,
-        static_cast<unsigned long long>(acquisition.accountSoid),
-        acquisition.accountDefinitionId,
-        mutation.afterItemCount,
-        mutation.acquiredDefinitionHash,
-        mutation.acquiredQuantity,
-        acquiredRow,
-        mutation.acquiredMutationSerial,
-        static_cast<unsigned>(kAcquisitionChangeNextWriteSlot),
-        static_cast<unsigned>(kAcquisitionChangeNextSequence),
-        static_cast<unsigned>(kAcquisitionChangeKind),
-        prepared.family.objects[accountObjectIndex].payload.size(),
-        objectCount,
-        acquisition.appendedResident ? "item-account" : "account");
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::debug,
-                         {line.data(), static_cast<std::size_t>(count)});
+    return true;
+}
+
+/** Builds the native XP pickup signal without making its one-slot reward item persistent. */
+bool prepare_seasonal_experience_presentation(
+    Scratch& scratch,
+    const queuez::SessionState& before,
+    std::int32_t amount,
+    std::int32_t mutationSerial,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    Prepared& prepared) noexcept {
+    // Seasonal XP is presented as this stackable item definition.
+    constexpr std::uint32_t kExperienceItemHash = 2211488305U;
+    // One new-item flag byte covers 8 inventory rows; an occupied row carries watermark 1.
+    constexpr std::size_t kBitsPerFlagByte = 8;
+    constexpr std::int32_t kOccupiedRowWatermark = 1;
+    // The change ring holds one entry, so the next write slot and sequence are both 1.
+    constexpr std::uint16_t kChangeSequence = 0;
+    constexpr std::uint16_t kChangeNextWriteSlot = 1;
+    constexpr std::uint16_t kChangeNextSequence = 1;
+
+    if (amount <= 0 || mutationSerial < 0 || !queuez::valid(before) || !before.family4Active
+        || before.family4RootSoid == 0 || before.family4ResidentCount == 0
+        || before.family4Version == (std::numeric_limits<std::int32_t>::max)()) {
+        return report_failure("season_xp_session");
+    }
+
+    const state::AccountState account = state::account_snapshot();
+    const std::optional<std::size_t> selectedIndex = find_character_index(account);
+    Resolved selected{};
+    state::build_data::items::Definition item{};
+    state::build_data::items::details::Definition detail{};
+    state::build_data::inventory::buckets::Descriptor bucket{};
+    if (!state::account::valid(account) || account.primarySoid != before.family4RootSoid
+        || !selectedIndex.has_value() || !resolve(account, *selectedIndex, selected)
+        || !state::build_data::find_item_definition_hash(kExperienceItemHash, item)
+        || !state::build_data::find_configured_item_detail(item.definitionIndex, detail)
+        || detail.definitionIndex != item.definitionIndex
+        || detail.definitionHash != item.definitionHash || detail.bucketId != item.bucketId
+        || detail.instancedDefinitionState
+               != state::build_data::items::details::InstancedDefinitionState::stackable
+        || detail.maxStackSize < 1 || detail.equipmentSlot.has_value()
+        || !state::build_data::find_inventory_bucket_descriptor(item.bucketId, bucket)
+        || bucket.arraySelector != state::build_data::inventory::buckets::ArraySelector::character
+        || bucket.slotCount != 1
+        || bucket.firstSlot
+               >= middleware::datagen::family4::character::layout::kInventoryCapacity) {
+        return report_failure("season_xp_definition");
+    }
+
+    const state::CharacterState& character = account.characters[*selectedIndex];
+    std::size_t characterResidentMatches = 0;
+    for (std::size_t index = 0; index < before.family4ResidentCount; ++index) {
+        const queuez::ResidentObject& resident = before.family4Residents[index];
+        characterResidentMatches +=
+            static_cast<std::size_t>(resident.objectSoid == character.soid
+                                     && resident.definitionId == selected.characterObjectId);
+    }
+    if (before.family4Residents.front().objectSoid != account.primarySoid
+        || characterResidentMatches != 1
+        || static_cast<std::uint32_t>(mutationSerial) >= character.nextInventorySerial) {
+        return report_failure("season_xp_manifest");
+    }
+
+    const Reservation reservation = reserve_prior(scratch, prepared);
+    const auto rawStorage = std::span(scratch.plaintext).subspan(reservation.rawWriteOffset);
+    if (middleware::datagen::family4::character::layout::kObjectSize > rawStorage.size()) {
+        return report_failure("season_xp_character_storage");
+    }
+    const auto characterBytes =
+        rawStorage.first(middleware::datagen::family4::character::layout::kObjectSize);
+    if (!middleware::datagen::family4::character::encode(
+            character, selected.loadout, selected.lightEvaluation, characterBytes)) {
+        return report_failure("season_xp_character_encode");
+    }
+
+    namespace character_layout = middleware::datagen::family4::character::layout;
+    auto& characterObject = *reinterpret_cast<character_layout::Object*>(characterBytes.data());
+    const std::size_t rowIndex = bucket.firstSlot;
+    auto& row = characterObject.inventoryItems[rowIndex];
+    if (row.definitionIndex != (std::numeric_limits<std::uint16_t>::max)()
+        || characterObject.inventoryChanges.writeSlot != 0
+        || characterObject.inventoryChanges.nextSequence != 0
+        || !std::all_of(characterObject.inventoryChanges.records.cbegin(),
+                        characterObject.inventoryChanges.records.cend(),
+                        kChangeRecordIsZero)) {
+        clear_after(scratch, reservation);
+        return report_failure("season_xp_character_state");
+    }
+
+    row.definitionIndex = item.definitionIndex;
+    // The virtual item carries the gain; the account object carries cumulative XP.
+    row.quantity = amount;
+    row.mutationSerial = mutationSerial;
+    characterObject.newItemFlags[rowIndex / kBitsPerFlagByte] |= std::byte{1U}
+                                                                 << (rowIndex % kBitsPerFlagByte);
+    characterObject.instanceProgressWatermarks[rowIndex] = kOccupiedRowWatermark;
+    characterObject.inventoryChanges.writeSlot = kChangeNextWriteSlot;
+    characterObject.inventoryChanges.nextSequence = kChangeNextSequence;
+    auto& change = characterObject.inventoryChanges.records.front();
+    change.sequence = kChangeSequence;
+    change.mutationSerial = mutationSerial;
+    change.kind = kChangeKind;
+    change.flags = kChangeFlags;
+    if (!apply_acquisition_presentation(
+            characterBytes, selected.loadout, acquisitionPresentationRows)) {
+        clear_after(scratch, reservation);
+        return report_failure("season_xp_presentation");
+    }
+
+    Prepared staged{};
+    staged.rawClearSize = (std::max)(reservation.rawClearSize,
+                                     reservation.rawWriteOffset + character_layout::kObjectSize);
+    std::size_t compressedExtent = reservation.compressedWriteOffset;
+    if (!append_object(scratch,
+                       characterBytes,
+                       selected.characterObjectId,
+                       character.soid,
+                       staged.objects[1],
+                       compressedExtent)) {
+        clear_after(scratch, reservation);
+        return report_failure("season_xp_character_object");
+    }
+
+    if (middleware::datagen::family4::account::layout::kObjectSize > rawStorage.size()) {
+        clear_after(scratch, reservation);
+        return report_failure("season_xp_account_storage");
+    }
+    const auto accountBytes =
+        rawStorage.first(middleware::datagen::family4::account::layout::kObjectSize);
+    // Publish cumulative account XP before the transient delta row triggers the HUD.
+    if (!middleware::datagen::family4::account::encode(account, accountBytes)
+        || !append_object(scratch,
+                          accountBytes,
+                          before.family4Residents.front().definitionId,
+                          account.primarySoid,
+                          staged.objects[0],
+                          compressedExtent)) {
+        clear_after(scratch, reservation);
+        return report_failure("season_xp_account_object");
+    }
+
+    staged.rawClearSize =
+        (std::max)(staged.rawClearSize,
+                   reservation.rawWriteOffset
+                       + middleware::datagen::family4::account::layout::kObjectSize);
+    staged.compressedClearSize = (std::max)(reservation.compressedClearSize, compressedExtent);
+    staged.family = middleware::queuez::Family{
+        queuez::kAccountFamilyType,
+        account.primarySoid,
+        before.family4Version + 1,
+        0,
+        std::span(staged.objects).first(2),
+    };
+    if (!commit(staged, prepared)) {
+        clear_after(scratch, reservation);
+        return report_failure("season_xp_commit");
     }
     return true;
 }
 
 /** Builds a new item-instance upsert before its character after-image. */
-bool prepare_item_acquisition(Scratch& scratch,
-                              const queuez::ItemAcquisition& acquisition,
-                              const state::PendingItemAcquisition& mutation,
-                              Prepared& prepared) noexcept {
+bool prepare_item_acquisition(
+    Scratch& scratch,
+    const queuez::ItemAcquisition& acquisition,
+    const state::PendingItemAcquisition& mutation,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    Prepared& prepared) noexcept {
     const Reservation reservation = reserve_prior(scratch, prepared);
     if (reservation.rawWriteOffset > scratch.plaintext.size()
         || reservation.compressedWriteOffset > scratch.sealed.size()) {
@@ -196,7 +395,9 @@ bool prepare_item_acquisition(Scratch& scratch,
         || mutation.accountSoid == 0 || mutation.accountSoid != acquisition.accountSoid
         || mutation.characterSoid != acquisition.characterSoid
         || mutation.acquiredInstanceSoid != acquisition.acquiredInstanceSoid
-        || mutation.profileChanged != acquisition.updatesAccount
+        // The account object may ride for reasons only the caller knows, but a profile change
+        // always has to publish it.
+        || (mutation.profileChanged && !acquisition.updatesAccount)
         || acquisition.accountSoid != acquisition.after.family4RootSoid
         || acquisition.accountDefinitionId == 0 || acquisition.after.family4ResidentCount == 0
         || acquisition.after.family4Residents[acquisition.after.family4ResidentCount - 1U]
@@ -255,17 +456,13 @@ bool prepare_item_acquisition(Scratch& scratch,
         return report_failure("acquire_character_object");
     }
 
-    // The native character-object observer requires a transient inventory-change record whose
-    // serial matches the newly filled row. Without it the row is accepted, but the observer never
-    // queues the acquisition feedback. Keep this record local to this one acquisition push; the
-    // canonical encoder leaves the bank empty on every later snapshot.
+    // Acquisition feedback requires a transient change record matching the newly filled row.
+    // Keep it local to this push; later snapshots encode an empty bank.
     constexpr std::size_t kBitsPerFlagByte = 8;
     constexpr std::int32_t kEncodedOccupiedRowWatermark = 1;
     constexpr std::uint16_t kAcquisitionChangeSequence = 0;
     constexpr std::uint16_t kAcquisitionChangeNextWriteSlot = 1;
     constexpr std::uint16_t kAcquisitionChangeNextSequence = 1;
-    constexpr std::uint8_t kAcquisitionChangeKind = 1;
-    constexpr std::uint16_t kAcquisitionChangeFlags = 0;
     auto& characterObject =
         *reinterpret_cast<family4_datagen::character::layout::Object*>(characterBytes.data());
     const std::size_t acquiredRow = mutation.inventoryRow;
@@ -276,18 +473,13 @@ bool prepare_item_acquisition(Scratch& scratch,
     }
     const std::size_t newItemFlagIndex = acquiredRow / kBitsPerFlagByte;
     const std::byte newItemFlagMask = std::byte{1U} << (acquiredRow % kBitsPerFlagByte);
-    const auto recordIsZero =
-        [](const family4_datagen::character::layout::InventoryChangeRecord& record) noexcept {
-            return record.sequence == 0 && record.reserved == 0 && record.mutationSerial == 0
-                   && record.kind == 0 && record.reservedKind == 0 && record.flags == 0;
-        };
     const bool unknownIsZero =
         std::all_of(characterObject.inventoryChangeUnknown.cbegin(),
                     characterObject.inventoryChangeUnknown.cend(),
                     [](std::byte value) noexcept { return value == std::byte{}; });
     const bool recordsAreZero = std::all_of(characterObject.inventoryChanges.records.cbegin(),
                                             characterObject.inventoryChanges.records.cend(),
-                                            recordIsZero);
+                                            kChangeRecordIsZero);
     const auto& acquiredInventoryRow = characterObject.inventoryItems[acquiredRow];
     if (newItemFlagIndex >= characterObject.newItemFlags.size()
         || acquiredInventoryRow.instanceSoid != mutation.acquiredInstanceSoid
@@ -304,13 +496,18 @@ bool prepare_item_acquisition(Scratch& scratch,
     auto& acquisitionChange = characterObject.inventoryChanges.records.front();
     acquisitionChange.sequence = kAcquisitionChangeSequence;
     acquisitionChange.mutationSerial = acquiredMutationSerial;
-    acquisitionChange.kind = kAcquisitionChangeKind;
-    acquisitionChange.flags = kAcquisitionChangeFlags;
+    acquisitionChange.kind = kChangeKind;
+    acquisitionChange.flags = kChangeFlags;
     if (!std::all_of(characterObject.inventoryChanges.records.cbegin() + 1,
                      characterObject.inventoryChanges.records.cend(),
-                     recordIsZero)) {
+                     kChangeRecordIsZero)) {
         clear_after(scratch, reservation);
         return report_failure("acquire_inventory_change_records");
+    }
+    if (!apply_acquisition_presentation(
+            characterBytes, selected.loadout, acquisitionPresentationRows)) {
+        clear_after(scratch, reservation);
+        return report_failure("acquire_presentation");
     }
 
     Prepared staged{};
@@ -349,8 +546,6 @@ bool prepare_item_acquisition(Scratch& scratch,
         clear_after(scratch, reservation);
         return report_failure("acquire_item_progress");
     }
-    const std::int32_t acquiredInstanceProgress = acquiredObject.roll.progress;
-
     std::size_t objectCount = 2;
     if (acquisition.updatesAccount) {
         if (family4_datagen::account::layout::kObjectSize > rawStorage.size()) {
@@ -374,10 +569,8 @@ bool prepare_item_acquisition(Scratch& scratch,
         objectCount = 3;
     }
 
-    // Creation increments publish the dependency before the reference to it. Compression order is
-    // irrelevant because each descriptor already owns its sealed span, so exchange only the wire
-    // descriptors: new item first, then the character after-image. Dismantle deliberately uses the
-    // inverse dependency order (drop the character reference, then release the item).
+    // Publish the new item before the character that references it. Dismantle uses the inverse
+    // order, dropping the character reference before releasing the item.
     std::swap(staged.objects[0], staged.objects[1]);
 
     staged.compressedClearSize = (std::max)(reservation.compressedClearSize, compressedExtent);
@@ -393,43 +586,6 @@ bool prepare_item_acquisition(Scratch& scratch,
         return report_failure("acquire_commit");
     }
 
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=acquire stage=family4_objects result=ok family_version=%d root=0x%llX "
-        "character=0x%llX character_definition=%u instance=0x%llX item_definition=%u "
-        "definition_hash=0x%08X inventory_row=%u equipment_slot=%u next_serial=%u objects=%zu "
-        "order=%s new_item_flag=1 watermark=1 acquired_row_serial=%d "
-        "inventory_change_write_slot=%u inventory_change_next_sequence=%u "
-        "inventory_change_record=0 inventory_change_sequence=%u "
-        "inventory_change_serial=%d inventory_change_kind=%u inventory_change_flags=%u "
-        "instance_progress=%d",
-        acquisition.after.family4Version,
-        static_cast<unsigned long long>(acquisition.after.family4RootSoid),
-        static_cast<unsigned long long>(acquisition.characterSoid),
-        acquisition.characterDefinitionId,
-        static_cast<unsigned long long>(acquisition.acquiredInstanceSoid),
-        acquisition.itemInstanceDefinitionId,
-        mutation.acquiredDefinitionHash,
-        static_cast<unsigned>(mutation.inventoryRow),
-        static_cast<unsigned>(mutation.equipmentSlot),
-        mutation.afterCharacter.nextInventorySerial,
-        objectCount,
-        acquisition.updatesAccount ? "item_character_account" : "item_character",
-        acquiredMutationSerial,
-        static_cast<unsigned>(kAcquisitionChangeNextWriteSlot),
-        static_cast<unsigned>(kAcquisitionChangeNextSequence),
-        static_cast<unsigned>(kAcquisitionChangeSequence),
-        acquiredMutationSerial,
-        static_cast<unsigned>(kAcquisitionChangeKind),
-        static_cast<unsigned>(kAcquisitionChangeFlags),
-        acquiredInstanceProgress);
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::debug,
-                         {line.data(), static_cast<std::size_t>(count)});
-    }
     return true;
 }
 
@@ -526,27 +682,17 @@ bool prepare_item_dismantle(Scratch& scratch,
 
         auto& accountObject =
             *reinterpret_cast<family4_datagen::account::layout::Object*>(accountBytes.data());
-        const auto recordIsZero =
-            [](const family4_datagen::account::layout::ProfileInventoryChangeRecord&
-                   record) noexcept {
-                return record.sequence == 0 && record.reserved == 0 && record.mutationSerial == 0
-                       && record.kind == 0 && record.reservedKind == 0 && record.flags == 0;
-            };
         if (accountObject.profileInventoryChanges.writeSlot != 0
             || accountObject.profileInventoryChanges.nextSequence != 0
             || !std::all_of(accountObject.profileInventoryChanges.records.cbegin(),
                             accountObject.profileInventoryChanges.records.cend(),
-                            recordIsZero)
+                            kChangeRecordIsZero)
             || mutation.rewardCount == 0
             || mutation.rewardCount > accountObject.profileInventoryChanges.records.size()) {
             clear_after(scratch, reservation);
             return report_failure("dismantle_account_change_state");
         }
 
-        // Kind 1 is the ordinary acquisition path, and clear policy bits leave it enabled. The
-        // native observer skips a record with any other pair.
-        constexpr std::uint8_t kRewardChangeKind = 1;
-        constexpr std::uint16_t kRewardChangeFlags = 0;
         for (std::size_t rewardIndex = 0; rewardIndex < mutation.rewardCount; ++rewardIndex) {
             const state::DismantleReward& reward = mutation.rewards[rewardIndex];
             std::size_t matchedRows = 0;
@@ -567,8 +713,8 @@ bool prepare_item_dismantle(Scratch& scratch,
             auto& change = accountObject.profileInventoryChanges.records[rewardIndex];
             change.sequence = static_cast<std::uint16_t>(rewardIndex);
             change.mutationSerial = reward.mutationSerial;
-            change.kind = kRewardChangeKind;
-            change.flags = kRewardChangeFlags;
+            change.kind = kChangeKind;
+            change.flags = kChangeFlags;
         }
         accountObject.profileInventoryChanges.writeSlot =
             static_cast<std::uint16_t>(mutation.rewardCount);
@@ -602,36 +748,6 @@ bool prepare_item_dismantle(Scratch& scratch,
         return report_failure("dismantle_commit");
     }
 
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=dismantle stage=family4_objects result=ok family_version=%d root=0x%llX "
-        "character=0x%llX character_definition=%u instance=0x%llX item_definition=%u "
-        "definition_hash=0x%08X inventory_index=%zu inventory_row=%u equipment_slot=%u "
-        "moved_items=%zu items_after=%zu next_serial=%u rewards=%zu objects=%zu "
-        "order=%s",
-        dismantle.after.family4Version,
-        static_cast<unsigned long long>(dismantle.after.family4RootSoid),
-        static_cast<unsigned long long>(dismantle.characterSoid),
-        dismantle.characterDefinitionId,
-        static_cast<unsigned long long>(dismantle.dismantledInstanceSoid),
-        dismantle.itemInstanceDefinitionId,
-        mutation.dismantledItem.definitionHash,
-        mutation.inventoryIndex,
-        static_cast<unsigned>(mutation.inventoryRow),
-        static_cast<unsigned>(mutation.equipmentSlot),
-        mutation.movedInventoryItemCount,
-        mutation.afterCharacter.inventory.count,
-        mutation.afterCharacter.nextInventorySerial,
-        mutation.rewardCount,
-        objectCount,
-        dismantle.updatesAccount ? "character_release_account" : "character_release");
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::debug,
-                         {line.data(), static_cast<std::size_t>(count)});
-    }
     return true;
 }
 } // namespace sunrise::server::bap::encrypted::push::snapshot

@@ -2,6 +2,9 @@
 
 namespace sunrise::client::hooks::network::investment {
 
+/** Arms one derived-state rebuild on a committed investment publication. */
+void notify_investment_publication() noexcept;
+
 /** @return True when freshness and both real-arrival rebuild arms are attached. */
 [[nodiscard]] bool install() noexcept;
 

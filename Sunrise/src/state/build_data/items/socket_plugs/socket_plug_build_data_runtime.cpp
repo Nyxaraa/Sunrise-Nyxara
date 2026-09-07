@@ -65,13 +65,24 @@ bool is_socket_plug_allowed(std::uint16_t itemDefinitionIndex,
            && items::socket_plugs::allowed(itemDefinitionIndex, lane, plugDefinitionIndex);
 }
 
+/** Walks one lane's pool once the whole relation is in State. */
+bool visit_socket_plug_pool(std::uint16_t itemDefinitionIndex,
+                            std::uint8_t lane,
+                            items::socket_plugs::MemberVisitor visitor,
+                            void* context) noexcept {
+    return socket_plug_rules_ready()
+           && items::socket_plugs::visit_pool(itemDefinitionIndex, lane, visitor, context);
+}
+
+/** Answers pool membership anywhere in the installed relation. */
+bool is_socket_plug_pooled(std::uint16_t plugDefinitionIndex) noexcept {
+    return socket_plug_rules_ready() && items::socket_plugs::contains(plugDefinitionIndex);
+}
+
 /**
  * Answers whether applying one plug spends a stack the account has to hold.
- *
- * Only a shader is spent: an ornament stays owned once applied. The plug also has to be
- * one an account can come to own, which means Collections can grant it. A socket's default plug
- * is not in Collections and belongs to no stack, so clearing a socket back to it costs nothing
- * and is always available, whatever the item's own factory plug happens to be.
+ * Only a shader is spent; an ornament stays owned. The plug must also be one Collections can
+ * grant, so clearing a socket back to its default costs nothing and is always available.
  */
 bool is_consumed_on_apply(std::uint16_t itemDefinitionIndex, std::uint8_t bucketId) noexcept {
     return bucketId == kShaderBucketId && collectibles::grants_item(itemDefinitionIndex);
@@ -79,10 +90,8 @@ bool is_consumed_on_apply(std::uint16_t itemDefinitionIndex, std::uint8_t bucket
 
 /**
  * Answers whether one installed profile row is a materializable socket action source.
- *
- * Only ornaments and shaders qualify. Mods are bucket 37 and sit outside this model on purpose:
- * they are permanent unlocks rather than stacks, and nothing in the account records which are
- * unlocked, so no answer here could say whether it holds one.
+ * Only ornaments and shaders qualify. Mods are bucket 37 and sit outside this model: they are
+ * permanent unlocks, and nothing in the account records which are unlocked.
  */
 bool is_profile_action_source(std::uint16_t itemDefinitionIndex, std::uint8_t bucketId) noexcept {
     items::details::Definition detail{};

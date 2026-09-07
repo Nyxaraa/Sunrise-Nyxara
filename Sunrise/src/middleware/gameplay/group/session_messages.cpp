@@ -4,6 +4,7 @@
 
 #include "../../encoding/bit_raw.h"
 #include "../../protobuf/codec.h"
+#include "player_block.h"
 #include "session_state.h"
 
 namespace sunrise::middleware::gameplay::group {
@@ -40,25 +41,29 @@ constexpr std::uint32_t kRootMemberMask = 5;
 /** See kRootRevision. */
 constexpr std::uint32_t kRootMember = 6;
 
-/** Protobuf field numbers of one member. Field 9 is not published. */
+/** Protobuf field numbers of one member. */
 constexpr std::uint32_t kMemberAddress = 1;
 /** See kMemberAddress. */
 constexpr std::uint32_t kMemberMachineId = 2;
 /** See kMemberAddress. */
 constexpr std::uint32_t kMemberJoinId = 3;
 /** See kMemberAddress. */
-constexpr std::uint32_t kMemberIdB = 8;
+constexpr std::uint32_t kMemberPartyId = 8;
+/** See kMemberAddress. */
+constexpr std::uint32_t kMemberPlayerCount = 9;
 /** See kMemberAddress. */
 constexpr std::uint32_t kMemberPlayerSlot = 10;
 /** See kMemberAddress. */
-constexpr std::uint32_t kMemberFlagA = 11;
+constexpr std::uint32_t kMemberHostLeavePending = 11;
 /** See kMemberAddress. */
-constexpr std::uint32_t kMemberFlagB = 12;
+constexpr std::uint32_t kMemberHostLeaveDone = 12;
 
-/** Member field 8 has no recovered meaning. Zero is the value an empty id decodes to. */
-constexpr std::uint64_t kMemberIdEmpty = 0;
-/** Member fields 11 and 12 have no recovered meaning. Zero is their cleared value. */
-constexpr std::uint64_t kMemberFlagClear = 0;
+/** Party id. Zero takes the receiver's empty-id path, so no member is grouped with another. */
+constexpr std::uint64_t kMemberPartyIdEmpty = 0;
+/** Players a member with a slot owns. The codec publishes at most one slot per member. */
+constexpr std::uint64_t kOwnedPlayerCount = 1;
+/** No host leave is in progress, so both leave flags stay clear. */
+constexpr std::uint64_t kMemberHostLeaveClear = 0;
 
 /** The protobuf body is length-prefixed with thirteen bits. */
 constexpr std::uint8_t kProtobufLengthWidth = 13;
@@ -79,8 +84,7 @@ constexpr std::uint8_t kJoinTimestampWidth = 64;
 
 /** A clear flag ahead of the revision pair publishes it. Its absence decodes as -1. */
 constexpr std::uint64_t kRevisionPairPresent = 0;
-/** Base revision 0 selects a complete snapshot. Any other value is a delta against that revision.
- */
+/** Base revision 0 selects a complete snapshot. Any other value is a delta against it. */
 constexpr std::uint32_t kCompleteSnapshotBase = 0;
 /** The word after the base revision is never read by the consumer. */
 constexpr std::uint32_t kUnreadWord = 0;
@@ -97,9 +101,14 @@ constexpr std::uint8_t kPlayerOwnedIndexWidth = 1;
 constexpr std::uint8_t kPlayerSequenceWidth = 20;
 /** Value the decoder requires of the member's own player index. */
 constexpr std::uint64_t kPlayerOwnedIndexZero = 0;
-/** A clear flag ends a player row after its identity group. The profile block it would gate has
- *  no writer here, so no row carries one. */
-constexpr std::uint64_t kPlayerProfileAbsent = 0;
+/** The profile group leads with one 32-bit value. */
+constexpr std::uint8_t kPlayerProfileValueWidth = 32;
+/** The player kind that follows it. */
+constexpr std::uint8_t kPlayerKindWidth = 3;
+/** Bias the player kind rides on the wire. The decoder subtracts it. */
+constexpr std::uint32_t kPlayerKindBias = 1;
+/** Largest player kind the message codec accepts. */
+constexpr std::uint8_t kPlayerKindMaximum = 3;
 /** This host publishes no 264-byte identity block and neither trailing delta-entry flag. */
 constexpr std::uint64_t kEntryFieldAbsent = 0;
 /** The four tail groups are all omitted, which leaves the consumer's own values alone. */
@@ -135,14 +144,17 @@ constexpr std::uint64_t kByteMask = 0xFF;
     if (!body.write_length_delimited(kMemberAddress, member.address)
         || !body.write_length_delimited(kMemberMachineId, machineId)
         || !body.write_varint(kMemberJoinId, member.joinId)
-        || !body.write_varint(kMemberIdB, kMemberIdEmpty)) {
+        || !body.write_varint(kMemberPartyId, kMemberPartyIdEmpty)) {
         return false;
     }
-    if (member.ownsPlayerSlot && !body.write_varint(kMemberPlayerSlot, member.playerSlot)) {
+    // The player count feeds the peer's party-size check, so a member with a slot counts it.
+    if (member.ownsPlayerSlot
+        && (!body.write_varint(kMemberPlayerCount, kOwnedPlayerCount)
+            || !body.write_varint(kMemberPlayerSlot, member.playerSlot))) {
         return false;
     }
-    if (!body.write_varint(kMemberFlagA, kMemberFlagClear)
-        || !body.write_varint(kMemberFlagB, kMemberFlagClear)) {
+    if (!body.write_varint(kMemberHostLeavePending, kMemberHostLeaveClear)
+        || !body.write_varint(kMemberHostLeaveDone, kMemberHostLeaveClear)) {
         return false;
     }
     return writer.write_length_delimited(kRootMember, {storage.data(), body.size()});
@@ -204,20 +216,34 @@ write_peer_delta(bits::Writer& writer, std::size_t index, const MembershipMember
 }
 
 /**
- * Writes one player-delta entry carrying an identity and no profile block.
+ * Writes one player-delta entry carrying an identity and, when the row has one, a profile group.
  * @param writer Open writer.
  * @param player Player row to publish.
  * @return True when every field fit.
  */
 [[nodiscard]] bool write_player_delta(bits::Writer& writer,
                                       const MembershipPlayer& player) noexcept {
-    return writer.write(player.slot, kPlayerIndexWidth) && writer.write(kDeltaEntryFull, kFlagWidth)
-           && writer.write(1U, kFlagWidth) && bits::write_raw_u64(writer, player.playerId)
-           && writer.write(player.memberIndex, kPlayerMemberWidth)
-           && writer.write(kPlayerOwnedIndexZero, kPlayerOwnedIndexWidth)
-           && writer.write(player.addSequence, kPlayerSequenceWidth)
-           && writer.write(player.flag ? 1U : 0U, kFlagWidth)
-           && writer.write(kPlayerProfileAbsent, kFlagWidth);
+    if (!writer.write(player.slot, kPlayerIndexWidth) || !writer.write(kDeltaEntryFull, kFlagWidth)
+        || !writer.write(1U, kFlagWidth) || !bits::write_raw_u64(writer, player.playerId)
+        || !writer.write(player.memberIndex, kPlayerMemberWidth)
+        || !writer.write(kPlayerOwnedIndexZero, kPlayerOwnedIndexWidth)
+        || !writer.write(player.addSequence, kPlayerSequenceWidth)
+        || !writer.write(player.flag ? 1U : 0U, kFlagWidth)
+        || !writer.write(player.hasProfile ? 1U : 0U, kFlagWidth)) {
+        return false;
+    }
+    if (!player.hasProfile) {
+        return true;
+    }
+    PlayerBlockSoids soids{};
+    soids.present = true;
+    soids.accountSoid = player.accountSoid;
+    soids.characterSoid = player.characterSoid;
+    // The delta and the tail are not gated by the profile bit; the decoder reads all three.
+    return writer.write(player.profileValue, kPlayerProfileValueWidth)
+           && writer.write(player.profileKind + kPlayerKindBias, kPlayerKindWidth)
+           && write_player_block_soids(writer, soids) && write_player_block_delta_absent(writer)
+           && write_player_tail_cleared(writer);
 }
 
 } // namespace
@@ -292,13 +318,13 @@ bool read_time_synchronize(bits::Reader& reader, TimeSynchronize& output) noexce
     std::uint64_t variant = 0;
     TimeSynchronize candidate{};
     if (!bits::read_raw_u64(reader, candidate.sessionId) || !reader.read(kFlagWidth, variant)
-        || !reader.read(kSampleWidth, candidate.sampleA)) {
+        || !reader.read(kSampleWidth, candidate.requesterSendTime)) {
         return false;
     }
     candidate.threeSample = variant != 0;
     if (candidate.threeSample
-        && (!reader.read(kSampleWidth, candidate.sampleB)
-            || !reader.read(kSampleWidth, candidate.sampleC))) {
+        && (!reader.read(kSampleWidth, candidate.responderReceiveTime)
+            || !reader.read(kSampleWidth, candidate.responderSendTime))) {
         return false;
     }
     output = candidate;
@@ -309,13 +335,14 @@ bool read_time_synchronize(bits::Reader& reader, TimeSynchronize& output) noexce
 bool write_time_synchronize(bits::Writer& writer, const TimeSynchronize& body) noexcept {
     if (!bits::write_raw_u64(writer, body.sessionId)
         || !writer.write(body.threeSample ? 1U : 0U, kFlagWidth)
-        || !writer.write(body.sampleA, kSampleWidth)) {
+        || !writer.write(body.requesterSendTime, kSampleWidth)) {
         return false;
     }
     if (!body.threeSample) {
         return true;
     }
-    return writer.write(body.sampleB, kSampleWidth) && writer.write(body.sampleC, kSampleWidth);
+    return writer.write(body.responderReceiveTime, kSampleWidth)
+           && writer.write(body.responderSendTime, kSampleWidth);
 }
 
 /** Writes a complete-snapshot membership update. */
@@ -327,7 +354,8 @@ bool write_membership_update(bits::Writer& writer, const MembershipUpdate& body)
         return false;
     }
     for (const MembershipPlayer& player : body.players) {
-        if (player.slot >= kPlayerCapacity || player.memberIndex >= kMemberCapacity) {
+        if (player.slot >= kPlayerCapacity || player.memberIndex >= kMemberCapacity
+            || player.profileKind > kPlayerKindMaximum) {
             return false;
         }
     }

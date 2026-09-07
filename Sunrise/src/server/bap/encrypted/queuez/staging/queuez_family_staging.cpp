@@ -36,33 +36,7 @@ bool staging::same_state(const SessionState& left, const SessionState& right) no
     return true;
 }
 
-namespace {
-
-/**
- * Compares one active resident manifest with a staged full snapshot.
- * @param state Active Family-4 state owned by the peer.
- * @param candidate Possible version-zero snapshot state.
- * @return True only when root, version, count and every resident id match.
- */
-[[nodiscard]] bool same_manifest(const SessionState& state,
-                                 const SessionState& candidate) noexcept {
-    if (!valid(state) || !valid(candidate) || state.family4RootSoid != candidate.family4RootSoid
-        || state.family4Version != candidate.family4Version
-        || state.family4ResidentCount != candidate.family4ResidentCount) {
-        return false;
-    }
-    for (std::size_t index = 0; index < state.family4ResidentCount; ++index) {
-        if (!staging::same_resident(state.family4Residents[index],
-                                    candidate.family4Residents[index])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-} // namespace
-
-/** Stages a first Family-4 manifest, or checks an identical version-zero replay. */
+/** Stages a first Family-4 manifest, or adopts the manifest a re-snapshot resets the peer to. */
 bool stage_family4_snapshot(const SessionState& before,
                             const middleware::queuez::Family& family,
                             SessionState& after) noexcept {
@@ -102,12 +76,12 @@ bool stage_family4_snapshot(const SessionState& before,
     if (!valid(candidate)) {
         return false;
     }
-    if (before.family4Active) {
-        return before.family4Version == kInitialFamilyVersion && same_manifest(before, candidate);
-    }
-    if (before.family3Phase != Family3Phase::normal) {
+    if (!before.family4Active && before.family3Phase != Family3Phase::normal) {
         return false;
     }
+    // A full snapshot resets the Client's record to the version it carries, so a re-snapshot has to
+    // move our mirror there too. Holding the old version leaves the next incremental one ahead of
+    // the record, which the Client refuses with queuez error 6.
     after = candidate;
     return true;
 }
@@ -134,6 +108,9 @@ bool stage_family0_subscription(const SessionState& before,
     if (before.family0Character == selectedCharacter) {
         return true;
     }
+    if (before.family0Version == (std::numeric_limits<std::int32_t>::max)()) {
+        return false;
+    }
     publish = true;
     incremental = true;
     after.family0Character = selectedCharacter;
@@ -141,7 +118,7 @@ bool stage_family0_subscription(const SessionState& before,
     return true;
 }
 
-/** Stages the measured Family-3 subscription reset: full first, then response-only. */
+/** Stages one Family-3 subscription: a full body first, then response-only. */
 bool stage_family3_subscription(const SessionState& before,
                                 const middleware::queuez::Subscription& subscription,
                                 bool& publish,
@@ -158,7 +135,7 @@ bool stage_family3_subscription(const SessionState& before,
     }
     if (!before.family3Active) {
         // Publication is transactional: the caller installs this seed only after the full frame is
-        // copied.  Until then the before-image remains inactive and version zero has no meaning.
+        // copied. Until then the before-image remains inactive and version zero has no meaning.
         publish = true;
         after.family3RootSoid = subscription.familyRootSoid;
         after.family3Version = kInitialFamilyVersion;
@@ -167,7 +144,7 @@ bool stage_family3_subscription(const SessionState& before,
     }
     if (before.family3Phase == Family3Phase::normal) {
         publish = true;
-        // An explicit subscription establishes a fresh client-side store.  Its current full body is
+        // An explicit subscription establishes a fresh client-side store. Its current full body is
         // version zero even when the prior subscribed store had consumed incrementals.
         after.family3Version = kInitialFamilyVersion;
         return valid(after);
@@ -184,13 +161,40 @@ bool stage_family3_subscription(const SessionState& before,
     return before.family3Phase == Family3Phase::responseOnly;
 }
 
+/**
+ * Clears the one named family from this peer's mirror.
+ * @param before Mirror visible to the peer.
+ * @param familyType Family the request named, at the same body offset svc 12 uses.
+ * @param familyRootSoid Root the request named.
+ * @param after Receives the mirror with that family released.
+ */
 void stage_unsubscription(const SessionState& before,
+                          std::uint32_t familyType,
                           std::uint64_t familyRootSoid,
                           SessionState& after) noexcept {
     after = before;
-    if ((before.family4Active && familyRootSoid == before.family4RootSoid)
-        || (before.family3Active && familyRootSoid == before.family3RootSoid)) {
-        after = {};
+    // Families 0, 3 and 4 all key on the account soid, so the root alone does not name a family.
+    // Releasing one must not take the other two with it. Family zero has no root of its own: it is
+    // published under the account root family four retains, so that root is what names its record.
+    if (familyType == kAccountFamilyType && before.family4Active
+        && familyRootSoid == before.family4RootSoid) {
+        after.family4Active = false;
+        after.family4RootSoid = 0;
+        after.family4Version = kInitialFamilyVersion;
+        after.family4Residents = {};
+        after.family4ResidentCount = 0;
+    } else if (familyType == kRosterFamilyType && before.family3Active
+               && familyRootSoid == before.family3RootSoid) {
+        after.family3Active = false;
+        after.family3RootSoid = 0;
+        after.family3Version = kInitialFamilyVersion;
+        after.family3Phase = Family3Phase::normal;
+    } else if (familyType == kBannerFamilyType && before.family0Active && familyRootSoid != 0
+               && familyRootSoid == before.family4RootSoid) {
+        after.family0Active = false;
+        after.family0Version = kInitialFamilyVersion;
+        after.family0Character = 0;
+        after.pendingBannerRoot = 0;
     }
 }
 

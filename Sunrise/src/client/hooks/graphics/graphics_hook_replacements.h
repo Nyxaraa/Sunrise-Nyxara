@@ -118,11 +118,6 @@ using ProtectedEntries = std::array<hooking::detour::ProtectedCodeEntry, kProtec
 /** @return Unwind-backed call-lifetime bodies needed for safe detachment. */
 [[nodiscard]] ProtectedEntries protected_entries() noexcept;
 
-/** SDK-compatible IDXGISwapChain::Present detour. */
-HRESULT STDMETHODCALLTYPE present(IDXGISwapChain* swapChain,
-                                  UINT syncInterval,
-                                  UINT flags) noexcept;
-
 } // namespace replacement
 
 } // namespace sunrise::client::hooks::graphics

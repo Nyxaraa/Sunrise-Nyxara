@@ -81,7 +81,7 @@ constexpr std::size_t kMaximumPaddingBitCount = 7;
 
 } // namespace
 
-/** Parses one sparse authoritative delta and keeps only the reflected typed state. */
+/** Parses one sparse client-state delta; the resulting report carries no mission authority. */
 bool parse_client_authoritative_data(std::span<const std::byte> input,
                                      ClientAuthoritativeData& update) noexcept {
     update = {};
@@ -113,6 +113,4 @@ bool parse_client_authoritative_data(std::span<const std::byte> input,
     return true;
 }
 
-} // namespace
-  // sunrise::middleware::bap::activity_message::client_authoritative_data
-  // client_authoritative_data
+} // namespace sunrise::middleware::bap::activity_message::client_authoritative_data

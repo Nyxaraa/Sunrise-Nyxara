@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <string_view>
+
 namespace sunrise::core::ui::busy {
 
 /** Work that stalls the game long enough to look like a hang without a visible sign. */
@@ -8,6 +11,7 @@ enum class Task : unsigned {
     initialization,
     contentExtraction,
     cacheWrite,
+    sdkGeneration,
     count,
 };
 
@@ -38,6 +42,13 @@ void begin(Task task) noexcept;
 
 /** @param task Work that has finished. Safe from any thread. */
 void end(Task task) noexcept;
+
+/** Publishes one task's latest real progress for the loading overlay. */
+void set_progress(Task task,
+                  std::uint32_t current,
+                  std::uint32_t total,
+                  std::string_view detail,
+                  bool determinate = true) noexcept;
 
 /**
  * Draws the running-work overlay inside the caller's active Dear ImGui frame.

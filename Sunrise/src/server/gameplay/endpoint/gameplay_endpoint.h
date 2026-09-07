@@ -40,6 +40,15 @@ void shutdown() noexcept;
 /** @return Endpoint published in the join descriptor. Zero when the channel is disabled. */
 [[nodiscard]] state::gameplay::Endpoint advertised() noexcept;
 
+/**
+ * Reports the host port one activity-host row advertises.
+ * Every row takes its own port. So the client never shares one channel between two hosts, and
+ * never has to swap a security association in place when it moves between them.
+ * @param row Activity-host row index.
+ * @return That row's bound port, or the primary port when the row is out of range.
+ */
+[[nodiscard]] std::uint16_t host_port(std::size_t row) noexcept;
+
 /** Identity the join descriptor publishes beside the endpoint. */
 struct Identity {
     /** Nonzero machine identity. A zero identity makes the descriptor read as absent. */

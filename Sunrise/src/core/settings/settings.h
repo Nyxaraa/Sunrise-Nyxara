@@ -13,12 +13,18 @@
 
 namespace sunrise::core::settings {
 
+/** Activity SDK generator policy. Generation has no switch, because the host needs the SDK. */
+struct ActivitySdkGenerationSettings final {
+    /** Writes the sdk/lua declaration tree. */
+    bool luaDeclarations{true};
+};
+
 /**
  * Layout version of the settings file this build writes and expects.
- * Raise it when a key is renamed, removed, changes meaning, or must take a new default.
- * Adding a key needs no raise, because a missing key already takes its default.
+ * Raise it when a key is renamed, removed, changes meaning, or must take a new default. Adding a
+ * key needs no raise, because a missing key already takes its default.
  */
-inline constexpr std::uint32_t kSettingsVersion = 6;
+inline constexpr std::uint32_t kSettingsVersion = 16;
 
 /** Parsed read-only process settings. */
 struct Settings {
@@ -27,8 +33,15 @@ struct Settings {
      * every file written before versioning. Checked against kSettingsVersion at load.
      */
     std::uint32_t version{};
+    /**
+     * Completes released exotic weapon catalysts while resolving client item state.
+     * Authored under `state.investment`, with the rest of the investment content policy.
+     */
+    bool completeExoticCatalysts{true};
     /** Core-owned sink and channel policy. */
     log::Settings logging;
+    /** Core-owned boot gate for activity SDK generation. */
+    ActivitySdkGenerationSettings activitySdkGeneration;
     /** Options used only by the Client layer. */
     client::Settings client;
     /** Options used only by the Server layer. */

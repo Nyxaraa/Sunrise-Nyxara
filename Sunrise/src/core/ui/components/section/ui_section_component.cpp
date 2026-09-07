@@ -3,14 +3,15 @@
 #include <imgui.h>
 
 #include "../../scaling/dpi/ui_dpi_scaling.h"
+#include "../label/ui_label_component.h"
 
 namespace sunrise::core::ui::components::section {
 namespace {
 
 /** 3 authored pixels keep the rail visible beside short and wrapped headers. */
 constexpr float kRailWidth = 3.0F;
-/** 7 authored pixels separate the rail from the first title glyph. */
-constexpr float kRailSpacing = 7.0F;
+/** The rest of the shared inset, so the title starts on the same column as every other label. */
+constexpr float kRailSpacing = label::kInset - kRailWidth;
 /** 2 authored pixels inset the rail ends inside the whole header group. */
 constexpr float kRailVerticalInset = 2.0F;
 /** 3 authored pixels soften the rail without making a large pill. */

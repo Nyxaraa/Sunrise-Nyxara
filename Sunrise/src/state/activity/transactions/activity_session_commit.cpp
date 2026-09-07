@@ -1,22 +1,38 @@
+#include <Windows.h>
+
 #include "../../runtime/storage/internal.h"
 #include "../destination/activity_destination_validation.h"
 #include "../runtime.h"
 #include "internal.h"
 
 namespace sunrise::state::activity {
+namespace {
+
+/** The wire time origin counts whole seconds and the system tick counts milliseconds. */
+constexpr std::uint64_t kMillisecondsPerSecond = 1'000;
+
+/** @return The whole-second origin this activity session hands to every one of its members. */
+[[nodiscard]] std::uint64_t session_time_origin() noexcept {
+    return GetTickCount64() / kMillisecondsPerSecond;
+}
+
+} // namespace
 
 /** Commits one prepared activity-session allocation when its revisions still match. */
 bool commit(PendingAllocation& allocation) noexcept {
     // Take the plan first so no transaction can replay, pass or fail.
     const PendingAllocation prepared = allocation;
     allocation = {};
+    // A fresh plan must name the id the allocator is about to publish. A re-created plan names one
+    // it published before, and its prepare has already proved the counter is behind the allocator.
+    const bool namesNextId =
+        prepared.sessionId
+        == transactions::compose_session_soid(prepared.soidBase, prepared.expectedNextSessionId);
     if (!prepared.prepared || prepared.sessionId == kAbsentSessionId
         || prepared.expectedStateRevision == kInvalidRevision
         || prepared.expectedAllocatorRevision == kInvalidRevision
-        || prepared.sessionId
-               != transactions::compose_session_soid(prepared.soidBase,
-                                                     prepared.expectedNextSessionId)
-        || prepared.targetSlot >= kSessionCapacity || !destination::valid(prepared.destination)) {
+        || (!prepared.recreated && !namesNextId) || prepared.targetSlot >= kSessionCapacity
+        || !destination::valid(prepared.destination)) {
         return false;
     }
 
@@ -44,9 +60,14 @@ bool commit(PendingAllocation& allocation) noexcept {
     record.destination = prepared.destination;
     record.sessionId = prepared.sessionId;
     record.createdRevision = state.stateRevision;
+    record.timeOrigin = session_time_origin();
     record.recordRevision = state.stateRevision;
     record.occupied = true;
-    transactions::advance_allocator(state);
+    if (!prepared.recreated) {
+        // The counter a re-created id fills was spent when it was first published, so the
+        // allocator stays where it is and no later allocation can collide with it.
+        transactions::advance_allocator(state);
+    }
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
     return true;
 }

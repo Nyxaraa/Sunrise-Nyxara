@@ -13,6 +13,12 @@ Request parse(std::span<const std::byte> input) noexcept {
 
     Request parsed;
     parsed.kind = root.kind;
+    if (parsed.kind == RequestKind::configuration) {
+        if (root.hasActivityMessage && !parse_activity(root.activityMessage, parsed.activity)) {
+            return {};
+        }
+        return parsed;
+    }
     if (parsed.kind != RequestKind::advertisementUpdate || !root.hasAdvertisementMessage) {
         return parsed;
     }

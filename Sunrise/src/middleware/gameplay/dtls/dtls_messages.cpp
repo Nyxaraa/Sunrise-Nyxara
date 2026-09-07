@@ -22,26 +22,36 @@ constexpr std::size_t kPeerTagOffset = 2;
 /** Four bytes close the header. Both handshake packets leave them zero. */
 constexpr std::size_t kReservedOffset = 4;
 
+/** Every verification tag is a 16-bit field. */
+constexpr std::size_t kTagBytes = sizeof(std::uint16_t);
+/** Tags carried between the cookie and the address: responder, responder, requester, two spare. */
+constexpr std::size_t kInitAckTagCount = 5;
+/** An IPv4 address travels as four bytes in dotted order. */
+constexpr std::size_t kIpv4Bytes = 4;
+/** The requester address is the IPv4 bytes and a 16-bit port. */
+constexpr std::size_t kAddressBytes = kIpv4Bytes + kTagBytes;
+
 /** The requester's own tag opens the init body. */
 constexpr std::size_t kInitTagOffset = kHeaderSize;
 /** The security id closes the init. */
-constexpr std::size_t kInitSecurityIdOffset = kInitTagOffset + 2;
+constexpr std::size_t kInitSecurityIdOffset = kInitTagOffset + kTagBytes;
 
 /** The timestamp opens the init ack body. */
 constexpr std::size_t kInitAckTimestampOffset = kHeaderSize;
 /** The cookie follows the timestamp. */
-constexpr std::size_t kInitAckCookieOffset = kInitAckTimestampOffset + 4;
-/** Five tags follow the cookie: responder, responder, requester, then two migration tags. */
+constexpr std::size_t kInitAckCookieOffset = kInitAckTimestampOffset + sizeof(std::uint32_t);
+/** The tag block follows the cookie. */
 constexpr std::size_t kInitAckTagsOffset = kInitAckCookieOffset + kCookieSize;
-/** The requester address follows the tags, as four address bytes and a port. */
-constexpr std::size_t kInitAckAddressOffset = kInitAckTagsOffset + 10;
+/** The requester address follows the tags. */
+constexpr std::size_t kInitAckAddressOffset = kInitAckTagsOffset + kInitAckTagCount * kTagBytes;
 /** The security id closes the init ack. */
-constexpr std::size_t kInitAckSecurityIdOffset = kInitAckAddressOffset + 6;
+constexpr std::size_t kInitAckSecurityIdOffset = kInitAckAddressOffset + kAddressBytes;
 
 /** The echoed init ack follows the cookie echo header. */
 constexpr std::size_t kCookieEchoInitAckOffset = kHeaderSize;
 /** The security id follows the address block and precedes the key. */
-constexpr std::size_t kCookieEchoSecurityIdOffset = kCookieEchoInitAckOffset + kInitAckSize + 41;
+constexpr std::size_t kCookieEchoSecurityIdOffset =
+    kCookieEchoInitAckOffset + kInitAckSize + kCookieEchoAddressBlockSize;
 /** The public key closes the cookie echo. */
 constexpr std::size_t kCookieEchoKeyOffset = kCookieEchoSize - kPublicKeySize;
 
@@ -104,11 +114,11 @@ void write_address(std::span<std::byte> output,
                    std::uint32_t address,
                    std::uint16_t port) noexcept {
     // The address travels in dotted order and the port beside it travels low byte first.
-    output[offset] = static_cast<std::byte>((address >> 24U) & kByteMask);
-    output[offset + 1] = static_cast<std::byte>((address >> 16U) & kByteMask);
-    output[offset + 2] = static_cast<std::byte>((address >> kByteBits) & kByteMask);
-    output[offset + 3] = static_cast<std::byte>(address & kByteMask);
-    write_memory_order(output, offset + 4, port, sizeof(std::uint16_t));
+    for (std::size_t index = 0; index < kIpv4Bytes; ++index) {
+        const unsigned shift = static_cast<unsigned>(kIpv4Bytes - 1 - index) * kByteBits;
+        output[offset + index] = static_cast<std::byte>((address >> shift) & kByteMask);
+    }
+    write_memory_order(output, offset + kIpv4Bytes, port, kTagBytes);
 }
 
 } // namespace
@@ -166,9 +176,9 @@ void write_init_ack(const InitAck& initAck, std::array<std::byte, kInitAckSize>&
     write_memory_order(output, kInitAckTimestampOffset, initAck.timestamp, sizeof(std::uint32_t));
     std::copy(initAck.cookie.begin(), initAck.cookie.end(), output.begin() + kInitAckCookieOffset);
     // The requester adopts the first tag as its peer tag and checks the third against its own.
-    write_memory_order(output, kInitAckTagsOffset, initAck.responderTag, sizeof(std::uint16_t));
-    write_memory_order(output, kInitAckTagsOffset + 2, initAck.responderTag, sizeof(std::uint16_t));
-    write_memory_order(output, kInitAckTagsOffset + 4, initAck.requesterTag, sizeof(std::uint16_t));
+    write_memory_order(output, kInitAckTagsOffset, initAck.responderTag, kTagBytes);
+    write_memory_order(output, kInitAckTagsOffset + kTagBytes, initAck.responderTag, kTagBytes);
+    write_memory_order(output, kInitAckTagsOffset + 2 * kTagBytes, initAck.requesterTag, kTagBytes);
     // The last two tags carry a migrating association's old pair. A fresh one leaves them zero.
     write_address(output, kInitAckAddressOffset, initAck.address, initAck.port);
     std::copy(initAck.securityId.begin(),

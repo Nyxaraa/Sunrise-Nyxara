@@ -1,16 +1,28 @@
 #include <array>
+#include <cstring>
+#include <span>
 
+#include "../../../core/logging/log.h"
+#include "../../../state/steam/steam_state.h"
 #include "../internal.h"
 
 namespace sunrise::steam::interfaces::methods {
 namespace {
 
+namespace lobby_state = sunrise::state::steam;
+
 /** Steam callback id for a finished lobby entry. */
 constexpr int kLobbyEnterCallback = 504;
 /** Steam callback id for a finished lobby creation. */
 constexpr int kLobbyCreatedCallback = 513;
-/** Steam result code for success. */
-constexpr int kResultOk = 1;
+/** Steam callback id for a received lobby chat message. */
+constexpr int kLobbyChatMsgCallback = 507;
+/** Steam chat entry type for an ordinary chat message. */
+constexpr std::uint8_t kChatEntryTypeMessage = 1;
+/** Padding aligns the chat id after the one-byte entry type. */
+constexpr std::size_t kChatTypePadding = 3;
+/** Steam's lobby chat callback is 24 bytes. */
+constexpr std::size_t kLobbyChatMsgSize = 24;
 /** Steam lobby-entry response for a successful join. */
 constexpr DWORD kLobbyEnterSuccess = 1;
 /** Made-up lobby ids use Steam's chat-lobby account-type prefix. */
@@ -38,8 +50,18 @@ struct LobbyCreated {
     std::uint64_t lobby{};
 };
 
+/** Steam lobby chat callback payload layout. */
+struct LobbyChatMsg {
+    std::uint64_t lobby{};
+    std::uint64_t user{};
+    std::uint8_t entryType{};
+    std::array<std::byte, kChatTypePadding> padding{};
+    std::uint32_t chatId{};
+};
+
 static_assert(sizeof(LobbyEnter) == kLobbyEnterSize);
 static_assert(sizeof(LobbyCreated) == kLobbyCreatedSize);
+static_assert(sizeof(LobbyChatMsg) == kLobbyChatMsgSize);
 
 } // namespace
 
@@ -77,23 +99,76 @@ ApiCall join_lobby([[maybe_unused]] void* self, std::uint64_t lobby) noexcept {
     return queue_callback(kLobbyEnterCallback, call, &entered, sizeof(entered)) ? call : 0;
 }
 
-/** Drops a lobby chat payload. Nothing is kept. @return True for a size of zero or more. */
+/**
+ * Retains one chat message and tells the local member it arrived.
+ * @param lobby Destination lobby named by the Client.
+ * @param data Exact submitted body, which the Client builds at 0x410 bytes.
+ * @param size Submitted byte count.
+ * @return True only once the record is retained and its callback is queued.
+ */
 bool send_lobby_chat([[maybe_unused]] void* self,
-                     [[maybe_unused]] std::uint64_t lobby,
-                     [[maybe_unused]] const void* data,
+                     std::uint64_t lobby,
+                     const void* data,
                      int size) noexcept {
-    return size >= 0;
+    const std::uint64_t sender = local_steam_id();
+    std::uint32_t chatId = 0;
+    const bool retained =
+        data != nullptr && size > 0
+        && lobby_state::retain_chat_message(
+            lobby,
+            sender,
+            std::span{static_cast<const std::byte*>(data), static_cast<std::size_t>(size)},
+            chatId);
+    if (!retained) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::warn,
+                         "ev=steam stage=lobby_chat_send result=refuse");
+        return false;
+    }
+    const LobbyChatMsg message{lobby, sender, kChatEntryTypeMessage, {}, chatId};
+    if (!queue_callback(kLobbyChatMsgCallback, 0, &message, sizeof(message))) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::warn,
+                         "ev=steam stage=lobby_chat_send result=queue_full");
+        return false;
+    }
+    core::log::write(core::log::Channel::client,
+                     core::log::Level::debug,
+                     "ev=steam stage=lobby_chat_send result=ok");
+    return true;
 }
 
-/** @return Zero. The shim keeps no lobby chat history. */
+/**
+ * Serves one retained chat message back to its reader.
+ * @param messageIndex Chat id the callback handed the Client.
+ * @param sender Optional storage for the member the message is attributed to.
+ * @param data Caller body storage, which must hold the whole retained record.
+ * @param entryType Optional storage for the Steam chat entry type.
+ * @return Retained body size, or zero when no record matches or it does not fit.
+ */
 int get_lobby_chat_entry([[maybe_unused]] void* self,
-                         [[maybe_unused]] std::uint64_t lobby,
-                         [[maybe_unused]] int messageIndex,
-                         [[maybe_unused]] std::uint64_t* sender,
-                         [[maybe_unused]] void* data,
-                         [[maybe_unused]] int dataCapacity,
-                         [[maybe_unused]] int* entryType) noexcept {
-    return 0;
+                         std::uint64_t lobby,
+                         int messageIndex,
+                         std::uint64_t* sender,
+                         void* data,
+                         int dataCapacity,
+                         int* entryType) noexcept {
+    if (data == nullptr || dataCapacity <= 0 || messageIndex < 0) {
+        return 0;
+    }
+    lobby_state::ChatRecord record{};
+    if (!lobby_state::chat_message(lobby, static_cast<std::uint32_t>(messageIndex), record)
+        || record.size > static_cast<std::uint32_t>(dataCapacity)) {
+        return 0;
+    }
+    std::memcpy(data, record.body.data(), record.size);
+    if (sender != nullptr) {
+        *sender = record.sender;
+    }
+    if (entryType != nullptr) {
+        *entryType = kChatEntryTypeMessage;
+    }
+    return static_cast<int>(record.size);
 }
 
 } // namespace sunrise::steam::interfaces::methods

@@ -6,18 +6,31 @@
 
 namespace sunrise::middleware::bap::activity_message {
 
-/** Only discriminator 1 carries the supported join envelope; variant 2 is rejected. */
+/** Discriminator 1 carries the peer-heard mask and is the only variant this client sends. */
 inline constexpr std::byte kTransportDiscriminator{1};
+/** Discriminator 2 omits the peer-heard mask but is accepted by the native receiver. */
+inline constexpr std::byte kCompactTransportDiscriminator{2};
 /** The activity decoder rejects payloads larger than 0x7D800 bytes. */
 inline constexpr std::size_t kMaximumPayloadSize = 0x7D800;
 /** Zero cannot name an allocated activity session. */
 inline constexpr std::uint64_t kAbsentSessionId = 0;
+/** FNV-1 32-bit offset basis. The client hashes no string to it, so it is its empty-name value. */
+inline constexpr std::uint32_t kEmptyNameHash = 0x811C9DC5;
+
+/** Exact service-8 body arm selected by its leading discriminator. */
+enum class RequestVariant : std::uint8_t {
+    none,
+    withPeerHeardMask = 1,
+    withoutPeerHeardMask = 2,
+};
 
 /** Checked service-8 envelope fields, borrowed from caller-owned storage. */
 struct Request final {
-    std::uint64_t accountHandle{};
+    /** Activity session the link owns. It equals the id the svc-17 handoff named. */
+    std::uint64_t sessionId{};
     std::uint32_t messageType{};
     std::uint32_t peerHeardMask{};
+    RequestVariant variant{RequestVariant::none};
     /** Sensitive payload. Never keep, log, capture, cache or save this view. */
     std::span<const std::byte> payload{};
 };
@@ -29,9 +42,9 @@ struct JoinRequest final {
     /** 8 wire bytes, low byte first, that name this client inside membership State. */
     std::uint64_t memberKey{};
     /**
-     * The character the client signed in on, or zero when the payload stops short of it. The
-     * roster's participation key must be this character: the client binds the player by matching
-     * it, so a different character of the same account binds nothing.
+     * The character the client signed in on. The roster's participation key must be this
+     * character: the client binds the player by matching it, so another character of the same
+     * account binds nothing.
      */
     std::uint64_t characterSoid{};
 };

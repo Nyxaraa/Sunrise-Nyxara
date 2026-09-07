@@ -3,8 +3,13 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <new>
+#include <optional>
 #include <span>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <variant>
 
 #include "../../../middleware/bap/family_unsubscription.h"
@@ -36,81 +41,143 @@ enum class BodyCodec : std::uint8_t {
 
 /** Equipment mutation and the exact QueueZ after-image promised by its response. */
 struct EquipmentSwapTransaction {
-    state::PendingEquipmentSwap pending{};
+    std::unique_ptr<state::PendingEquipmentSwap> pending{};
     queuez::EquipmentSwap update{};
 };
 
 /** Socket mutation and the exact QueueZ after-image promised by its response. */
 struct SocketPlugTransaction {
-    state::PendingSocketPlug pending{};
+    std::unique_ptr<state::PendingSocketPlug> pending{};
     queuez::SocketPlug update{};
 };
 
 /** Subclass ability selection and the exact QueueZ after-image promised by its response. */
 struct SubclassSelectionTransaction {
-    state::PendingSubclassSelection pending{};
+    std::unique_ptr<state::PendingSubclassSelection> pending{};
     queuez::SubclassSelection update{};
 };
 
 /** Item-state mutation and the exact QueueZ character after-image promised by its response. */
 struct ItemStateTransaction {
-    state::PendingItemState pending{};
+    std::unique_ptr<state::PendingItemState> pending{};
+    queuez::EquipmentSwap update{};
+};
+
+/** Artifact purchase and the exact selected-character after-image promised by opcode 901. */
+struct ArtifactPurchaseTransaction {
+    std::unique_ptr<state::PendingArtifactPurchase> pending{};
+    queuez::EquipmentSwap update{};
+};
+
+/** Current-activity mutation and the exact QueueZ character after-image sent with its reply. */
+struct CurrentActivityTransaction {
+    state::PendingCurrentActivity pending{};
     queuez::EquipmentSwap update{};
 };
 
 /** Character acquisition and its exact QueueZ after-image. */
 struct ItemAcquisitionTransaction {
-    state::PendingItemAcquisition pending{};
+    std::unique_ptr<state::PendingItemAcquisition> pending{};
     queuez::ItemAcquisition update{};
 };
 
 /** Profile acquisition and its exact account/resident QueueZ after-image. */
 struct ProfileItemAcquisitionTransaction {
-    state::PendingProfileItemAcquisition pending{};
+    std::unique_ptr<state::PendingProfileItemAcquisition> pending{};
     queuez::ProfileItemAcquisition update{};
 };
 
 /** Dismantle mutation and its exact QueueZ after-image. */
 struct ItemDismantleTransaction {
-    state::PendingItemDismantle pending{};
+    std::unique_ptr<state::PendingItemDismantle> pending{};
     queuez::ItemDismantle update{};
+};
+
+/** Record-claim reward batch and its exact Queuez after-image. */
+struct RecordRewardGrantTransaction {
+    std::unique_ptr<state::PendingRecordRewardGrant> pending{};
+    queuez::RecordRewardGrant update{};
+};
+
+/** Season reward grant plus the exact Queuez after-image promised by opcode 2400. */
+struct SeasonPassRewardTransaction {
+    std::unique_ptr<state::PendingSeasonPassReward> pending{};
+    std::variant<std::monostate,
+                 queuez::ItemAcquisition,
+                 queuez::ProfileItemAcquisition,
+                 queuez::RecordRewardGrant>
+        update{};
 };
 
 /** Optional side effect produced while decoding one authenticated service body. */
 struct ServiceOutcome {
     bool hasSubscription{};
+    /** A Triumph claim changed the account flag bank and its image has to follow. */
+    bool hasRecordClaim{};
+    bool hasArtifactReset{};
+    state::ArtifactResetResult artifactReset{};
     middleware::queuez::Subscription subscription{};
     bool hasUnsubscription{};
     middleware::bap::family_unsubscription::Request unsubscription{};
     bool hasChangeCharacter{};
-    queuez::ChangeCharacter changeCharacter{};
     bool hasSelectCharacter{};
-    queuez::SelectCharacter selectCharacter{};
-    /** One service owns at most one independently versioned transaction. */
+    /** One service owns at most one independently versioned, exact-sized transaction. */
     using Transaction = std::variant<std::monostate,
-                                     state::activity::PendingAllocation,
-                                     activity_message::ActivityPlan,
-                                     state::matchmaking::PendingMutation,
-                                     EquipmentSwapTransaction,
-                                     SubclassSelectionTransaction,
-                                     SocketPlugTransaction,
-                                     ItemStateTransaction,
-                                     ItemAcquisitionTransaction,
-                                     ProfileItemAcquisitionTransaction,
-                                     ItemDismantleTransaction>;
+                                     std::unique_ptr<state::activity::PendingAllocation>,
+                                     std::unique_ptr<activity_message::ActivityPlan>,
+                                     std::unique_ptr<state::matchmaking::PendingMutation>,
+                                     std::unique_ptr<queuez::ChangeCharacter>,
+                                     std::unique_ptr<queuez::SelectCharacter>,
+                                     std::unique_ptr<EquipmentSwapTransaction>,
+                                     std::unique_ptr<SubclassSelectionTransaction>,
+                                     std::unique_ptr<SocketPlugTransaction>,
+                                     std::unique_ptr<ItemStateTransaction>,
+                                     std::unique_ptr<ArtifactPurchaseTransaction>,
+                                     std::unique_ptr<CurrentActivityTransaction>,
+                                     std::unique_ptr<ItemAcquisitionTransaction>,
+                                     std::unique_ptr<ProfileItemAcquisitionTransaction>,
+                                     std::unique_ptr<ItemDismantleTransaction>,
+                                     std::unique_ptr<RecordRewardGrantTransaction>,
+                                     std::unique_ptr<SeasonPassRewardTransaction>,
+                                     std::unique_ptr<state::PendingSettingsUpdate>>;
     Transaction transaction{};
 };
+
+/** Allocates only the selected transaction outside the request's already deep call stack. */
+template <typename Transaction, typename... Args>
+[[nodiscard]] Transaction* emplace_transaction(ServiceOutcome& outcome, Args&&... args) noexcept {
+    static_assert(std::is_nothrow_constructible_v<Transaction, Args...>);
+    outcome.transaction.template emplace<std::monostate>();
+    auto storage =
+        std::unique_ptr<Transaction>{new (std::nothrow) Transaction(std::forward<Args>(args)...)};
+    if (storage == nullptr) {
+        return nullptr;
+    }
+    auto* transaction = storage.get();
+    outcome.transaction.template emplace<std::unique_ptr<Transaction>>(std::move(storage));
+    return transaction;
+}
 
 /** @return The service transaction of the requested type, or null for another route. */
 template <typename Transaction>
 [[nodiscard]] Transaction* transaction_if(ServiceOutcome& outcome) noexcept {
-    return std::get_if<Transaction>(&outcome.transaction);
+    auto* storage = std::get_if<std::unique_ptr<Transaction>>(&outcome.transaction);
+    return storage == nullptr ? nullptr : storage->get();
 }
 
 /** @return The service transaction of the requested type, or null for another route. */
 template <typename Transaction>
 [[nodiscard]] const Transaction* transaction_if(const ServiceOutcome& outcome) noexcept {
-    return std::get_if<Transaction>(&outcome.transaction);
+    const auto* storage = std::get_if<std::unique_ptr<Transaction>>(&outcome.transaction);
+    return storage == nullptr ? nullptr : storage->get();
+}
+
+[[nodiscard]] inline bool has_transaction(const ServiceOutcome& outcome) noexcept {
+    return outcome.transaction.index() != 0;
+}
+
+inline void clear_transaction(ServiceOutcome& outcome) noexcept {
+    outcome.transaction.template emplace<std::monostate>();
 }
 
 /** Outbound delivery behavior picked for one authenticated request service. */
@@ -126,7 +193,6 @@ struct ServiceRoute {
     ResponseMode responseMode{};
     middleware::bap::ResponseService response{};
     BodyCodec bodyCodec{};
-    std::string_view successEvent{};
 };
 
 /** Owns encrypted service-to-response routing. */
@@ -140,6 +206,11 @@ namespace routing {
 namespace diagnostics {
 
 void report_failure(std::uint16_t service, std::string_view stage) noexcept;
+
+/** Reports one refusal that names which branch refused. */
+void report_failure(std::uint16_t service,
+                    std::string_view stage,
+                    std::string_view reason) noexcept;
 
 } // namespace diagnostics
 
@@ -174,7 +245,8 @@ namespace body {
  * Processes a request body and encodes a correlated body when the route needs one.
  * @param route Service route data found earlier.
  * @param queuezState Queuez versions and residents set up by this BAP peer.
- * @param activitySessionId Activity capability allocated through this BAP session.
+ * @param activity Exact ActivityClient generation owned by this BAP session.
+ * @param rosterDecode Last complete msg-5 identity map delivered on this connection.
  * @param matchmakingContext State-owned logical context for this BAP session.
  * @param requestBody Borrowed decrypted request body.
  * @param output Caller-owned response-body storage.
@@ -184,7 +256,8 @@ namespace body {
  */
 [[nodiscard]] bool process(const ServiceRoute& route,
                            const queuez::SessionState& queuezState,
-                           std::uint64_t activitySessionId,
+                           const ActivityClientBinding& activity,
+                           const RosterDecodeMap& rosterDecode,
                            state::matchmaking::ContextHandle matchmakingContext,
                            std::span<const std::byte> requestBody,
                            std::span<std::byte> output,
@@ -195,6 +268,13 @@ namespace body {
 
 /** Owns server-initiated encrypted frames appended after correlated replies. */
 namespace push {
+
+/**
+ * Canonicalizes the account before any family builder reads it.
+ * Families 0, 3 and 4 each snapshot the account, so a migration inside one builder would leave
+ * the others describing a different account. Idempotent.
+ */
+void ensure_account_canonical() noexcept;
 
 /**
  * Appends the queuez snapshots one subscription needs, including the Family-4 companion.
@@ -223,14 +303,40 @@ void append_queuez_notification(Scratch& scratch,
                                 bool& armsBannerRepush) noexcept;
 
 /** Appends one next-version full Family-4 snapshot used to resynchronize another peer. */
-[[nodiscard]] bool
-append_account_resync_notification(Scratch& scratch,
-                                   const queuez::SessionState& before,
-                                   std::span<const std::byte, state::kAesKeySize> key,
-                                   std::array<std::byte, state::kBapNonceSize>& nonce,
-                                   std::span<std::byte> response,
-                                   std::size_t& written,
-                                   queuez::SessionState& after) noexcept;
+[[nodiscard]] bool append_account_resync_notification(
+    Scratch& scratch,
+    const queuez::SessionState& before,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    std::span<const std::byte, state::kAesKeySize> key,
+    std::array<std::byte, state::kBapNonceSize>& nonce,
+    std::span<std::byte> response,
+    std::size_t& written,
+    queuez::SessionState& after) noexcept;
+
+/** Publishes one Season package as new residents plus their acquisition descriptors. */
+[[nodiscard]] bool append_season_pass_package_notification(
+    Scratch& scratch,
+    const queuez::SessionState& before,
+    const state::PendingDirectItemBundle& mutation,
+    std::uint16_t rewardIndex,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    std::span<const std::byte, state::kAesKeySize> key,
+    std::span<const std::byte, state::kBapNonceSize> nonce,
+    std::span<std::byte> response,
+    std::size_t& written,
+    queuez::SessionState& after) noexcept;
+
+/** Publishes every item and the claimed record in one Family-4 revision. */
+[[nodiscard]] bool append_record_reward_notification(
+    Scratch& scratch,
+    const queuez::SessionState& before,
+    const queuez::RecordRewardGrant& update,
+    const state::PendingRecordRewardGrant& mutation,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    std::span<const std::byte, state::kAesKeySize> key,
+    std::span<const std::byte, state::kBapNonceSize> nonce,
+    std::span<std::byte> response,
+    std::size_t& written) noexcept;
 
 /**
  * Appends the family-zero banner pair as its own notification.
@@ -256,8 +362,9 @@ append_account_resync_notification(Scratch& scratch,
                                               queuez::SessionState& after) noexcept;
 
 /**
- * Appends the family-zero move that follows an opcode-504 pick.
- * The Client holds the objIdx-1 buffer for one character at a time, so the pair moves with it.
+ * Appends the family-zero pair that follows an opcode-504 pick.
+ * The Client holds the objIdx-1 buffer for one character at a time, so the pair moves with it. A
+ * pick naming the character it already holds republishes the pair in place.
  * @param before Queuez state after the family-four move.
  * @param selectedCharacter Character the pick named.
  * @param key Active AES-GCM session key.
@@ -314,29 +421,88 @@ append_select_character_notification(Scratch& scratch,
                                      std::size_t& written) noexcept;
 
 /** Appends the opcode-403 Family-4 character upsert that exposes the equipped item swap. */
+[[nodiscard]] bool append_equipment_swap_notification(
+    Scratch& scratch,
+    const queuez::EquipmentSwap& swap,
+    const state::PendingEquipmentSwap& mutation,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    std::span<const std::byte, state::kAesKeySize> key,
+    std::span<const std::byte, state::kBapNonceSize> nonce,
+    std::span<std::byte> response,
+    std::size_t& written) noexcept;
+
+/** Appends the Family-4 character upsert carrying the character's new current activity. */
 [[nodiscard]] bool
-append_equipment_swap_notification(Scratch& scratch,
-                                   const queuez::EquipmentSwap& swap,
-                                   const state::PendingEquipmentSwap& mutation,
+append_current_activity_notification(Scratch& scratch,
+                                     const queuez::EquipmentSwap& swap,
+                                     const state::PendingCurrentActivity& mutation,
+                                     std::span<const std::byte, state::kAesKeySize> key,
+                                     std::span<const std::byte, state::kBapNonceSize> nonce,
+                                     std::span<std::byte> response,
+                                     std::size_t& written) noexcept;
+
+/** Appends the opcode-406 Family-4 character upsert carrying changed inventory-row flags. */
+[[nodiscard]] bool append_item_state_notification(
+    Scratch& scratch,
+    const queuez::EquipmentSwap& update,
+    const state::PendingItemState& mutation,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    std::span<const std::byte, state::kAesKeySize> key,
+    std::span<const std::byte, state::kBapNonceSize> nonce,
+    std::span<std::byte> response,
+    std::size_t& written) noexcept;
+
+/** Appends the selected-character upsert carrying one artifact ownership transition. */
+[[nodiscard]] bool append_artifact_purchase_notification(
+    Scratch& scratch,
+    const queuez::EquipmentSwap& update,
+    const state::PendingArtifactPurchase& mutation,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    std::span<const std::byte, state::kAesKeySize> key,
+    std::span<const std::byte, state::kBapNonceSize> nonce,
+    std::span<std::byte> response,
+    std::size_t& written) noexcept;
+
+/**
+ * Appends the global family-five unlock overrides as one full-snapshot notification.
+ * @param scratch Lock-owned transform buffers.
+ * @param version Family version this frame carries; -1 is refused by the Client.
+ * @param key Active AES-GCM session key.
+ * @param nonce Push-direction nonce after any correlated response.
+ * @param response Caller-owned output containing prior frames.
+ * @param written Existing byte count, updated by a complete frame.
+ * @return True when State encodes and the whole frame fits.
+ */
+[[nodiscard]] bool
+append_family5_override_notification(Scratch& scratch,
+                                     std::int32_t version,
+                                     std::span<const std::byte, state::kAesKeySize> key,
+                                     std::span<const std::byte, state::kBapNonceSize> nonce,
+                                     std::span<std::byte> response,
+                                     std::size_t& written) noexcept;
+
+/** Appends the account and selected-character state changed by an artifact reset. */
+[[nodiscard]] bool
+append_artifact_reset_notification(Scratch& scratch,
+                                   const queuez::EquipmentSwap& update,
                                    std::span<const std::byte, state::kAesKeySize> key,
                                    std::span<const std::byte, state::kBapNonceSize> nonce,
                                    std::span<std::byte> response,
                                    std::size_t& written) noexcept;
 
-/** Appends the opcode-406 Family-4 character upsert carrying changed inventory-row flags. */
+/** Appends one current item resident after artifact reset cleared an authored socket. */
 [[nodiscard]] bool
-append_item_state_notification(Scratch& scratch,
-                               const queuez::EquipmentSwap& update,
-                               const state::PendingItemState& mutation,
-                               std::span<const std::byte, state::kAesKeySize> key,
-                               std::span<const std::byte, state::kBapNonceSize> nonce,
-                               std::span<std::byte> response,
-                               std::size_t& written) noexcept;
+append_artifact_item_refresh_notification(Scratch& scratch,
+                                          const queuez::EquipmentSwap& update,
+                                          std::uint64_t instanceSoid,
+                                          std::span<const std::byte, state::kAesKeySize> key,
+                                          std::span<const std::byte, state::kBapNonceSize> nonce,
+                                          std::span<std::byte> response,
+                                          std::size_t& written) noexcept;
 
 /**
  * Appends the same-character Family-0 appearance upsert paired with one equipment swap.
- * The
- * update owns its nonce advance only after the complete notification fits.
+ * The update owns its nonce advance only after the complete notification fits.
  */
 [[nodiscard]] bool
 append_equipment_appearance_refresh_notification(Scratch& scratch,
@@ -428,24 +594,25 @@ append_socket_plug_notification(Scratch& scratch,
                                 std::size_t& written) noexcept;
 
 /** Appends the opcode-801 Family-4 subclass item-instance upsert. */
-[[nodiscard]] bool append_subclass_selection_notification(
+[[nodiscard]] bool
+append_subclass_selection_notification(Scratch& scratch,
+                                       const queuez::SubclassSelection& selection,
+                                       const state::PendingSubclassSelection& mutation,
+                                       std::span<const std::byte, state::kAesKeySize> key,
+                                       std::span<const std::byte, state::kBapNonceSize> nonce,
+                                       std::span<std::byte> response,
+                                       std::size_t& written) noexcept;
+
+/** Appends a Family-4 character upsert plus newly acquired item-instance upsert. */
+[[nodiscard]] bool append_item_acquisition_notification(
     Scratch& scratch,
-    const queuez::SubclassSelection& selection,
-    const state::PendingSubclassSelection& mutation,
+    const queuez::ItemAcquisition& acquisition,
+    const state::PendingItemAcquisition& mutation,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
     std::span<const std::byte, state::kAesKeySize> key,
     std::span<const std::byte, state::kBapNonceSize> nonce,
     std::span<std::byte> response,
     std::size_t& written) noexcept;
-
-/** Appends a Family-4 character upsert plus newly acquired item-instance upsert. */
-[[nodiscard]] bool
-append_item_acquisition_notification(Scratch& scratch,
-                                     const queuez::ItemAcquisition& acquisition,
-                                     const state::PendingItemAcquisition& mutation,
-                                     std::span<const std::byte, state::kAesKeySize> key,
-                                     std::span<const std::byte, state::kBapNonceSize> nonce,
-                                     std::span<std::byte> response,
-                                     std::size_t& written) noexcept;
 
 /** Appends one full Family-4 account upsert for a profile-stack acquisition. */
 [[nodiscard]] bool
@@ -456,6 +623,19 @@ append_profile_item_acquisition_notification(Scratch& scratch,
                                              std::span<const std::byte, state::kBapNonceSize> nonce,
                                              std::span<std::byte> response,
                                              std::size_t& written) noexcept;
+
+/** Appends the character/account increment that makes one seasonal XP gain visible in the HUD. */
+[[nodiscard]] bool append_seasonal_experience_notification(
+    Scratch& scratch,
+    const queuez::SessionState& before,
+    std::int32_t amount,
+    std::int32_t mutationSerial,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    std::span<const std::byte, state::kAesKeySize> key,
+    std::span<const std::byte, state::kBapNonceSize> nonce,
+    std::span<std::byte> response,
+    std::size_t& written,
+    queuez::SessionState& after) noexcept;
 
 /** Appends a Family-4 character upsert followed by one empty item-instance release. */
 [[nodiscard]] bool

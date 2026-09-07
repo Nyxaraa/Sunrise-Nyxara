@@ -7,14 +7,7 @@
 
 namespace sunrise::state::build_data::items::details {
 
-/**
- * Installed item definitions used by Collections, character instances, profile stacks, and
- *
- * their native initial plugs. The
- * supported installed build carries 15,424 total item rows, so
- * the next power of two is also a
- * formal upper bound for the deduplicated detail closure.
- */
+/** Detail rows. The installed build carries 15,424 items, so this is the bound above it. */
 inline constexpr std::size_t kDefinitionCapacity = 16384;
 /** Family item instances have 12 fixed ordinary socket lanes. */
 inline constexpr std::size_t kInitialPlugCapacity = 12;

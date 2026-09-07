@@ -10,7 +10,6 @@
 
 namespace sunrise::client::hooks::network::content_config {
 
-using ContentFetch = std::int64_t(__fastcall*)(const char*, const char*, char);
 using ContentTick = void(__fastcall*)(void*);
 
 /** Stable hook slots for local content routing. */
@@ -28,7 +27,6 @@ extern std::array<hooking::detour::Handle, kHookCount> g_handles;
 extern std::array<void*, kHookCount> g_originals;
 extern std::array<void*, kHookCount> g_targetEntries;
 extern std::array<bool, kHookCount> g_accepting;
-extern void* g_contentFetch;
 extern bool g_trackCalls;
 extern volatile LONG g_activeCalls;
 

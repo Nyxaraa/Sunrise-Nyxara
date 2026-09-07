@@ -1,19 +1,22 @@
 #include "material_requirement_catalog.h"
 
 #include <array>
+#include <mutex>
+#include <shared_mutex>
 
 #include "../table.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::state::build_data::material_requirements {
 namespace {
 
-Lock g_lock;
+core::threading::SrwLock g_lock;
 Table<Definition, kDefinitionCapacity> g_definitions;
 
 } // namespace
 
 void clear() noexcept {
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_definitions.clear();
 }
 
@@ -68,7 +71,7 @@ bool replace(std::span<const Definition> definitions) noexcept {
     if (!valid(definitions)) {
         return false;
     }
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     const std::span<Definition> storage = g_definitions.reset(definitions.size());
     if (storage.size() != definitions.size()) {
         return false;
@@ -81,7 +84,7 @@ bool replace(std::span<const Definition> definitions) noexcept {
 
 bool find(std::uint16_t requirementSetIndex, Definition& definition) noexcept {
     definition = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const Definition> rows = g_definitions.rows();
     const bool found = static_cast<std::size_t>(requirementSetIndex) < rows.size();
     if (found) {
@@ -91,12 +94,12 @@ bool find(std::uint16_t requirementSetIndex, Definition& definition) noexcept {
 }
 
 bool snapshot(std::span<Definition> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.snapshot(output, count);
 }
 
 std::size_t count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.count();
 }
 

@@ -1,19 +1,26 @@
-/**
- * Msg 19 targets index a 7,763-record table that the Client reads without a bound check, so a bad
- * index is a crash and not a decode error. Rows 795, 4690 and 5375 hold type code -1 and are the
- * same risk. This validator rejects both before anything acts on the body.
- * A compressed target selector ends decoding: its wire length is not recoverable from this build,
- * so the fields behind one cannot be located.
- */
+/** Validates incident framing and rejects targets unsafe for the Client's unbounded table read. */
 
 #include <algorithm>
-#include <climits>
 
 #include "../../encoding/bit_reader.h"
+#include "../../encoding/byte_order.h"
 #include "incident.h"
 
 namespace sunrise::middleware::bap::activity_message::incident {
 namespace {
+
+/** Retains byte fields even when their wire start is not byte-aligned. */
+[[nodiscard]] bool read_bytes(encoding::bits::Reader& reader,
+                              std::span<std::byte> output) noexcept {
+    for (std::byte& value : output) {
+        std::uint64_t field = 0;
+        if (!reader.read(encoding::kBitsPerByte, field)) {
+            return false;
+        }
+        value = static_cast<std::byte>(field);
+    }
+    return true;
+}
 
 /** @return True when one target index is safe to hand to the Client's table lookup. */
 [[nodiscard]] bool target_allowed(std::uint32_t target, Verdict& verdict) noexcept {
@@ -45,11 +52,13 @@ const char* verdict_name(Verdict verdict) noexcept {
         return "too_many_targets";
     case Verdict::payloadTooLong:
         return "payload_too_long";
+    case Verdict::selectorTooLong:
+        return "selector_too_long";
     }
     return "unknown";
 }
 
-/** Validates one msg-19 body as far as its wire shape allows. */
+/** Validates one incident body from its first target to the end of its payload. */
 Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept {
     parsed = {};
     encoding::bits::Reader reader(payload);
@@ -84,17 +93,33 @@ Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept 
     if (!reader.read(kSelectorPresenceWidth, field)) {
         return Verdict::truncated;
     }
-    if (field != 0) {
-        // Every target is checked by now, which is the part that can crash the Client.
-        parsed.hasCompressedSelector = true;
-        return Verdict::accepted;
+    parsed.hasCompressedSelector = field != 0;
+    if (parsed.hasCompressedSelector) {
+        if (!reader.read(kSelectorLengthWidth, field)) {
+            return Verdict::truncated;
+        }
+        parsed.selectorLength = static_cast<std::uint32_t>(field);
+        if (parsed.selectorLength > kSelectorMaximum) {
+            return Verdict::selectorTooLong;
+        }
+        if (!read_bytes(reader, std::span(parsed.selector).first(parsed.selectorLength))) {
+            return Verdict::truncated;
+        }
     }
 
     if (!reader.read(kOptionalPresenceWidth, field)) {
         return Verdict::truncated;
     }
-    if (field != 0 && !reader.skip(kOptionalFieldWidth)) {
-        return Verdict::truncated;
+    parsed.hasOptionalBlock = field != 0;
+    if (parsed.hasOptionalBlock) {
+        if (!reader.read(kOptionalWordWidth, field)) {
+            return Verdict::truncated;
+        }
+        parsed.optionalWordA = static_cast<std::uint32_t>(field);
+        if (!reader.read(kOptionalWordWidth, field)) {
+            return Verdict::truncated;
+        }
+        parsed.optionalWordB = static_cast<std::uint32_t>(field);
     }
 
     if (!reader.read(kPayloadLengthWidth, field)) {
@@ -104,10 +129,11 @@ Verdict validate(std::span<const std::byte> payload, Incident& parsed) noexcept 
     if (parsed.payloadLength > kPayloadMaximum) {
         return Verdict::payloadTooLong;
     }
-    if (reader.remaining_bits() < static_cast<std::size_t>(parsed.payloadLength) * CHAR_BIT) {
+    if (!read_bytes(reader, std::span(parsed.payload).first(parsed.payloadLength))) {
         return Verdict::truncated;
     }
-    parsed.hasPayload = true;
+    parsed.consumedBits = static_cast<std::uint32_t>(payload.size() * encoding::kBitsPerByte
+                                                     - reader.remaining_bits());
     return Verdict::accepted;
 }
 

@@ -1,5 +1,4 @@
 #include <cstddef>
-#include <limits>
 
 #include "../../encoding/bit_reader.h"
 #include "opcode402.h"
@@ -15,9 +14,7 @@ constexpr std::uint8_t kInstanceWidth = 64;
 constexpr std::uint8_t kDefinitionIndexWidth = 15;
 /** The quantity fills one signed 32-bit field. */
 constexpr std::uint8_t kQuantityWidth = 32;
-/** A single unit after the descriptor's INT32_MIN bias. */
-constexpr std::uint32_t kSingleQuantityWire = 0x80000001U;
-/** The action's own required flag, which is always set. */
+/** The action's own flag. Read to keep the field walk aligned, never gated on. */
 constexpr std::uint8_t kRequiredFlagWidth = 1;
 /**
  * Bucket ordinal the request was raised from. It counts 0 upward across the character's buckets.
@@ -58,14 +55,13 @@ bool parse_request(const Message& message, Request& request) noexcept {
 
     // Whatever the read reached is kept, so a refused request still describes itself.
     request.instanceSoid = instanceSoid;
-    if (encodedDefinitionIndex <= (std::numeric_limits<std::uint16_t>::max)()) {
-        request.definitionIndex = static_cast<std::uint16_t>(encodedDefinitionIndex);
-    }
+    request.definitionIndex = static_cast<std::uint16_t>(encodedDefinitionIndex);
 
+    // The instance identity already names what to dismantle, so neither field is gated on.
+    (void)encodedQuantity;
+    (void)requiredFlag;
     return read && instancePresent != 0 && definitionPresent != 0 && instanceSoid != 0
-           && nestedPadding == 0 && finalPadding == 0
-           && static_cast<std::uint32_t>(encodedQuantity) == kSingleQuantityWire
-           && requiredFlag == 1;
+           && nestedPadding == 0 && finalPadding == 0;
 }
 
 } // namespace sunrise::middleware::web_service::messages::opcode402

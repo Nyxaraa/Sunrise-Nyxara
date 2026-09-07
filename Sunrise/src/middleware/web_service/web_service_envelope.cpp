@@ -1,6 +1,7 @@
 #include "web_service_envelope.h"
 
-#include "../encoding/bit_writer.h"
+#include <algorithm>
+
 #include "../encoding/byte_order.h"
 #include "status_fields.h"
 
@@ -42,6 +43,35 @@ bool encode_response(const Message& request,
         return false;
     }
     written = kEnvelopeHeaderSize + payloadSize;
+    return true;
+}
+
+/** Writes the echoed header and hands back the writer for the payload behind it. */
+encoding::bits::Writer begin_response(const Message& request,
+                                      std::span<std::byte> staging) noexcept {
+    encoding::write_u16_be(staging.first<encoding::kU16Size>(), request.opcode);
+    encoding::write_u32_be(staging.subspan<encoding::kU16Size, encoding::kU32Size>(),
+                           request.transactionId);
+    return encoding::bits::Writer(staging.subspan(kEnvelopeHeaderSize));
+}
+
+/** Appends the absent trailer, then copies the staged response out in one step. */
+bool finish_response(encoding::bits::Writer& writer,
+                     bool encoded,
+                     std::span<const std::byte> staging,
+                     std::span<std::byte> output,
+                     std::size_t& written) noexcept {
+    written = 0;
+    std::size_t payloadSize = 0;
+    if (!encoded || !writer.write(0U, kAbsentTrailerWidth) || !writer.finish(payloadSize)) {
+        return false;
+    }
+    const std::size_t responseSize = kEnvelopeHeaderSize + payloadSize;
+    if (responseSize > output.size()) {
+        return false;
+    }
+    std::copy_n(staging.begin(), responseSize, output.begin());
+    written = responseSize;
     return true;
 }
 

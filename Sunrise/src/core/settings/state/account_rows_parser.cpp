@@ -1,5 +1,6 @@
 #include <limits>
 
+#include "../../../state/build_data/items/item_catalog.h"
 #include "../parser.h"
 
 namespace sunrise::core::settings::parser {
@@ -9,10 +10,38 @@ namespace {
 constexpr std::uint64_t kMaximumCharacterLevel = (std::numeric_limits<std::uint8_t>::max)();
 /** A destination definition hash is one unsigned 32-bit field. */
 constexpr std::uint64_t kMaximumDestinationHash = (std::numeric_limits<std::uint32_t>::max)();
+/** The travelling-activity index is one unsigned 16-bit field in the family-4 character. */
+constexpr std::uint64_t kMaximumTravellingActivityIndex =
+    (std::numeric_limits<std::uint16_t>::max)();
+
+/** Sets the tier bit one rarity name stands for. */
+[[nodiscard]] bool dismantle_tier_bit(std::string_view name, std::uint8_t& mask) noexcept {
+    using Tier = state::build_data::items::Tier;
+    Tier tier = Tier::none;
+    if (name == "common") {
+        tier = Tier::common;
+    } else if (name == "uncommon") {
+        tier = Tier::uncommon;
+    } else if (name == "rare") {
+        tier = Tier::rare;
+    } else if (name == "legendary") {
+        tier = Tier::legendary;
+    } else if (name == "exotic") {
+        tier = Tier::exotic;
+    } else {
+        return false;
+    }
+    const std::uint8_t bit = static_cast<std::uint8_t>(1U << static_cast<unsigned>(tier));
+    if ((mask & bit) != 0) {
+        return false;
+    }
+    mask |= bit;
+    return true;
+}
 
 } // namespace
 
-/** Parses the definition hashes and quantities credited by ordinary gear dismantles. */
+/** Parses the materials credited by gear dismantles, with optional rarity and class filters. */
 bool Parser::dismantle_rewards(state::AccountState& output) noexcept {
     output.dismantleRewards = {};
     output.dismantleRewardCount = 0;
@@ -49,6 +78,45 @@ bool Parser::dismantle_rewards(state::AccountState& output) noexcept {
                 }
                 reward.quantity = static_cast<std::int32_t>(value);
                 hasQuantity = true;
+            } else if (key == "rarity") {
+                // One name or an array of names; each sets its tier bit.
+                if (reward.tierMask != 0) {
+                    return false;
+                }
+                const bool list = consume('[');
+                for (;;) {
+                    std::string_view name;
+                    if (!string(name) || !dismantle_tier_bit(name, reward.tierMask)) {
+                        return false;
+                    }
+                    if (!list || consume(']')) {
+                        break;
+                    }
+                    if (!consume(',')) {
+                        return false;
+                    }
+                }
+            } else if (key == "class") {
+                std::string_view name;
+                if (reward.classMask != 0 || !string(name)) {
+                    return false;
+                }
+                if (name == "weapon") {
+                    reward.classMask = static_cast<std::uint8_t>(state::DismantleGearClass::weapon);
+                } else if (name == "armor") {
+                    reward.classMask = static_cast<std::uint8_t>(state::DismantleGearClass::armor);
+                } else {
+                    return false;
+                }
+            } else if (key == "masterworked") {
+                bool masterworked = false;
+                if (reward.masterwork != state::DismantleMasterworkFilter::any
+                    || !boolean(masterworked)) {
+                    return false;
+                }
+                reward.masterwork = masterworked
+                                        ? state::DismantleMasterworkFilter::masterworked
+                                        : state::DismantleMasterworkFilter::notMasterworked;
             } else if (!skip_value(0)) {
                 return false;
             }
@@ -60,7 +128,7 @@ bool Parser::dismantle_rewards(state::AccountState& output) noexcept {
             }
         }
         for (std::size_t index = 0; index < output.dismantleRewardCount; ++index) {
-            if (output.dismantleRewards[index].definitionHash == reward.definitionHash) {
+            if (state::same_dismantle_policy_key(output.dismantleRewards[index], reward)) {
                 return false;
             }
         }
@@ -212,10 +280,6 @@ bool Parser::character(state::CharacterState& output) noexcept {
                 return false;
             }
             output.level = static_cast<std::uint8_t>(value);
-        } else if (key == "accepted") {
-            if (!boolean(output.accepted)) {
-                return false;
-            }
         } else if (key == "preview_available") {
             if (!boolean(output.previewAvailable)) {
                 return false;
@@ -230,19 +294,20 @@ bool Parser::character(state::CharacterState& output) noexcept {
                 return false;
             }
             output.lastOrbitedDestination = static_cast<std::uint32_t>(value);
+        } else if (key == "current_activity_index") {
+            std::uint64_t value = 0;
+            if (!unsigned_value(value) || value > kMaximumTravellingActivityIndex) {
+                return false;
+            }
+            output.currentActivityIndex = static_cast<std::uint16_t>(value);
         } else if (key == "content_bypass") {
             if (!boolean(output.contentBypass)) {
                 return false;
             }
         } else if (key == "movement_ability" || key == "grenade_ability" || key == "super_ability"
                    || key == "melee_ability" || key == "class_ability") {
-            // Deliberately ignored on load: the subclass screen's first paint each login reads
-            // whatever the game's own UI initializes itself to before any interaction, which is
-            // always the ability-entry struct defaults below, not whatever State last committed.
-            // Restoring a persisted non-default pick here would leave that first paint showing
-            // something different from what is actually equipped until the player made any
-            // change and forced a redraw. Resetting every login keeps the two in sync from the
-            // start; the value is still written back out (see the writer), just never read back.
+            // Written out but never read back: the subclass screen's first paint each login shows
+            // the ability-entry defaults, which a restored pick would contradict.
             if (!skip_value(0)) {
                 return false;
             }

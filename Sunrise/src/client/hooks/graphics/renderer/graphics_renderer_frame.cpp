@@ -7,11 +7,15 @@
 
 #include "../../../../core/ui/busy/busy.h"
 #include "../../../../core/ui/fonts/runtime/ui_runtime_font_lifecycle.h"
+#include "../../../../core/ui/hud/overlay.h"
 #include "../../../../core/ui/layout/layout.h"
 #include "../../../../core/ui/notice/ui_notice_overlay.h"
 #include "../../../../core/ui/runtime/ui_visibility_runtime.h"
 #include "../../../../core/ui/scaling/dpi/ui_dpi_scaling.h"
 #include "../../../../core/ui/theme/sunrise_ui_theme.h"
+#include "../../../ui/activity/authored_placement_marker.h"
+#include "../../../ui/activity/authored_spatial_overlay.h"
+#include "../../teleport/runtime.h"
 #include "../input/input.h"
 #include "graphics_renderer_report.h"
 #include "state.h"
@@ -118,9 +122,7 @@ void draw_data(ImDrawData* drawData) noexcept {
 
 } // namespace
 
-/**
- * Runs one Dear ImGui frame. Draw data is sent only while the Core UI is visible.
- */
+/** Runs one Dear ImGui frame. Draw data is sent only while the Core UI is visible. */
 void render_frame_locked() noexcept {
     if (!fully_active_locked()) {
         return;
@@ -140,11 +142,30 @@ void render_frame_locked() noexcept {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     // A hidden surface still draws until its close animation ends, so the layout decides. The
-    // running-work overlay draws whether the surface is open or not.
+    // HUD, running-work and notice overlays draw whether the surface is open or not. The HUD
+    // goes first, so the surface stays above it when the two meet.
+    const bool hudDrawn = core::ui::hud::draw(visibility.enabled);
     const bool surfaceDrawn = core::ui::layout::render(visibility.visible);
     const bool busyDrawn = core::ui::busy::draw();
     const bool noticeDrawn = core::ui::notice::draw();
-    if (!surfaceDrawn && !busyDrawn && !noticeDrawn) {
+    sunrise::client::ui::activity::authored_placement_marker::RenderSet markerSource{};
+    sunrise::client::hooks::teleport::CameraPose markerCamera{};
+    const bool markerSourceReady =
+        visibility.enabled
+        && sunrise::client::ui::activity::authored_placement_marker::render_set(markerSource)
+        && sunrise::client::hooks::teleport::camera_pose(markerCamera);
+    const bool spatialMarkerDrawn =
+        markerSourceReady
+        && sunrise::client::ui::activity::authored_spatial_overlay::draw(g_resources.device,
+                                                                         g_resources.context,
+                                                                         g_resources.renderTarget,
+                                                                         markerSource,
+                                                                         markerCamera);
+    const bool markerDrawn = markerSourceReady
+                             && sunrise::client::ui::activity::authored_placement_marker::draw(
+                                 markerSource, markerCamera, !spatialMarkerDrawn);
+    if (!hudDrawn && !surfaceDrawn && !busyDrawn && !noticeDrawn && !spatialMarkerDrawn
+        && !markerDrawn) {
         // A frame nobody claimed still drains backend state, and sends no draw data.
         ImGui::EndFrame();
         return;

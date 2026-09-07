@@ -4,6 +4,7 @@
 #include <array>
 #include <limits>
 
+#include "core/threading/data_mutex.h"
 #include "internal.h"
 
 namespace sunrise::core::log::snapshot {
@@ -13,14 +14,13 @@ namespace {
 constexpr std::size_t kTextTerminatorBytes = 1;
 
 struct RingState {
-    SRWLOCK lock{SRWLOCK_INIT};
     std::array<Entry, kEntryCapacity> entries{};
     std::size_t nextIndex{};
     std::size_t count{};
     std::uint64_t overwrittenCount{};
 };
 
-RingState g_ring;
+threading::SharedDataMutex<RingState> g_ring;
 
 /** @param channel Value to inspect. @return True for a defined log channel. */
 [[nodiscard]] bool valid_channel(Channel channel) noexcept {
@@ -62,15 +62,15 @@ std::uint64_t Snapshot::overwritten_count() const noexcept {
 /** @return A value-owned chronological copy of all retained events. */
 Snapshot take() noexcept {
     Snapshot result;
-    AcquireSRWLockShared(&g_ring.lock);
-    result.count_ = g_ring.count;
-    result.overwrittenCount_ = g_ring.overwrittenCount;
-    const std::size_t firstIndex =
-        (g_ring.nextIndex + kEntryCapacity - g_ring.count) % kEntryCapacity;
-    for (std::size_t index = 0; index < g_ring.count; ++index) {
-        result.entries_[index] = g_ring.entries[(firstIndex + index) % kEntryCapacity];
-    }
-    ReleaseSRWLockShared(&g_ring.lock);
+    g_ring.lock_read([&result](const RingState& ring) {
+        result.count_ = ring.count;
+        result.overwrittenCount_ = ring.overwrittenCount;
+        const std::size_t firstIndex =
+            (ring.nextIndex + kEntryCapacity - ring.count) % kEntryCapacity;
+        for (std::size_t index = 0; index < ring.count; ++index) {
+            result.entries_[index] = ring.entries[(firstIndex + index) % kEntryCapacity];
+        }
+    });
     return result;
 }
 
@@ -78,12 +78,12 @@ namespace internal {
 
 /** Clears retained events before a new logger lifecycle starts. */
 void reset() noexcept {
-    AcquireSRWLockExclusive(&g_ring.lock);
-    g_ring.entries = {};
-    g_ring.nextIndex = 0;
-    g_ring.count = 0;
-    g_ring.overwrittenCount = 0;
-    ReleaseSRWLockExclusive(&g_ring.lock);
+    g_ring.lock_write([](RingState& ring) {
+        ring.entries = {};
+        ring.nextIndex = 0;
+        ring.count = 0;
+        ring.overwrittenCount = 0;
+    });
 }
 
 /**
@@ -97,23 +97,23 @@ void record(Channel channel, Level level, std::string_view text) noexcept {
         return;
     }
 
-    AcquireSRWLockExclusive(&g_ring.lock);
-    Entry& entry = g_ring.entries[g_ring.nextIndex];
-    entry = {};
-    entry.channel_ = channel;
-    entry.level_ = level;
-    const std::size_t maximumText = entry.text_.size() - kTextTerminatorBytes;
-    entry.textLength_ = (std::min)(text.size(), maximumText);
-    if (entry.textLength_ != 0) {
-        std::copy_n(text.data(), entry.textLength_, entry.text_.data());
-    }
-    g_ring.nextIndex = (g_ring.nextIndex + 1) % kEntryCapacity;
-    if (g_ring.count < kEntryCapacity) {
-        ++g_ring.count;
-    } else if (g_ring.overwrittenCount != (std::numeric_limits<std::uint64_t>::max)()) {
-        ++g_ring.overwrittenCount;
-    }
-    ReleaseSRWLockExclusive(&g_ring.lock);
+    g_ring.lock_write([channel, level, text](RingState& ring) {
+        Entry& entry = ring.entries[ring.nextIndex];
+        entry = {};
+        entry.channel_ = channel;
+        entry.level_ = level;
+        const std::size_t maximumText = entry.text_.size() - kTextTerminatorBytes;
+        entry.textLength_ = (std::min)(text.size(), maximumText);
+        if (entry.textLength_ != 0) {
+            std::copy_n(text.data(), entry.textLength_, entry.text_.data());
+        }
+        ring.nextIndex = (ring.nextIndex + 1) % kEntryCapacity;
+        if (ring.count < kEntryCapacity) {
+            ++ring.count;
+        } else if (ring.overwrittenCount != (std::numeric_limits<std::uint64_t>::max)()) {
+            ++ring.overwrittenCount;
+        }
+    });
 }
 
 } // namespace internal

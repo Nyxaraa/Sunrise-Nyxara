@@ -72,8 +72,10 @@ read(std::span<const std::byte> blob, std::size_t offset, Value& value) noexcept
  * @param output Receives the array that was found.
  * @return True when the descriptor points at a valid header.
  */
-[[nodiscard]] bool
-resolve_descriptor(std::span<const std::byte> blob, std::size_t offset, Array& output) noexcept {
+[[nodiscard]] bool resolve_descriptor(std::span<const std::byte> blob,
+                                      std::size_t offset,
+                                      bool allowEmpty,
+                                      Array& output) noexcept {
     output = {};
     std::uint64_t count = 0;
     std::int64_t relative = 0;
@@ -85,9 +87,20 @@ resolve_descriptor(std::span<const std::byte> blob, std::size_t offset, Array& o
         return false;
     }
     const std::int64_t base = static_cast<std::int64_t>(offset + kDescriptorStride);
-    if (!read(blob, offset, count) || count == 0 || count > kMaximumArrayCount
+    if (!read(blob, offset, count) || count > kMaximumArrayCount
         || !read(blob, offset + kDescriptorStride, relative)) {
         return false;
+    }
+    if (count == 0) {
+        // An array with no entries is authored either with no header at all or with a header
+        // that repeats the zero count. A caller scanning for an element class can use neither,
+        // so it asks for the empty forms to be refused.
+        if (!allowEmpty) {
+            return false;
+        }
+        if (relative == 0) {
+            return true;
+        }
     }
     // The offset is signed. An array header may sit before the descriptor that names it.
     if ((relative > 0 && base > kMaximumOffset - relative)
@@ -114,7 +127,14 @@ resolve_descriptor(std::span<const std::byte> blob, std::size_t offset, Array& o
 bool find_array_at(std::span<const std::byte> blob,
                    std::size_t descriptorOffset,
                    Array& output) noexcept {
-    return resolve_descriptor(blob, descriptorOffset, output);
+    return resolve_descriptor(blob, descriptorOffset, false, output);
+}
+
+/** Reads the array descriptor at one known offset and accepts an authored empty array. */
+bool find_optional_array_at(std::span<const std::byte> blob,
+                            std::size_t descriptorOffset,
+                            Array& output) noexcept {
+    return resolve_descriptor(blob, descriptorOffset, true, output);
 }
 
 /** Finds the first array whose header names one element class. */
@@ -129,7 +149,8 @@ bool find_array(std::span<const std::byte> blob,
     for (std::size_t offset = 0; offset + (kDescriptorStride * 2) <= blob.size();
          offset += kDescriptorStride) {
         Array candidate{};
-        if (resolve_descriptor(blob, offset, candidate) && candidate.elementClass == elementClass) {
+        if (resolve_descriptor(blob, offset, false, candidate)
+            && candidate.elementClass == elementClass) {
             output = candidate;
             return true;
         }

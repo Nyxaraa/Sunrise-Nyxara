@@ -18,14 +18,15 @@ static_assert(state::kUnlockOverrideCapacity <= kMaximumOverrideRows,
 
 } // namespace
 
-/** Parses the optional authored family-5 override group. */
-bool Parser::investment(state::Family5State& output) noexcept {
+/** Parses the optional authored investment group: the family-5 overrides and the catalyst gate. */
+bool Parser::investment(Settings& output) noexcept {
     state::Family5State parsed{};
+    bool catalysts = output.completeExoticCatalysts;
     if (!consume('{')) {
         return false;
     }
     if (consume('}')) {
-        output = parsed;
+        output.initialFamily5 = parsed;
         return true;
     }
     for (;;) {
@@ -38,6 +39,8 @@ bool Parser::investment(state::Family5State& output) noexcept {
             complete = unlock_flag_overrides(parsed);
         } else if (key == "family5_value_overrides") {
             complete = unlock_value_overrides(parsed);
+        } else if (key == "complete_exotic_catalysts") {
+            complete = boolean(catalysts);
         } else {
             complete = skip_value(0);
         }
@@ -46,7 +49,8 @@ bool Parser::investment(state::Family5State& output) noexcept {
         }
         if (consume('}')) {
             // Publish both lists together, so a refused row leaves State untouched.
-            output = parsed;
+            output.initialFamily5 = parsed;
+            output.completeExoticCatalysts = catalysts;
             return true;
         }
         if (!consume(',')) {

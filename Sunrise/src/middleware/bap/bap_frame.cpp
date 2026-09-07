@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <limits>
 
 #include "../encoding/byte_order.h"
@@ -6,7 +7,7 @@
 namespace sunrise::middleware::bap {
 namespace {
 
-/** First byte of every BAP outer frame the Server emits. */
+/** Protocol marker byte 1 starts every BAP outer frame, sent and received. */
 constexpr std::byte kMagic{0x01};
 /** Fixed wire offsets for the 6-byte BAP outer header. */
 constexpr std::size_t kOuterMagicOffset = 0;
@@ -29,15 +30,17 @@ constexpr std::uint16_t kStatusOk = 200;
 
 } // namespace
 
-/** Reads one BAP outer header and borrows the payload it declares. */
+/** Reads one whole BAP outer frame and borrows the payload it declares. */
 bool parse_frame(std::span<const std::byte> input, OuterFrame& frame) noexcept {
     frame = {};
-    if (input.size() < kOuterHeaderSize) {
+    if (input.size() < kOuterHeaderSize || input[kOuterMagicOffset] != kMagic) {
         return false;
     }
     const std::size_t payloadSize =
         encoding::read_u32_be(input.subspan<kOuterLengthOffset, encoding::kU32Size>());
-    if (payloadSize > input.size() - kOuterHeaderSize) {
+    // Bytes past the declared payload are outside its authentication tag, so a frame carrying
+    // them is not the frame the peer signed.
+    if (payloadSize != input.size() - kOuterHeaderSize) {
         return false;
     }
     frame.frameType =
@@ -55,7 +58,7 @@ bool parse_request_payload(std::span<const std::byte> input,
         return false;
     }
     request.frameType = frameType;
-    request.messageId = encoding::read_u16_be(input.subspan<kServiceOffset, encoding::kU16Size>());
+    request.serviceId = encoding::read_u16_be(input.subspan<kServiceOffset, encoding::kU16Size>());
     request.taskId = encoding::read_u32_be(input.subspan<kTaskOffset, encoding::kU32Size>());
     request.body = input.subspan(kRequestHeaderSize);
     return true;
@@ -86,9 +89,7 @@ bool encode_response_payload(ResponseService service,
                            static_cast<std::uint16_t>(service));
     encoding::write_u32_be(output.subspan<kTaskOffset, encoding::kU32Size>(), taskId);
     encoding::write_u16_be(output.subspan<kStatusOffset, encoding::kU16Size>(), kStatusOk);
-    for (std::size_t index = 0; index < body.size(); ++index) {
-        output[kResponseHeaderSize + index] = body[index];
-    }
+    std::copy(body.begin(), body.end(), output.begin() + kResponseHeaderSize);
     written = kResponseHeaderSize + body.size();
     return true;
 }
@@ -100,16 +101,14 @@ bool encode_notification_payload(NotificationService service,
                                  std::span<std::byte> output,
                                  std::size_t& written) noexcept {
     written = 0;
-    if (body.size() > (std::numeric_limits<std::uint32_t>::max)() - kRequestHeaderSize
+    if (body.size() > std::numeric_limits<std::uint32_t>::max() - kRequestHeaderSize
         || output.size() < kRequestHeaderSize + body.size()) {
         return false;
     }
     encoding::write_u16_be(output.subspan<kServiceOffset, encoding::kU16Size>(),
                            static_cast<std::uint16_t>(service));
     encoding::write_u32_be(output.subspan<kTaskOffset, encoding::kU32Size>(), sequence);
-    for (std::size_t index = 0; index < body.size(); ++index) {
-        output[kRequestHeaderSize + index] = body[index];
-    }
+    std::copy(body.begin(), body.end(), output.begin() + kRequestHeaderSize);
     written = kRequestHeaderSize + body.size();
     return true;
 }
@@ -128,6 +127,7 @@ bool encode_frame(FrameType frameType,
     output[kOuterTypeOffset] = static_cast<std::byte>(frameType);
     encoding::write_u32_be(output.subspan<kOuterLengthOffset, encoding::kU32Size>(),
                            static_cast<std::uint32_t>(payload.size()));
+    // Payload may already sit at its final offset inside output, so copy element by element.
     for (std::size_t index = 0; index < payload.size(); ++index) {
         output[kOuterHeaderSize + index] = payload[index];
     }
@@ -143,10 +143,7 @@ bool encode_response(ResponseService service,
                      std::span<std::byte> output,
                      std::size_t& written) noexcept {
     written = 0;
-    if (!is_plaintext(frameType)) {
-        return false;
-    }
-    if (output.size() < kOuterHeaderSize) {
+    if (!is_plaintext(frameType) || output.size() < kOuterHeaderSize) {
         return false;
     }
     std::size_t payloadSize = 0;

@@ -43,15 +43,24 @@ inline constexpr std::size_t kArrivalOverrideCapacity = 64;
 
 /**
  * One authored arrival for a named destination, applied over every derived source.
- * Neither field is needed. A row may move only the bubble, only the spawn set, or both.
+ * Every field is optional: a row may override the bubble, exact slice set, or spawn set. A bubble
+ * owns one slice set per authored state, so naming it reaches only the first; `slice_set` picks.
  */
 struct ArrivalOverride final {
     std::array<char, destination::kPackageNameCapacity> name{};
     std::uint8_t nameLength{};
     std::uint8_t bubble{};
     bool hasBubble{};
+    /** Slice set to arrive in. Must be one of the arrival bubble's own run. */
+    std::uint16_t sliceSet{};
+    bool hasSliceSet{};
     std::uint32_t spawnSetHash{};
     bool hasSpawnSetHash{};
+    /**
+     * A launch into this destination makes it the character's current activity (family-4
+     * `+45896`) before the client commits the launch, so the fly-in legs play their black variant.
+     */
+    bool currentActivityFromLaunch{};
 };
 
 /** Immutable activity defaults supplied while the root State is initialized. */
@@ -66,8 +75,7 @@ struct ActivityDefaults final {
     bool rosterKeyFromIdentity{};
     /**
      * Fills message 5's participation body on every type-13 slot of the key group.
-     * The old encoder fills only the group's first, and the gate reads whichever object the player
-     * datum names, which need not be that one.
+     * The gate reads whichever object the player datum names, which need not be the first slot.
      */
     bool rosterKeyOnAllSlots{};
 };

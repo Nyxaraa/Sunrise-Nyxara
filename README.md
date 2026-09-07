@@ -7,18 +7,22 @@ Destiny 2 Offline Exploration Mod
 > This mod installs onto an old build of the game and allows you to play it offline, loading into
 > destinations and exploring them.
 >
-> No other features are currently supported. (Missions, Enemies, NPCs, Quests, Inventory
-> Management, ...)
+> Most gameplay features are not currently supported. (Missions, Enemies, NPCs, Quests, Persistent Saves, ...)
 
 - [Install Instructions](https://github.com/stanuwu/Sunrise/wiki/Installing)
 - [FAQ](https://github.com/stanuwu/Sunrise/wiki/FAQ)
 - [Common Issues](https://github.com/stanuwu/Sunrise/wiki/Common-Issues)
 - [Discord](https://discord.gg/22JS6et5k9)
 
+## Features
+- Load into any Destination (matchmade activities are currently broken)
+- Exploration Features (Fly, Noclip, Activity Override, ...)
+- Basic Inventory Management
+
 ## WIP
 
-This mod is work in progress. Things might break or work in unexpected ways. There is also currently
-a lack of documentation. This will improve over the coming weeks.
+This mod is a work in progress. Things might break or work in unexpected ways. There is also
+currently a lack of documentation. This will improve over the coming weeks.
 
 ## Support Me
 
@@ -37,20 +41,64 @@ PRs are for pull requests only.
 
 Do not go and argue/chat there, you can do that on the discord.
 
+## Building
+
+### Windows
+
+Install Visual Studio 2026 with the **Desktop development with C++** workload. The project builds
+against the v145 toolset and the 10.0.26100 Windows SDK, so check that both are selected in the
+installer.
+
+The easiest route is to open `Sunrise.sln`, select the `Release` `x64` configuration and build.
+
+To build from a command line, use the Developer PowerShell for VS 2026:
+
+1. Clone the repository
+```powershell
+git clone https://github.com/stanuwu/Sunrise
+cd Sunrise
+```
+
+2. Build the solution
+```powershell
+msbuild Sunrise.sln /m /p:Configuration=Release /p:Platform=x64
+```
+
+### Linux
+
+Make sure you have `git`, `cmake`, `clang`, `ninja`, `llvm`, and `xwin` installed.
+
+1. Clone the repository
+```bash
+$ git clone https://github.com/stanuwu/Sunrise
+$ cd Sunrise
+```
+
+2. Download Windows headers:
+```bash
+$ xwin --sdk-version 10.0.26100 --accept-license splat --include-debug-libs --output .xwin-cache
+```
+
+3. Configure and build the project
+```bash
+$ cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=$(pwd)/linux-to-win-toolchain.cmake -DCMAKE_BUILD_TYPE=Release
+$ cmake --build build
+```
+
 ## Contributing
 
 Pull Requests are welcome. Please follow these rules:
 
 - **No Copyrighted Data** - All game data should be extracted at runtime.
 - **Code Formatting** - Stick to the provided clang-format and clang-tidy configs.
-- **Clean Code** - Try to post readable high quality code, follow the projects existing style of
+- **Clean Code** - Try to post readable high-quality code, follow the project's existing style of
   comment and add docs.
 - **Provide Documentation** - Please explain what you changed, why you changed it and the effects it
   has in detail, it saves me a lot of work.
 - **Follow Up** - If something with the PR is not right, I will reply and ask you to fix it.
 - **One Feature** - Do not put multiple features into one PR.
-- **Complete Implementations** - Do not PR features that are not completed and/or have non functional parts.
-- **Server Focus** - For features that are intended to be part of the server, don't abuse client patches. Sometimes its needed but mostly everything should go through the right requests and pushes.
+- **Complete Implementations** - Do not PR features that are not completed and/or have non-functional parts.
+- **Server Focus** - For features that are intended to be part of the server, don't abuse client patches. Sometimes it's needed but mostly everything should go through the right requests and pushes.
 
 ## Credits
 
@@ -60,6 +108,7 @@ Pull Requests are welcome. Please follow these rules:
 
 - https://github.com/ocornut/imgui
 - https://github.com/microsoft/detours
+- https://lua.org/
 
 ### Artwork:
 
@@ -101,6 +150,7 @@ Pull Requests are welcome. Please follow these rules:
 - https://github.com/nblockbuster/tachyscope
 - https://github.com/cohaereo/destinydocs
 - https://github.com/MontagueM/DestinyUnpacker
+- https://github.com/nblockbuster/bungie-lua-decompiler
 
 ### Other:
 

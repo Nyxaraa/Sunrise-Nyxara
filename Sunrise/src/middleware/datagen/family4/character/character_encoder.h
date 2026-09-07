@@ -9,7 +9,7 @@
 namespace sunrise::middleware::datagen::family4::character {
 
 /**
- * Encodes one selected-character object from authored State and resolved installed mappings.
+ * Encodes one selected-character object from live State and resolved installed mappings.
  * @param state Validated authored character identity and policy state.
  * @param resolvedLoadout Row-sorted inventory and equipment mappings for this character.
  * @param lightEvaluation Complete raw and aggregate equipment-light values.

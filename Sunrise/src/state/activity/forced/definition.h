@@ -32,12 +32,22 @@ struct ForcedDestination {
     std::uint16_t sliceSet{};
     /** Spawn-set name hash, used only when one was chosen. */
     std::uint32_t spawnSetHash{};
+    /**
+     * Investment activity index of the definition to bind, when one was chosen.
+     * A package name maps to several definitions, so the SDK and the mission script cannot
+     * resolve one from the name. Naming it here is what lets them bind under an override.
+     */
+    std::uint16_t activityIndex{};
     bool hasBubble{};
     bool hasSliceSet{};
     bool hasSpawnSetHash{};
+    bool hasActivityIndex{};
     /** The global switch. Off means the client's own selection stands. */
     bool enabled{};
 };
+
+/** The wire field is signed, so an index past this cannot be sent as a selection. */
+inline constexpr std::uint16_t kMaximumActivityIndex = 0x7FFFU;
 
 /**
  * Tests whether a forced destination names enough to replace a client selection.
@@ -61,7 +71,8 @@ struct ForcedDestination {
 [[nodiscard]] constexpr bool storable(const ForcedDestination& value) noexcept {
     return value.packageNameLength <= value.packageName.size()
            && (!value.hasBubble || value.bubble <= kMaximumBubble)
-           && (!value.hasSliceSet || value.sliceSet <= kMaximumSliceSet);
+           && (!value.hasSliceSet || value.sliceSet <= kMaximumSliceSet)
+           && (!value.hasActivityIndex || value.activityIndex <= kMaximumActivityIndex);
 }
 
 } // namespace sunrise::state::activity::forced

@@ -1,13 +1,15 @@
-﻿/** Dismantle staging: the payout it credits and the after-image it is committed against. */
+/** Dismantle staging: the payout it credits and the after-image it is committed against. */
 
 #include <Windows.h>
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -17,6 +19,7 @@
 #include "runtime.h"
 #include "state.h"
 #include "state_account_transaction_helpers.h"
+#include "state_rolled_socket_plugs.h"
 #include "storage/internal.h"
 
 namespace sunrise::state {
@@ -26,9 +29,6 @@ namespace authored_inventory = account::inventory;
 namespace item_details = build_data::items::details;
 namespace inventory_buckets = build_data::inventory::buckets;
 namespace family4_loadout = middleware::datagen::family4::loadout;
-
-/** Equipment slots 0-2 are weapons and 3-7 are class-specific armor. */
-constexpr std::uint8_t kGearEquipmentSlotCount = 8;
 
 /** Writes one exhaustive item-dismantle transaction checkpoint. */
 void report_dismantle(std::string_view stage,
@@ -70,16 +70,232 @@ void report_dismantle(std::string_view stage,
     }
 }
 
+/** Records how the dismantled item was classified and how many payout materials matched. */
+void report_dismantle_reward_match(std::uint32_t definitionHash,
+                                   std::uint8_t tier,
+                                   std::uint8_t gearClass,
+                                   bool isMasterworked,
+                                   std::size_t materialCount) noexcept {
+    std::array<char, core::log::kLineCapacity> line{};
+    const int count = std::snprintf(line.data(),
+                                    line.size(),
+                                    "ev=dismantle stage=reward result=ok reason=matched "
+                                    "definition_hash=0x%08X tier=%u gear_class=%u masterworked=%u "
+                                    "materials=%zu",
+                                    definitionHash,
+                                    static_cast<unsigned>(tier),
+                                    static_cast<unsigned>(gearClass),
+                                    isMasterworked ? 1U : 0U,
+                                    materialCount);
+    if (count > 0) {
+        core::log::write(core::log::Channel::state,
+                         core::log::Level::debug,
+                         {line.data(), static_cast<std::size_t>(count)});
+    }
+}
+
+/** Records one payout row that could not be credited, so a silent zero payout is visible. */
+void report_dismantle_reward_dropped(std::string_view reason,
+                                     std::uint32_t definitionHash,
+                                     std::int32_t policyQuantity,
+                                     std::int32_t previousQuantity,
+                                     std::int32_t maxStackSize) noexcept {
+    std::array<char, core::log::kLineCapacity> line{};
+    const int count = std::snprintf(line.data(),
+                                    line.size(),
+                                    "ev=dismantle stage=reward result=dropped reason=%.*s "
+                                    "definition_hash=0x%08X policy_quantity=%d held=%d "
+                                    "max_stack=%d",
+                                    static_cast<int>(reason.size()),
+                                    reason.data(),
+                                    definitionHash,
+                                    policyQuantity,
+                                    previousQuantity,
+                                    maxStackSize);
+    if (count > 0) {
+        core::log::write(core::log::Channel::state,
+                         core::log::Level::warn,
+                         {line.data(), static_cast<std::size_t>(count)});
+    }
+}
+
+/**
+ * @return The gear class one native equipment slot belongs to, or 0 outside the gear the
+ *         supported client pays materials for. Native slot numbers are not the semantic enum
+ *         order (kinetic is 7, energy 8, heavy 9), so the check goes through the semantic map.
+ */
+[[nodiscard]] std::uint8_t gear_class_of(std::uint8_t nativeSlot) noexcept {
+    using EquipmentSlot = authored_inventory::EquipmentSlot;
+    std::size_t semanticIndex = authored_inventory::kEquipmentSlotCount;
+    if (!semantic_equipment_slot(nativeSlot, semanticIndex)) {
+        return 0;
+    }
+    switch (static_cast<EquipmentSlot>(semanticIndex)) {
+    case EquipmentSlot::kinetic:
+    case EquipmentSlot::energy:
+    case EquipmentSlot::heavy:
+        return static_cast<std::uint8_t>(DismantleGearClass::weapon);
+    case EquipmentSlot::helmet:
+    case EquipmentSlot::gauntlets:
+    case EquipmentSlot::chest:
+    case EquipmentSlot::legs:
+    case EquipmentSlot::classItem:
+        return static_cast<std::uint8_t>(DismantleGearClass::armor);
+    default:
+        return 0;
+    }
+}
+
+/** Per-stat-row tally of one lane's pool, enough to recognise a masterwork tier ladder. */
+struct LadderTally {
+    /** A stat row is one byte, so this covers every row a definition can name. */
+    static constexpr std::size_t kRowCount = 256;
+    /** Distinct values one row can track, which is the width of the seen mask. */
+    static constexpr std::size_t kValueBits = 64;
+    std::array<std::uint16_t, kRowCount> members{};
+    std::array<std::int32_t, kRowCount> greatest{};
+    /** Bit per distinct value below kValueBits; a larger value marks the row unusable. */
+    std::array<std::uint64_t, kRowCount> seen{};
+    std::array<bool, kRowCount> overflow{};
+};
+
+/** Folds one pool member's stats into the tally. */
+bool tally_member(void* context, std::uint16_t plugIndex) noexcept {
+    auto& tally = *static_cast<LadderTally*>(context);
+    item_details::Definition detail{};
+    if (!build_data::find_configured_item_detail(plugIndex, detail)
+        || detail.statCount > detail.stats.size()) {
+        return true;
+    }
+    for (std::size_t index = 0; index < detail.statCount; ++index) {
+        const item_details::Stat& stat = detail.stats[index];
+        ++tally.members[stat.row];
+        tally.greatest[stat.row] = (std::max)(tally.greatest[stat.row], stat.value);
+        if (stat.value < 0 || stat.value >= static_cast<std::int32_t>(LadderTally::kValueBits)) {
+            tally.overflow[stat.row] = true;
+        } else {
+            tally.seen[stat.row] |= 1ULL << static_cast<unsigned>(stat.value);
+        }
+    }
+    return true;
+}
+
+/**
+ * @return True when the plug sits high enough on its lane's masterwork ladder, a pool whose
+ *         plugs share one stat row with a distinct value each. Assumed: the weapon-at-top and
+ *         armor-at-halfway cut-offs come from service behaviour, not from the Client.
+ */
+[[nodiscard]] bool on_masterwork_ladder(const item_details::Definition& target,
+                                        std::uint8_t lane,
+                                        const item_details::Definition& plug,
+                                        bool weapon) noexcept {
+    // Below three rungs a pool cannot be told apart from a mod pool that happens not to repeat.
+    constexpr std::uint16_t kMinimumLadderRungs = 3;
+    if (plug.statCount == 0 || plug.statCount > plug.stats.size()) {
+        return false;
+    }
+    LadderTally tally{};
+    if (!build_data::visit_socket_plug_pool(target.definitionIndex, lane, &tally_member, &tally)) {
+        return false;
+    }
+    // The ladder row is the plug's stat row most of the pool shares.
+    std::size_t ladderRow = LadderTally::kRowCount;
+    for (std::size_t index = 0; index < plug.statCount; ++index) {
+        const std::uint8_t row = plug.stats[index].row;
+        if (ladderRow == LadderTally::kRowCount || tally.members[row] > tally.members[ladderRow]) {
+            ladderRow = row;
+        }
+    }
+    if (ladderRow >= LadderTally::kRowCount || tally.overflow[ladderRow]
+        || tally.members[ladderRow] < kMinimumLadderRungs
+        || std::popcount(tally.seen[ladderRow]) != tally.members[ladderRow]) {
+        return false;
+    }
+    std::int32_t value = 0;
+    for (std::size_t index = 0; index < plug.statCount; ++index) {
+        if (plug.stats[index].row == ladderRow) {
+            value = plug.stats[index].value;
+        }
+    }
+    const std::int32_t top = tally.greatest[ladderRow];
+    return weapon ? value == top : value * 2 >= top;
+}
+
+/**
+ * @return True when the item is masterworked for the payout: a lane holds a rolled result plug
+ *         (a Year-1 masterwork), or a plug high enough on its lane's tier ladder. An item still
+ *         on its native defaults is read through the definition's initial plugs, since
+ *         default-equipped gear can ship masterworked.
+ */
+[[nodiscard]] bool masterworked(const authored_inventory::Item& item,
+                                const item_details::Definition& detail,
+                                bool weapon) noexcept {
+    const bool authored = item.sockets.policy == authored_inventory::SocketPolicy::authored;
+    for (std::size_t lane = 0;
+         lane < detail.ordinarySocketCount && lane < authored_inventory::kPlugCapacity;
+         ++lane) {
+        build_data::items::Definition plug{};
+        if (authored) {
+            const std::optional<std::uint32_t>& hash = item.sockets.plugs[lane];
+            if (!hash.has_value() || !build_data::find_item_definition_hash(*hash, plug)
+                || plug.definitionHash != *hash) {
+                continue;
+            }
+        } else {
+            const std::uint16_t plugIndex = detail.initialPlugIndices[lane];
+            if (plugIndex == item_details::kUnavailableItemIndex
+                || !build_data::find_item_definition_index(plugIndex, plug)
+                || plug.definitionIndex != plugIndex) {
+                continue;
+            }
+        }
+        if (is_rolled_result(plug.definitionHash)) {
+            return true;
+        }
+        item_details::Definition plugDetail{};
+        if (build_data::find_configured_item_detail(plug.definitionIndex, plugDetail)
+            && plugDetail.definitionHash == plug.definitionHash
+            && on_masterwork_ladder(detail, static_cast<std::uint8_t>(lane), plugDetail, weapon)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** @return True when one policy row pays for the dismantled item. */
+[[nodiscard]] bool policy_matches(const DismantleRewardPolicy& policy,
+                                  std::uint8_t tier,
+                                  std::uint8_t gearClass,
+                                  bool isMasterworked) noexcept {
+    // The mask is eight bits wide, so a manifest tier past it cannot be selected. Tested before
+    // the shift, which is undefined once the tier reaches the width of the shifted type.
+    constexpr std::uint8_t kTierBits = 8;
+    if (policy.tierMask != 0 && (tier >= kTierBits || (policy.tierMask & (1U << tier)) == 0)) {
+        return false;
+    }
+    if (policy.classMask != 0 && (policy.classMask & gearClass) == 0) {
+        return false;
+    }
+    switch (policy.masterwork) {
+    case DismantleMasterworkFilter::masterworked:
+        return isMasterworked;
+    case DismantleMasterworkFilter::notMasterworked:
+        return !isMasterworked;
+    default:
+        return true;
+    }
+}
+
 /**
  * Credits the supported client's ordinary weapon/armor dismantle payout.
- *
- * Capped stacks
- * lose only the overflowing part, matching normal profile-inventory behavior.
- * Every credited row
- * receives a new mutation serial so the account observer can display it.
+ * Matching policy rows are summed per material first, so one material lands as one credited row.
+ * A capped stack loses only the overflow and says so in the log. Each credited row gets a serial.
  */
 [[nodiscard]] bool
 apply_dismantle_rewards(const AccountState& before,
+                        const authored_inventory::Item& dismantledItem,
+                        const build_data::items::Definition& dismantledDefinition,
+                        const item_details::Definition& dismantledDetail,
                         std::uint8_t equipmentSlot,
                         AccountState& after,
                         std::array<DismantleReward, kDismantleRewardCapacity>& rewards,
@@ -90,9 +306,44 @@ apply_dismantle_rewards(const AccountState& before,
     if (!valid_profile_inventory(before)) {
         return false;
     }
-    if (equipmentSlot >= kGearEquipmentSlotCount) {
+    const std::uint8_t gearClass = gear_class_of(equipmentSlot);
+    if (gearClass == 0) {
         return true;
     }
+    const std::uint8_t tier = dismantledDefinition.tier;
+    const bool isMasterworked =
+        masterworked(dismantledItem,
+                     dismantledDetail,
+                     gearClass == static_cast<std::uint8_t>(DismantleGearClass::weapon));
+
+    // Sum the matching rows per material before crediting anything.
+    std::array<DismantleRewardPolicy, kDismantleRewardPolicyCapacity> payout{};
+    std::size_t payoutCount = 0;
+    for (std::size_t policyIndex = 0; policyIndex < before.dismantleRewardCount; ++policyIndex) {
+        const DismantleRewardPolicy& policy = before.dismantleRewards[policyIndex];
+        if (!policy_matches(policy, tier, gearClass, isMasterworked)) {
+            continue;
+        }
+        std::size_t slot = payoutCount;
+        for (std::size_t index = 0; index < payoutCount; ++index) {
+            if (payout[index].definitionHash == policy.definitionHash) {
+                slot = index;
+                break;
+            }
+        }
+        if (slot == payoutCount) {
+            if (payoutCount >= payout.size()) {
+                return false;
+            }
+            payout[payoutCount++] = {policy.definitionHash, 0};
+        }
+        if (policy.quantity > (std::numeric_limits<std::int32_t>::max)() - payout[slot].quantity) {
+            return false;
+        }
+        payout[slot].quantity += policy.quantity;
+    }
+    report_dismantle_reward_match(
+        dismantledDefinition.definitionHash, tier, gearClass, isMasterworked, payoutCount);
 
     std::int32_t greatestMutationSerial = 0;
     for (std::size_t index = 0; index < before.profileItemCount; ++index) {
@@ -100,8 +351,8 @@ apply_dismantle_rewards(const AccountState& before,
             (std::max)(greatestMutationSerial, before.profileItems[index].mutationSerial);
     }
 
-    for (std::size_t policyIndex = 0; policyIndex < before.dismantleRewardCount; ++policyIndex) {
-        const DismantleRewardPolicy& policy = before.dismantleRewards[policyIndex];
+    for (std::size_t policyIndex = 0; policyIndex < payoutCount; ++policyIndex) {
+        const DismantleRewardPolicy& policy = payout[policyIndex];
         build_data::items::Definition definition{};
         item_details::Definition detail{};
         inventory_buckets::Descriptor bucket{};
@@ -137,8 +388,13 @@ apply_dismantle_rewards(const AccountState& before,
         }
 
         const bool appended = profileIndex == after.profileItemCount;
-        if ((appended && after.profileItemCount >= after.profileItems.size())
-            || greatestMutationSerial == (std::numeric_limits<std::int32_t>::max)()) {
+        const bool profileFull = appended && after.profileItemCount >= after.profileItems.size();
+        if (profileFull || greatestMutationSerial == (std::numeric_limits<std::int32_t>::max)()) {
+            report_dismantle_reward_dropped(profileFull ? "profile_full" : "serial_exhausted",
+                                            policy.definitionHash,
+                                            policy.quantity,
+                                            0,
+                                            detail.maxStackSize);
             continue;
         }
         const std::int32_t previousQuantity =
@@ -146,6 +402,12 @@ apply_dismantle_rewards(const AccountState& before,
         const std::int32_t available = detail.maxStackSize - previousQuantity;
         const std::int32_t credited = (std::min)(policy.quantity, available);
         if (credited <= 0) {
+            // Every stack of this currency is already at its native cap.
+            report_dismantle_reward_dropped("stack_capped",
+                                            policy.definitionHash,
+                                            policy.quantity,
+                                            previousQuantity,
+                                            detail.maxStackSize);
             continue;
         }
 
@@ -162,6 +424,11 @@ apply_dismantle_rewards(const AccountState& before,
         }
         // A full native bucket drops this reward, but never blocks deletion of the source item.
         if (!account::valid(candidate) || !valid_profile_inventory(candidate)) {
+            report_dismantle_reward_dropped("bucket_full",
+                                            policy.definitionHash,
+                                            policy.quantity,
+                                            previousQuantity,
+                                            detail.maxStackSize);
             continue;
         }
         if (rewardCount >= rewards.size()) {
@@ -233,6 +500,8 @@ apply_dismantle_rewards(const AccountState& before,
         return false;
     }
 
+    // Survivors keep their serials: the serial is also the Client's bucket ordering token, so a
+    // fresh one moves the item to the first cell. The whole character is republished either way.
     std::size_t movedItemCount = 0;
     for (std::size_t index = 0; index < after.inventory.count; ++index) {
         const std::uint64_t survivorSoid = after.inventory.values[index].instanceSoid;
@@ -246,31 +515,6 @@ apply_dismantle_rewards(const AccountState& before,
             return false;
         }
         movedItemCount += static_cast<std::size_t>(beforeRow != afterRow);
-    }
-
-    // The serial is signed on the wire, so it must stay inside the positive int32 range.
-    constexpr std::uint32_t kMaximumInventorySerial =
-        static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)());
-    if (after.nextInventorySerial > kMaximumInventorySerial
-        || movedItemCount > kMaximumInventorySerial - after.nextInventorySerial) {
-        return false;
-    }
-
-    for (std::size_t index = 0; index < after.inventory.count; ++index) {
-        const std::uint64_t survivorSoid = after.inventory.values[index].instanceSoid;
-        std::uint16_t beforeRow = 0;
-        std::uint16_t afterRow = 0;
-        std::uint8_t beforeSlot = 0;
-        std::uint8_t afterSlot = 0;
-        if (!find_unequipped_row(beforeLoadout, survivorSoid, beforeRow, beforeSlot)
-            || !find_unequipped_row(placedAfter, survivorSoid, afterRow, afterSlot)
-            || beforeSlot != afterSlot) {
-            return false;
-        }
-        if (beforeRow != afterRow) {
-            after.inventory.values[index].mutationSerial =
-                static_cast<std::int32_t>(after.nextInventorySerial++);
-        }
     }
 
     candidate.characters[characterIndex] = after;
@@ -303,17 +547,31 @@ apply_dismantle_rewards(const AccountState& before,
         || dismantledDetail.definitionIndex != dismantledDefinition.definitionIndex
         || dismantledDetail.definitionHash != dismantledDefinition.definitionHash
         || dismantledDetail.bucketId != dismantledDefinition.bucketId
-        || dismantledDetail.instancedDefinitionState
-               != item_details::InstancedDefinitionState::instanced
-        || !dismantledDetail.equipmentSlot.has_value()
-        || static_cast<std::uint8_t>(*dismantledDetail.equipmentSlot) != dismantledSlot) {
+        // A quest step is authored stackable, so a single-unit row is accepted. A larger stack is
+        // refused: decrementing one is a different mutation.
+        || (dismantledDetail.instancedDefinitionState
+                != item_details::InstancedDefinitionState::instanced
+            && dismantledItem.quantity != 1)
+        // A pursuit names no equipment slot, and the loadout resolver stands it at slot zero.
+        // Slot zero maps to no gear class, so a dismantled pursuit pays out nothing.
+        || (dismantledDetail.equipmentSlot.has_value()
+                ? static_cast<std::uint8_t>(*dismantledDetail.equipmentSlot)
+                : std::uint8_t{0})
+               != dismantledSlot) {
         return false;
     }
 
     AccountState rewarded{};
     std::array<DismantleReward, kDismantleRewardCapacity> rewards{};
     std::size_t rewardCount = 0;
-    if (!apply_dismantle_rewards(candidate, dismantledSlot, rewarded, rewards, rewardCount)) {
+    if (!apply_dismantle_rewards(candidate,
+                                 dismantledItem,
+                                 dismantledDefinition,
+                                 dismantledDetail,
+                                 dismantledSlot,
+                                 rewarded,
+                                 rewards,
+                                 rewardCount)) {
         return false;
     }
     candidate = rewarded;

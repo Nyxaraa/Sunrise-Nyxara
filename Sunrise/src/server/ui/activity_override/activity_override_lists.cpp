@@ -9,6 +9,7 @@
 #include "../../../middleware/content/packages/tables/scenario_reader.h"
 #include "../../../middleware/content/packages/tables/spawn_reader.h"
 #include "../../../state/activity/forced/definition.h"
+#include "../../../state/activity_sdk/runtime.h"
 #include "../../../state/build_data/runtime.h"
 
 namespace sunrise::server::ui::activity_override {
@@ -16,6 +17,7 @@ namespace {
 
 namespace layouts = state::build_data::scenarios;
 namespace tables = middleware::content::packages::tables;
+namespace sdk = state::activity_sdk;
 
 /** A bubble's slice sets are spaced by this factor, so it also caps how many it can declare. */
 constexpr std::uint8_t kMaximumBubbleStates = tables::kSliceSetIndexFactor;
@@ -260,6 +262,49 @@ void refresh_activities(Lists& rows) noexcept {
     for (const layouts::Definition& row : rowsRead) {
         assign(name_of(row), rows.activities[rows.activityCount]);
         ++rows.activityCount;
+    }
+}
+
+/** Rebuilds the definition rows for one destination, keeping the hidden count. */
+void refresh_definitions(Lists& rows, std::string_view destination) noexcept {
+    rows.definitions = {};
+    rows.definitionIndices = {};
+    rows.definitionCount = 0;
+    rows.definitionsHidden = 0;
+    const sdk::Snapshot catalog = sdk::snapshot();
+    rows.definitionsUnavailable = catalog == nullptr;
+    if (rows.definitionsUnavailable || destination.empty()) {
+        return;
+    }
+    const auto activities = catalog->activities();
+    for (std::size_t row = 0; row < activities.size(); ++row) {
+        const sdk::format::Activity& activity = activities[row];
+        if (catalog->string(activity.internalName) != destination
+            || activity.activityIndex > state::activity::forced::kMaximumActivityIndex) {
+            continue;
+        }
+        if (rows.definitionCount == rows.definitions.size()) {
+            ++rows.definitionsHidden;
+            continue;
+        }
+        const bool exact =
+            (activity.flags & sdk::format::kActivityExactMask) == sdk::format::kActivityExactMask;
+        const std::string_view display = catalog->string(activity.displayName);
+        std::array<char, kLabelCapacity> line{};
+        const int written = std::snprintf(line.data(),
+                                          line.size(),
+                                          "%u  %.*s%s",
+                                          static_cast<unsigned>(activity.activityIndex),
+                                          static_cast<int>(display.size()),
+                                          display.data(),
+                                          exact ? "" : "  not exact");
+        if (written <= 0) {
+            continue;
+        }
+        assign(std::string_view(line.data()), rows.definitions[rows.definitionCount]);
+        rows.definitionIndices[rows.definitionCount] =
+            static_cast<std::uint16_t>(activity.activityIndex);
+        ++rows.definitionCount;
     }
 }
 

@@ -62,6 +62,11 @@ FrameCallback Descriptor::frame_callback() const noexcept {
     return frameCallback_;
 }
 
+/** @return The optional companion-window entry called on every visible UI frame. */
+FrameCallback Descriptor::companion_frame_callback() const noexcept {
+    return companionFrameCallback_;
+}
+
 /**
  * Builds one descriptor by value.
  * @param stableId Lowercase id, used for registration and for saved state.
@@ -73,6 +78,16 @@ bool create_descriptor(Owner owner,
                        std::string_view stableId,
                        std::string_view displayName,
                        FrameCallback frameCallback,
+                       Descriptor& output) noexcept {
+    return create_descriptor(owner, stableId, displayName, frameCallback, nullptr, output);
+}
+
+/** Builds one descriptor with an optional companion-window frame entry. */
+bool create_descriptor(Owner owner,
+                       std::string_view stableId,
+                       std::string_view displayName,
+                       FrameCallback frameCallback,
+                       FrameCallback companionFrameCallback,
                        Descriptor& output) noexcept {
     if (!is_valid_owner(owner) || !is_valid_stable_id(stableId)
         || !is_valid_display_name(displayName) || frameCallback == nullptr) {
@@ -86,6 +101,7 @@ bool create_descriptor(Owner owner,
     std::copy(displayName.begin(), displayName.end(), candidate.displayName_.begin());
     candidate.displayNameLength_ = displayName.size();
     candidate.frameCallback_ = frameCallback;
+    candidate.companionFrameCallback_ = companionFrameCallback;
     output = candidate;
     return true;
 }

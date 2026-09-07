@@ -1,0 +1,41 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: Release x64
+    # The image carries Visual Studio 2026, so the project's own v145 toolset and its
+    # 10.0.26100.0 SDK are both present. No toolset override.
+    runs-on: windows-2025-vs2026
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      # The x86-hosted compiler runs out of heap on the large static tables. Force the x64 host.
+      - name: Build
+        run: >
+          msbuild Sunrise.sln /m
+          /p:Configuration=Release
+          /p:Platform=x64
+          /p:PreferredToolArchitecture=x64
+          /verbosity:minimal
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sunrise-Release-x64
+          path: |
+            build/x64/Release/steam_api64.dll
+            build/x64/Release/steam_api64.pdb
+          if-no-files-found: error

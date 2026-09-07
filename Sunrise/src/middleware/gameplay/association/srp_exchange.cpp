@@ -2,6 +2,8 @@
 
 #include <Windows.h>
 
+#include <span>
+
 #include "../../crypto/random_bytes.h"
 
 namespace sunrise::middleware::gameplay::association::srp {
@@ -52,6 +54,19 @@ constexpr modular::Number kGroupModulus{
 }
 
 /**
+ * Right-aligns a short value inside one fixed-width integer.
+ * @param source Bytes shorter than one integer.
+ * @param output Receives the zero-padded integer.
+ */
+void left_pad(std::span<const std::byte> source,
+              std::array<std::byte, kIntegerSize>& output) noexcept {
+    output = {};
+    for (std::size_t index = 0; index < source.size(); ++index) {
+        output[kIntegerSize - source.size() + index] = source[index];
+    }
+}
+
+/**
  * Computes the scrambling parameter from both public values.
  * @param clientPublic Offered public value in wire form.
  * @param serverPublic Answered public value in wire form.
@@ -67,9 +82,7 @@ constexpr modular::Number kGroupModulus{
     }
     // The digest is shorter than one integer, so it enters the arithmetic left zero padded.
     std::array<std::byte, kIntegerSize> padded{};
-    for (std::size_t index = 0; index < digest.size(); ++index) {
-        padded[kIntegerSize - digest.size() + index] = digest[index];
-    }
+    left_pad(digest, padded);
     modular::import_big_endian(padded, output);
     return true;
 }
@@ -97,9 +110,7 @@ bool derive(Exchange& exchange) noexcept {
         return false;
     }
     std::array<std::byte, kIntegerSize> paddedPrivate{};
-    for (std::size_t index = 0; index < privateBytes.size(); ++index) {
-        paddedPrivate[kIntegerSize - privateBytes.size() + index] = privateBytes[index];
-    }
+    left_pad(privateBytes, paddedPrivate);
     modular::Number exponent{};
     modular::import_big_endian(paddedPrivate, exponent);
     SecureZeroMemory(privateBytes.data(), privateBytes.size());

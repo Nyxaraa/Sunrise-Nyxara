@@ -4,6 +4,11 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "../activity/definition.h"
+#include "external/definition.h"
+#include "external/replication_common_reconciler.h"
+#include "external/replication_view_receptor.h"
+
 namespace sunrise::state::gameplay {
 
 /** The protected envelope keys AES-128. */
@@ -12,6 +17,8 @@ inline constexpr std::size_t kChannelKeySize = 16;
 inline constexpr std::size_t kNetAddrBlobSize = 86;
 /** The exchanged nonce seed is 12 bytes and is also the nonce width. */
 inline constexpr std::size_t kNonceSeedSize = 12;
+/** Direct gameplay packets carry a two-byte proxy-address trailer. */
+inline constexpr std::size_t kAddressTrailerSize = 2;
 /** One public activity holds few direct associations, and every slot is fixed storage. */
 inline constexpr std::size_t kAssociationCapacity = 4;
 /** An offer that never completes is torn down after this many milliseconds. */
@@ -33,6 +40,15 @@ enum class AssociationStage : std::uint8_t {
 struct Endpoint {
     std::uint32_t address{};
     std::uint16_t port{};
+    /**
+     * Host port the peer dialled, which is what separates two links from one peer.
+     * The client sends every channel from one source port, so the peer address alone names them
+     * all. Zero means the primary host port.
+     */
+    std::uint16_t localPort{};
+
+    /** Every field names the endpoint, the local port included. */
+    [[nodiscard]] bool operator==(const Endpoint&) const noexcept = default;
 };
 
 /**
@@ -44,6 +60,8 @@ struct ProtectedContext {
     std::array<std::byte, kChannelKeySize> key{};
     std::array<std::byte, kNonceSeedSize> outboundBase{};
     std::array<std::byte, kNonceSeedSize> inboundBase{};
+    /** Direct-address trailer mirrored outside and inside each protected packet. */
+    std::array<std::byte, kAddressTrailerSize> addressTrailer{};
     /** Advanced before every protected send so no two sends share a nonce. */
     std::uint32_t outboundWordA{};
     /** Stable for the association's lifetime. */
@@ -88,16 +106,16 @@ inline constexpr std::size_t kViewListCapacity = 16;
 struct ViewSignature {
     std::array<std::byte, kViewListCapacity> list{};
     std::uint64_t token{};
+    /** Optional value the sender carried. Its meaning is unrecovered, so it is kept, not read. */
+    std::int32_t optionalValue{};
     std::uint8_t kind{};
     std::uint8_t listCount{};
+    bool hasOptionalValue{};
     bool hasList{};
     bool bound{};
 };
 
-/**
- * Peer connection stage.
- * The numbers are the engine's own. Do not renumber them.
- */
+/** Peer connection stage. The numbers are the engine's own. Do not renumber them. */
 enum class PeerStage : std::uint8_t {
     absent = 0,
     allocated = 1,
@@ -191,6 +209,8 @@ struct PeerLink {
     bool remoteAddressPresent{};
     /** Newest packet sequence received from this peer. */
     std::uint16_t receiveHead{};
+    /** Expanded receive sequence orders sparse entity updates across packet wraps. */
+    std::uint64_t receiveOrdinal{};
     bool ringInitialized{};
     /** Entry `i` is the packet `i + 1` before the head. The head itself carries no entry. */
     std::array<bool, kAckHistory> received{};
@@ -205,6 +225,21 @@ struct PeerLink {
     OutboundQueue outbound{};
     /** View signature bound for this peer. Replication is refused until it is bound. */
     ViewSignature view{};
+    /** Process-local identity changed whenever this endpoint rebuilds its channel. */
+    std::uint64_t peerGeneration{};
+    std::uint64_t channelGeneration{};
+    std::uint64_t viewGeneration{};
+    external::view_receptor::Receptor viewReceptor{};
+    external::common_reconciler::Reconciler commonReconciler{};
+    activity::SessionBinding activityBinding{};
+    /** Session that owns the active external view and its sessionless lane bodies. */
+    std::uint64_t externalGroupSessionId{};
+    /** True after an ordinary packet outcome covers the current common root. */
+    bool commonCommitted{};
+    external::ExternalShadow externalShadow{};
+    std::array<external::ExternalContributionSnapshot, external::kExternalContributionCapacity>
+        externalContributions{};
+    std::uint64_t nextExternalTransmission{};
     /** True while a received packet still has to be acknowledged. */
     bool acknowledgementOwed{};
     std::uint64_t lastTick{};

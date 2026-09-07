@@ -35,7 +35,6 @@ __declspec(noinline) void ingress_body(CallLease& lease, HookSlot slot) noexcept
     AcquireSRWLockShared(&g_lifecycleLock);
     if (g_trackCalls) {
         lease.original = g_originals[index(slot)];
-        lease.fetch = reinterpret_cast<ContentFetch>(g_contentFetch);
         lease.accepting = g_accepting[index(slot)];
         ++g_callDepth;
         lease.tracked = true;

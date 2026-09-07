@@ -19,6 +19,15 @@ namespace {
 /** The second nonce byte is fixed for this package branch. */
 constexpr std::byte kNonceBranchByte{0xF9};
 
+/** Zeroes one derived package nonce when its scope ends, including every failure return. */
+struct NonceWiper final {
+    std::array<std::byte, crypto::aes_gcm::kNonceSize>& nonce;
+
+    ~NonceWiper() noexcept {
+        SecureZeroMemory(nonce.data(), nonce.size());
+    }
+};
+
 /**
  * Builds the package nonce from the borrowed base and the package id.
  * @param base Borrowed nonce base.
@@ -105,12 +114,50 @@ void release_caches() noexcept {
 /** @param scratch Reader whose own files are closed and whose held tables are dropped. */
 void close_files(Scratch& scratch) noexcept {
     handle_cache::close(scratch);
+    release_locations(scratch);
+    scratch.packageDirectory = {};
+    scratch.packageDirectoryLength = 0;
+    scratch.packageLocationFallback = {};
+    // Dropped slots stay chained otherwise, and the next hold would chain one slot twice.
+    clear_slot_index(scratch.tableIndex);
     for (TableSlot& slot : scratch.tables) {
         slot.occupied = false;
         slot.entryCount = 0;
         slot.blockCount = 0;
         slot.used = 0;
     }
+}
+
+/** Reads one tag's entry class without decrypting or decompressing its body. */
+bool read_tag_class(const Source& source,
+                    Scratch& scratch,
+                    std::uint32_t tag,
+                    std::uint32_t& classId) noexcept {
+    classId = 0;
+    if (tag < layout::kTagBase) {
+        return false;
+    }
+    const std::uint32_t handle = tag - layout::kTagBase;
+    const auto packageId = static_cast<std::uint16_t>(handle >> layout::kTagEntryBits);
+    const std::uint32_t entryIndex = handle & layout::kTagEntryMask;
+
+    const PackageLocation* location = nullptr;
+    if (!resolve_latest(scratch, source.directory, packageId, location) || location == nullptr) {
+        return false;
+    }
+    Header header{};
+    if (!block_cache::load_header(
+            location->latestPath, packageId, location->patchIndex, scratch, header)
+        || entryIndex >= header.entryCount) {
+        return false;
+    }
+
+    layout::EntryRecord entry{};
+    if (!table_cache::entry_record(scratch, location->latestPath, header, entryIndex, entry)) {
+        return false;
+    }
+    classId = entry.reference;
+    return true;
 }
 
 /** Reads one tagged entry out of the installed packages. */
@@ -120,41 +167,31 @@ bool read_tag(const Source& source,
               std::vector<std::byte>& output,
               std::uint32_t& classId) noexcept {
     output.clear();
-    classId = 0;
-    if (source.keys == nullptr || tag < layout::kTagBase) {
+    if (source.keys == nullptr || !read_tag_class(source, scratch, tag, classId)) {
         return false;
     }
     const std::uint32_t handle = tag - layout::kTagBase;
     const auto packageId = static_cast<std::uint16_t>(handle >> layout::kTagEntryBits);
     const std::uint32_t entryIndex = handle & layout::kTagEntryMask;
-
-    Path stem{};
-    std::uint32_t patchIndex = 0;
-    const bool located = find_latest(source.directory, packageId, stem, patchIndex);
-    if (!located) {
-        return false;
-    }
-    Path path{};
+    const PackageLocation* location = nullptr;
     Header header{};
-    if (!build_path(stem, patchIndex, path)
-        || !block_cache::load_header(path, packageId, patchIndex, scratch, header)
-        || entryIndex >= header.entryCount) {
-        return false;
-    }
-
     layout::EntryRecord entry{};
-    if (!table_cache::entry_record(scratch, path, header, entryIndex, entry)) {
+    if (!resolve_latest(scratch, source.directory, packageId, location) || location == nullptr
+        || !block_cache::load_header(
+            location->latestPath, packageId, location->patchIndex, scratch, header)
+        || entryIndex >= header.entryCount
+        || !table_cache::entry_record(scratch, location->latestPath, header, entryIndex, entry)) {
         return false;
     }
-    classId = entry.reference;
     const layout::EntryPlacement placement = layout::placement(entry);
     if (placement.size == 0) {
         return false;
     }
     output.resize(placement.size);
 
-    const auto nonce = package_nonce(
+    auto nonce = package_nonce(
         std::span<const std::byte, crypto::aes_gcm::kNonceSize>(source.keys->nonceBase), packageId);
+    const NonceWiper nonceWiper{nonce};
     std::uint32_t blockIndex = placement.startBlock;
     std::size_t copied = 0;
     while (copied < placement.size) {
@@ -162,12 +199,12 @@ bool read_tag(const Source& source,
             return false;
         }
         layout::BlockRecord record{};
-        if (!table_cache::block_record(scratch, path, header, blockIndex, record)) {
+        if (!table_cache::block_record(scratch, location->latestPath, header, blockIndex, record)) {
             return false;
         }
         std::span<const std::byte> plaintext;
         const bool decoded =
-            load_block(stem, packageId, record, *source.keys, nonce, scratch, plaintext);
+            load_block(location->stem, packageId, record, *source.keys, nonce, scratch, plaintext);
         if (!decoded) {
             return false;
         }

@@ -15,6 +15,8 @@
 namespace sunrise::client::hooks::bootflow {
 namespace {
 
+using core::log::kLineCapacity;
+
 /**
  * The bubble public-flag reader. The pattern is its whole body: a call to the state-byte getter,
  * then a cmovnz that turns the byte into a bool.
@@ -27,8 +29,8 @@ constexpr auto kReaderSignature =
     signature<signature_length(kReaderSignatureText)>(kReaderSignatureText);
 
 /**
- * The region transition starter. Anchored on its stack-cookie prologue and the read of the
- * manager's phase byte, which no other function pairs this way.
+ * The region transition starter, anchored on its stack-cookie prologue and the manager's
+ * phase-byte read, which no other function pairs this way.
  */
 constexpr std::string_view kStarterSignatureText =
     "44 89 44 24 18 55 53 56 57 41 54 41 56 41 57 48 8D AC 24 ? ? ? ? 48 81 EC ? ? ? ? 48 8B 05 "
@@ -44,15 +46,13 @@ constexpr std::size_t kCallOperandOffset = 1;
 /** A near call is its opcode plus a signed 32-bit displacement. */
 constexpr std::size_t kCallLength = kCallOperandOffset + 4;
 /**
- * Bytes of the starter searched for that call. The body is shorter than this, and the search
- * needs one match, so a second hit fails the install instead of picking one.
+ * Bytes of the starter searched for that call; its body is shorter than this.
+ * The search needs exactly one match, so a second hit fails the install instead of picking one.
  */
 constexpr std::size_t kStarterSearchBytes = 0x600;
 
 /** Lines allowed per run. Region transitions are rare, so this shows every one a boot makes. */
 constexpr unsigned kMaxReports = 8;
-/** Size of one line, set by its stage and slice-set fields. */
-constexpr std::size_t kLineCapacity = 96;
 
 using Reader = bool(__fastcall*)(std::uint32_t);
 
@@ -129,15 +129,14 @@ __declspec(noinline) bool __fastcall reader(std::uint32_t sliceSet) noexcept {
     if (caller != g_returnSite.load(std::memory_order_acquire)) {
         return true;
     }
-    // No public host serves a forced destination, so that run waits forever. It must load solo.
-    const bool forced =
-        core::settings::get().client.regionPrivate || state::activity::forced::override_active();
+    const core::settings::Settings& settings = core::settings::get();
+    const bool forced = settings.client.regionPrivate || state::activity::forced::override_active();
     report(sliceSet, forced);
     return !forced;
 }
 
-/** @param reason Key naming the step that failed. @return False, for a direct return. */
-[[nodiscard]] bool fail(const char* reason) noexcept {
+/** @param reason Key naming the step that failed. */
+void report_failure(const char* reason) noexcept {
     std::array<char, kLineCapacity> line{};
     const int written = std::snprintf(
         line.data(), line.size(), "ev=bootflow stage=region result=fail reason=%s", reason);
@@ -146,39 +145,47 @@ __declspec(noinline) bool __fastcall reader(std::uint32_t sliceSet) noexcept {
                          core::log::Level::warn,
                          {line.data(), static_cast<std::size_t>(written)});
     }
-    return false;
 }
 
 } // namespace
 
-/** Attaches the private-region force. */
-bool install_region_private() noexcept {
+/** Stages the private-region force. */
+StageResult stage_region_private(hooking::detour::Spec& spec) noexcept {
     if (g_handle.attached) {
-        return true;
+        return StageResult::attached;
     }
     std::byte* const target = scan_main_image_unique(kReaderSignature, "slice_set_is_public");
     if (target == nullptr) {
-        return fail("reader");
+        report_failure("reader");
+        return StageResult::unavailable;
     }
     const std::byte* const starter =
         scan_main_image_unique(kStarterSignature, "region_start_transition");
     if (starter == nullptr) {
-        return fail("starter");
+        report_failure("starter");
+        return StageResult::unavailable;
     }
     const std::byte* const returnSite = find_return_site(starter, target);
     if (returnSite == nullptr) {
-        return fail("call_site");
+        report_failure("call_site");
+        return StageResult::unavailable;
     }
     // Published before the detour attaches, so the first call already has its filter.
     g_returnSite.store(returnSite, std::memory_order_release);
-    const hooking::detour::Spec spec{target, reinterpret_cast<void*>(&reader)};
-    if (!hooking::detour::install(spec, g_handle)) {
-        return fail("attach");
+    spec = hooking::detour::Spec{target, reinterpret_cast<void*>(&reader)};
+    return StageResult::staged;
+}
+
+/** Takes the private-region force's attached handle, or a detached one. */
+void publish_region_private(const hooking::detour::Handle& handle) noexcept {
+    if (!handle.attached) {
+        report_failure("attach");
+        return;
     }
+    g_handle = handle;
     g_original.store(reinterpret_cast<Reader>(g_handle.original), std::memory_order_release);
     core::log::write(
         core::log::Channel::client, core::log::Level::info, "ev=bootflow stage=region result=ok");
-    return true;
 }
 
 /** Detaches the private-region force. */

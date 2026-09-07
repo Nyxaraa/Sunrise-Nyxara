@@ -33,6 +33,15 @@ bool carries_roster_slot(std::span<const std::byte> object) noexcept {
     if (!object_slots(object, slots)) {
         return false;
     }
+    // A named key is admitted on its own account, before the type test it would fail.
+    std::uint32_t key = 0;
+    if (object_key(object, key)) {
+        for (const std::uint32_t forced : kForcedRosterKeys) {
+            if (key == forced) {
+                return true;
+            }
+        }
+    }
     for (std::uint64_t index = 0; index < slots.count; ++index) {
         Slot slot{};
         if (!object_slot_at(object, slots, index, slot)) {
@@ -59,6 +68,10 @@ bool observe_slice_set(RosterIntersection& state, std::uint32_t sliceSetIndex) n
         state.overflowed = true;
         return false;
     }
+    ++state.stateCount;
+    ++state.bubbleStateCounts[bit];
+    state.currentBubble = bit;
+    state.stateOpen = true;
     state.observedSets |= std::uint64_t{1} << bit;
     return true;
 }
@@ -78,12 +91,20 @@ bool observe_roster_key(RosterIntersection& state,
         state.overflowed = true;
         return false;
     }
+    if (!state.stateOpen || bit != state.currentBubble || state.stateCount == 0) {
+        state.overflowed = true;
+        return false;
+    }
     const std::uint64_t mask = std::uint64_t{1} << bit;
-    state.observedSets |= mask;
 
     for (std::size_t index = 0; index < state.keyCount; ++index) {
         if (state.keys[index] == objectKey) {
             state.masks[index] |= mask;
+            if (state.lastKeyState[index] != state.stateCount) {
+                state.lastKeyState[index] = state.stateCount;
+                ++state.keyStateCounts[index];
+                ++state.keyBubbleStateCounts[index][bit];
+            }
             return true;
         }
     }
@@ -94,6 +115,9 @@ bool observe_roster_key(RosterIntersection& state,
     }
     state.keys[state.keyCount] = objectKey;
     state.masks[state.keyCount] = mask;
+    state.lastKeyState[state.keyCount] = state.stateCount;
+    state.keyStateCounts[state.keyCount] = 1;
+    state.keyBubbleStateCounts[state.keyCount][bit] = 1;
     ++state.keyCount;
     return true;
 }
@@ -125,7 +149,7 @@ bool safe_roster_keys(const RosterIntersection& state,
         return true;
     }
     for (std::size_t index = 0; index < state.keyCount; ++index) {
-        if (state.masks[index] != state.observedSets) {
+        if (state.stateCount == 0 || state.keyStateCounts[index] != state.stateCount) {
             continue;
         }
         if (count == output.size()) {
@@ -133,6 +157,48 @@ bool safe_roster_keys(const RosterIntersection& state,
             return false;
         }
         output[count] = state.keys[index];
+        ++count;
+    }
+    return true;
+}
+
+/**
+ * Reports the keys present in some observed slice sets and not all, with their bubbles.
+ * @param state Accumulator for one destination.
+ * @param keys Receives the partially present keys.
+ * @param masks Receives each key's bubbles, in the same order.
+ * @param count Receives how many were written.
+ * @return True when nothing overflowed and every partial key fits the output.
+ */
+bool partial_roster_keys(const RosterIntersection& state,
+                         std::span<std::uint32_t> keys,
+                         std::span<std::uint64_t> masks,
+                         std::size_t& count) noexcept {
+    count = 0;
+    if (state.overflowed || keys.size() != masks.size()) {
+        return false;
+    }
+    // An unread slice set has no index, so no bubble can be ruled in or out and none is safe.
+    if (state.unresolvedSet) {
+        return true;
+    }
+    for (std::size_t index = 0; index < state.keyCount; ++index) {
+        std::uint64_t mask = 0;
+        for (std::size_t bubble = 0; bubble < kSliceSetCapacity; ++bubble) {
+            if (state.bubbleStateCounts[bubble] != 0
+                && state.keyBubbleStateCounts[index][bubble] == state.bubbleStateCounts[bubble]) {
+                mask |= std::uint64_t{1} << bubble;
+            }
+        }
+        if (mask == 0 || mask == state.observedSets) {
+            continue;
+        }
+        if (count == keys.size()) {
+            count = 0;
+            return false;
+        }
+        keys[count] = state.keys[index];
+        masks[count] = mask;
         ++count;
     }
     return true;

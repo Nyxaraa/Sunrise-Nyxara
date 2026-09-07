@@ -2,16 +2,22 @@
 
 #include "../../content/content_catalog.h"
 #include "../abilities/ability_bucket_catalog.h"
+#include "../bounties/bounty_catalog.h"
 #include "../collectibles/collectible_catalog.h"
 #include "../constants/investment_constant_catalog.h"
 #include "../hash_names/hash_name_catalog.h"
 #include "../inventory/buckets/inventory_bucket_catalog.h"
+#include "../items/catalysts/exotic_catalyst_catalog.h"
 #include "../items/details/item_detail_catalog.h"
 #include "../items/socket_plugs/socket_plug_catalog.h"
 #include "../material_requirements/material_requirement_catalog.h"
+#include "../nodes/node_catalog.h"
 #include "../progressions/progression_catalog.h"
+#include "../records/record_catalog.h"
 #include "../runtime.h"
 #include "../scenarios/scenario_catalog.h"
+#include "../season_pass/season_pass_catalog.h"
+#include "../sobjects/sobject_catalog.h"
 #include "../socket_entry_buckets/socket_entry_bucket_catalog.h"
 #include "../socket_entry_lists/socket_entry_list_catalog.h"
 #include "../spawn_sets/spawn_set_catalog.h"
@@ -114,12 +120,20 @@ bool progression_definitions_ready() noexcept {
     return progressions::count() != 0;
 }
 
-/** Publishes the whole progression definition table in one step. */
-bool publish_progression_definitions(
-    std::span<const progressions::Definition> definitions) noexcept {
+/** Publishes the whole progression definition table and its step bank in one step. */
+bool publish_progression_definitions(std::span<const progressions::Definition> definitions,
+                                     std::span<const progressions::Step> steps) noexcept {
     runtime::persistence::Transaction transaction;
     return transaction.active()
-           && transaction.finish(progressions::replace(definitions), progressions::clear);
+           && transaction.finish(progressions::replace(definitions, steps), progressions::clear);
+}
+
+/** Reads what each rank of one progression costs, in rank order. */
+bool find_progression_steps(std::uint16_t definitionIndex,
+                            std::span<progressions::Step> output,
+                            std::size_t& count) noexcept {
+    count = 0;
+    return progression_definitions_ready() && progressions::steps(definitionIndex, output, count);
 }
 
 /** @return True when a complete destination-layout domain, empty or not, is published. */
@@ -178,14 +192,15 @@ bool spawn_sets_ready() noexcept {
 
 /** Publishes the spawn-set catalog extracted from the installed packages, in one step. */
 bool publish_spawn_sets(std::span<const spawn_sets::Stem> stems,
-                        std::span<const spawn_sets::NameHash> nameHashes) noexcept {
+                        std::span<const spawn_sets::NameHash> nameHashes,
+                        std::span<const spawn_sets::Point> points) noexcept {
     runtime::persistence::Transaction transaction;
     if (!transaction.active()) {
         return false;
     }
     // An empty catalog is complete. It is what a build with no installed spawn set means.
-    const bool replaced =
-        stems.empty() ? nameHashes.empty() : spawn_sets::replace(stems, nameHashes);
+    const bool replaced = stems.empty() ? nameHashes.empty() && points.empty()
+                                        : spawn_sets::replace(stems, nameHashes, points);
     if (!replaced) {
         return transaction.finish(false, rollback_spawn_catalog_publication);
     }
@@ -208,6 +223,16 @@ bool find_spawn_sets(std::string_view stem,
     spawn_sets::Stem row{};
     return spawn_sets_ready() && spawn_sets::find(stem, row)
            && spawn_sets::stem_hashes(row, output, count);
+}
+
+/** Finds the spawn point of one map-package stem nearest a world position. */
+bool find_nearest_spawn_point(std::string_view stem,
+                              const std::array<float, spawn_sets::kPositionComponents>& position,
+                              spawn_sets::Point& point,
+                              float& distance) noexcept {
+    point = {};
+    distance = 0.0F;
+    return spawn_sets_ready() && spawn_sets::nearest_point(stem, position, point, distance);
 }
 
 /** Finds one destination's bubble layout by package name. */
@@ -242,8 +267,7 @@ bool publish_ability_buckets(std::span<const abilities::Definition> definitions)
     }
     // The disk cache already froze every domain at boot, so the transaction above refuses to run.
     // Ability buckets track the player's live subclass selection rather than installed content, so
-    // a later in-session pick still has to update this one domain in memory; it just no longer
-    // takes part in the one-time disk snapshot.
+    // a later in-session pick still updates this one domain in memory.
     if (!abilities::replace(definitions)) {
         return false;
     }
@@ -314,9 +338,9 @@ bool find_investment_constants(constants::InvestmentConstants& value) noexcept {
     return constants::find(value);
 }
 
-/** @return True when the installed vendor index is in State. */
+/** @return True when the vendor index and a definition for every row of it are in State. */
 bool vendor_catalog_ready() noexcept {
-    return vendors::count() != 0;
+    return vendors::count() != 0 && vendors::definition_count() != 0;
 }
 
 /** Publishes the vendor index and every extracted vendor definition in one step. */
@@ -328,19 +352,6 @@ bool publish_vendor_catalog(std::span<const vendors::IndexEntry> index,
     return transaction.active()
            && transaction.finish(vendors::replace(index, definitions, saleRows, installedRows),
                                  vendors::clear);
-}
-
-/** Finds one vendor's index row. */
-bool find_vendor_index(std::uint32_t definitionHash, vendors::IndexEntry& entry) noexcept {
-    entry = {};
-    return vendor_catalog_ready() && vendors::find_hash(definitionHash, entry);
-}
-
-/** Finds one extracted vendor definition. */
-bool find_vendor_definition(std::uint32_t definitionHash,
-                            vendors::Definition& definition) noexcept {
-    definition = {};
-    return vendor_catalog_ready() && vendors::find(definitionHash, definition);
 }
 
 namespace runtime {
@@ -355,10 +366,16 @@ void clear_catalogs() noexcept {
     items::details::clear();
     details::clear();
     items::socket_plugs::clear();
+    items::catalysts::clear();
     inventory::buckets::clear();
     socket_entry_lists::clear();
     rollback_ability_publication();
     progressions::clear();
+    season_pass::clear();
+    bounties::clear();
+    records::clear();
+    nodes::clear();
+    sobjects::clear();
     scenarios::clear();
     rollback_spawn_catalog_publication();
     rollback_name_catalog_publication();

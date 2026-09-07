@@ -16,8 +16,8 @@
 #include "../../../core/ui/runtime/ui_visibility_runtime.h"
 #include "../../../state/account/account_state.h"
 #include "../../../state/runtime/runtime.h"
+#include "../../input/window_focus.h"
 #include "../../movement/movement_settings_store.h"
-#include "../noclip/runtime.h"
 #include "../polled_input/runtime.h"
 #include "internal.h"
 #include "runtime.h"
@@ -48,6 +48,9 @@ std::atomic_bool g_keyDown{false};
 std::atomic_uint32_t g_requestAge{0};
 /** Set while the feature is usable, so the per-tick path costs one atomic read when it is not. */
 std::atomic_bool g_active{false};
+SRWLOCK g_cameraPoseLock{SRWLOCK_INIT};
+CameraPose g_cameraPose{};
+bool g_cameraPoseValid{};
 
 /**
  * The player's physics component, kept from the last tick that carried it. At rest the sync stops
@@ -60,8 +63,23 @@ std::atomic_uint32_t g_pressFrames{0};
 ControlledHandle g_controlledHandle{};
 CameraSingleton g_cameraSingleton{};
 
-/** Written by the camera hook and read by the physics hook. Both run on the same thread. */
+/** Camera forward vector for the next physics tick. Every access holds g_cameraPoseLock. */
 std::array<float, kVectorLanes> g_forward{};
+
+/** Withdraws the pose when the camera block is not readable for this frame. */
+void invalidate_camera_pose() noexcept {
+    AcquireSRWLockExclusive(&g_cameraPoseLock);
+    g_cameraPose = {};
+    g_cameraPoseValid = false;
+    ReleaseSRWLockExclusive(&g_cameraPoseLock);
+}
+
+/** @param forward Receives the published camera forward vector, copied under the pose lock. */
+void copy_forward(Vector& forward) noexcept {
+    AcquireSRWLockShared(&g_cameraPoseLock);
+    forward = g_forward;
+    ReleaseSRWLockShared(&g_cameraPoseLock);
+}
 
 /**
  * Reads one value out of game memory without faulting on a torn pointer.
@@ -138,8 +156,8 @@ void report_skip(const char* reason) noexcept;
 
 /**
  * Starts the injected press that wakes the body.
- * Nothing reads the new body position until something integrates it, so the move is published by
- * driving the player's own forward action rather than by writing what it would have produced.
+ * Nothing reads the new body position until something integrates it. So the move drives the
+ * player's own forward action, instead of writing what that action would have produced.
  */
 void begin_press() noexcept {
     const state::AccountState account = state::account_snapshot();
@@ -163,41 +181,6 @@ void end_press() noexcept {
     }
     if (g_pressFrames.fetch_sub(1, std::memory_order_acq_rel) <= 1) {
         hooks::polled_input::release_key();
-    }
-}
-
-/**
- * Reports the gate values the sync tests before it publishes a transform.
- *
- * The move lands while moving and does nothing at rest for all three write targets, so what
- * changes at rest is upstream of the write. These four gates are what the sync reads first.
- *
- * @param component Physics component owning the player.
- * @param body Rigid body behind it.
- */
-void report_gates(const std::byte* component, const std::byte* body) noexcept {
-    std::uint8_t suppressed = 0;
-    std::int32_t bodyIndex = 0;
-    std::uint32_t bodyFlags = 0;
-    std::uint8_t motionType = 0;
-    (void)read_at(component + kPhysicsComponentSuppress, suppressed);
-    (void)read_at(component + kPhysicsComponentBodyIndex, bodyIndex);
-    (void)read_at(body + kBodyFlags, bodyFlags);
-    (void)read_at(body + kBodyMotionType, motionType);
-    std::array<char, 160> line{};
-    const int written = std::snprintf(line.data(),
-                                      line.size(),
-                                      "ev=teleport stage=gates suppress=%u index=%d "
-                                      "flags=0x%08X active=%u motion=%u",
-                                      static_cast<unsigned>(suppressed),
-                                      static_cast<int>(bodyIndex),
-                                      static_cast<unsigned>(bodyFlags),
-                                      (bodyFlags & kBodyActiveBit) != 0 ? 1U : 0U,
-                                      static_cast<unsigned>(motionType));
-    if (written > 0) {
-        core::log::write(core::log::Channel::client,
-                         core::log::Level::info,
-                         {line.data(), static_cast<std::size_t>(written)});
     }
 }
 
@@ -275,9 +258,11 @@ void set_vertical_velocity(std::byte* body, float value) noexcept {
  * @return True when the new position was stored.
  */
 [[nodiscard]] bool move_body(std::byte* body, float distance) noexcept {
+    Vector forward{};
+    copy_forward(forward);
     std::array<float, kVectorLanes> delta{};
     for (std::size_t lane = 0; lane < kVectorLanes; ++lane) {
-        delta[lane] = g_forward[lane] * distance;
+        delta[lane] = forward[lane] * distance;
     }
     std::array<float, kVectorLanes> position{};
     std::array<float, kVectorLanes> moved{};
@@ -316,7 +301,6 @@ void set_vertical_velocity(std::byte* body, float value) noexcept {
         report_skip("no_body");
         return false;
     }
-    report_gates(component, body);
     set_vertical_velocity(body, 0.0F);
     if (!move_body(body, client::movement::get().distance)) {
         return false;
@@ -343,22 +327,35 @@ void clear_targets() noexcept {
     g_requestAge.store(0, std::memory_order_relaxed);
     g_active.store(false, std::memory_order_relaxed);
     g_playerComponent.store(nullptr, std::memory_order_relaxed);
+    invalidate_camera_pose();
 }
 
-/** Publishes the camera forward vector for the physics tick that follows. */
-void capture_forward(std::uint32_t playerIndex) noexcept {
+/** Publishes the frame's complete camera pose and its forward vector. */
+void capture_camera_pose(std::uint32_t playerIndex) noexcept {
     if (playerIndex == kInvalidHandle || g_cameraSingleton == nullptr) {
+        invalidate_camera_pose();
         return;
     }
     std::byte* const camera = g_cameraSingleton();
     if (camera == nullptr) {
+        invalidate_camera_pose();
         return;
     }
-    std::array<float, kVectorLanes> forward{};
-    if (!read_at(camera + kCameraBlockStride * playerIndex + kCameraForwardX, forward)) {
+    const std::size_t playerOffset = kCameraBlockStride * playerIndex;
+    CameraPose pose{};
+    if (!read_at(camera + playerOffset + kCameraPositionX, pose.position)
+        || !read_at(camera + playerOffset + kCameraForwardX, pose.forward)
+        || !read_at(camera + playerOffset + kCameraUpX, pose.up)
+        || !read_at(camera + playerOffset + kCameraHorizontalFov, pose.horizontalFov)
+        || !read_at(camera + playerOffset + kCameraAspect, pose.aspect)) {
+        invalidate_camera_pose();
         return;
     }
-    g_forward = forward;
+    AcquireSRWLockExclusive(&g_cameraPoseLock);
+    g_cameraPose = pose;
+    g_cameraPoseValid = true;
+    g_forward = pose.forward;
+    ReleaseSRWLockExclusive(&g_cameraPoseLock);
     g_forwardValid.store(true, std::memory_order_release);
 }
 
@@ -378,7 +375,8 @@ void poll_request() noexcept {
         g_keyDown.store(false, std::memory_order_relaxed);
         return;
     }
-    const bool down = (GetAsyncKeyState(static_cast<int>(settings.virtualKey)) & 0x8000) != 0;
+    const bool down = client::input::game_focused()
+                      && (GetAsyncKeyState(static_cast<int>(settings.virtualKey)) & 0x8000) != 0;
     if (down && !g_keyDown.exchange(down, std::memory_order_relaxed)) {
         g_requestAge.store(0, std::memory_order_relaxed);
         g_requested.store(true, std::memory_order_release);
@@ -408,9 +406,7 @@ void apply_pending(void* component) noexcept {
         return;
     }
     g_requested.store(false, std::memory_order_release);
-    if (perform_move(physics)) {
-        noclip::invalidate_target();
-    }
+    (void)perform_move(physics);
 }
 
 /** Runs the move for a request no physics tick collected. */
@@ -429,16 +425,56 @@ void force_pending() noexcept {
     if (!perform_move(physics)) {
         return;
     }
-    noclip::invalidate_target();
     invoke_sync(physics);
     core::log::write(
         core::log::Channel::client, core::log::Level::info, "ev=teleport stage=force result=ok");
+}
+
+/** Reports the physics component the local player was last seen driving. */
+void* local_player_component() noexcept {
+    return g_playerComponent.load(std::memory_order_relaxed);
 }
 
 /** @param component Candidate physics component. @return True when the local player drives it. */
 bool owns_local_player(void* component) noexcept {
     return component != nullptr && g_controlledHandle != nullptr
            && owns_player(static_cast<std::byte*>(component));
+}
+
+/** Reads the world position of the body a physics component drives. */
+bool read_position(void* component, Vector& position) noexcept {
+    if (component == nullptr) {
+        return false;
+    }
+    std::byte* const body = body_of(static_cast<std::byte*>(component));
+    return body != nullptr && read_at(body + kBodyPositionX, position);
+}
+
+/** Writes the linear velocity of the body a physics component drives. */
+bool write_velocity(void* component, const Vector& velocity) noexcept {
+    if (component == nullptr) {
+        return false;
+    }
+    std::byte* const body = body_of(static_cast<std::byte*>(component));
+    return body != nullptr && write_vector(body + kBodyVelocityX, velocity);
+}
+
+/** Reports the camera forward vector published this frame. */
+bool camera_forward(Vector& forward) noexcept {
+    if (!g_forwardValid.load(std::memory_order_acquire)) {
+        return false;
+    }
+    copy_forward(forward);
+    return true;
+}
+
+/** Copies the last complete pose published by the camera-frame hook. */
+bool camera_pose(CameraPose& pose) noexcept {
+    AcquireSRWLockShared(&g_cameraPoseLock);
+    const bool valid = g_cameraPoseValid;
+    pose = valid ? g_cameraPose : CameraPose{};
+    ReleaseSRWLockShared(&g_cameraPoseLock);
+    return valid;
 }
 
 } // namespace sunrise::client::hooks::teleport

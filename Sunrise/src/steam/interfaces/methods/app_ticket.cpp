@@ -13,12 +13,7 @@ namespace {
 
 /** Steam callback id for a finished app ticket request. */
 constexpr int kEncryptedAppTicketCallback = 154;
-/** Steam result code for success. */
-constexpr int kResultOk = 1;
-/**
- * Ticket length. Steam signs the real ticket, so it cannot be made here. The only reader is the
- * in-process Server, which puts the ticket in the SignOn reply and reads no field from it.
- */
+/** Ticket length. Steam signs the real ticket, so only opaque bytes of this size are made here. */
 constexpr DWORD kTicketSize = 128;
 
 /** Payload handed to the caller's call-result object. */

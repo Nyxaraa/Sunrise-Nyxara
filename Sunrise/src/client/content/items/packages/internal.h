@@ -12,14 +12,18 @@
 #include "../../../../middleware/content/packages/tables/definition_index_table.h"
 #include "../../../../middleware/content/packages/tables/items.h"
 #include "../../../../state/build_data/abilities/definition.h"
+#include "../../../../state/build_data/bounties/definition.h"
 #include "../../../../state/build_data/collectibles/collectible_catalog.h"
 #include "../../../../state/build_data/constants/definition.h"
 #include "../../../../state/build_data/inventory/buckets/definition.h"
+#include "../../../../state/build_data/items/catalysts/definition.h"
 #include "../../../../state/build_data/items/details/definition.h"
 #include "../../../../state/build_data/items/item_catalog.h"
 #include "../../../../state/build_data/material_requirements/material_requirement_catalog.h"
 #include "../../../../state/build_data/progressions/definition.h"
 #include "../../../../state/build_data/runtime.h"
+#include "../../../../state/build_data/season_pass/definition.h"
+#include "../../../../state/build_data/sobjects/sobject_catalog.h"
 
 namespace sunrise::client::content::items::packages {
 
@@ -52,15 +56,74 @@ struct DetailSource {
 /** The container name is not always unique, so every match is a candidate. */
 inline constexpr std::size_t kContainerCandidates = 16;
 
+/** A slot is a signed 16-bit value, so the widest addressable slot space is this. */
+inline constexpr std::size_t kSlotSpace = 32768;
+
+/** Value of an unmapped slot. Every bank domain uses 0xFFFF as its unavailable index. */
+inline constexpr std::uint16_t kUnmappedSlot = 0xFFFFU;
+static_assert(kUnmappedSlot == state::build_data::nodes::kUnavailableValueIndex);
+static_assert(kUnmappedSlot == state::build_data::records::kUnavailableValueIndex);
+static_assert(kUnmappedSlot == state::build_data::season_pass::kUnavailableFlagIndex);
+static_assert(kUnmappedSlot
+              == state::build_data::items::catalysts::kUnavailableCompletionFlagIndex);
+
+/** Bank index per unlock slot, indexed by slot. The first mapping row of a slot wins. */
+using SlotMap = std::array<std::uint16_t, kSlotSpace>;
+
+/** The four maps one root's two unlock mapping tables carry. 256 KiB together. */
+struct SlotMaps {
+    SlotMap accountFlag{};
+    SlotMap characterFlag{};
+    SlotMap accountValue{};
+    SlotMap characterValue{};
+};
+
 /** Lock-owned storage kept off the caller stack, shared by every stage of the pass. */
 struct Storage {
     reader::Scratch scratch{};
+    /** Read once per root. Every domain resolves its unlock slots through these. */
+    SlotMaps slotMaps{};
+    /** Node rows held until the value slot and owned records are resolved. */
+    std::array<state::build_data::nodes::Definition, state::build_data::nodes::kDefinitionCapacity>
+        nodeRows{};
+    /** Record rows held until the completion flag mapping is resolved. */
+    std::array<state::build_data::records::Definition,
+               state::build_data::records::kDefinitionCapacity>
+        recordRows{};
+    /** Flat objective, interval and reward banks the record rows name by range. */
+    std::array<state::build_data::records::Objective,
+               state::build_data::records::kObjectiveCapacity>
+        recordObjectives{};
+    std::array<state::build_data::records::Interval, state::build_data::records::kIntervalCapacity>
+        recordIntervals{};
+    std::array<state::build_data::records::Reward, state::build_data::records::kRewardCapacity>
+        recordRewards{};
+    std::size_t nodeCount{};
+    std::size_t recordCount{};
+    std::size_t recordObjectiveCount{};
+    std::size_t recordIntervalCount{};
+    std::size_t recordRewardCount{};
+    /** Objective and record display tables, held while the record pass joins them. */
+    std::vector<std::byte> objectiveTable{};
+    std::vector<std::byte> displayTable{};
+    /** Progression, item index, per-item strings and unlock slot tables, held across one join. */
+    std::vector<std::byte> progressionTable{};
+    std::vector<std::byte> itemIndexTable{};
+    std::vector<std::byte> itemStringsTable{};
+    std::vector<std::byte> unlockSlotTable{};
     std::vector<std::byte> container{};
     std::vector<std::byte> child{};
     std::vector<std::byte> root{};
     std::vector<std::byte> definition{};
     /** Shared reusable/randomized plug-set table read from investment-root slot 51. */
     std::vector<std::byte> plugSetTable{};
+    /** Dense item-indexed catalyst completion expressions for this package pass. */
+    std::vector<state::build_data::items::catalysts::CompletionCondition>
+        catalystCompletionConditions{};
+    /** Dense socket-type-indexed acquired-state gates for this package pass. */
+    std::vector<state::build_data::items::catalysts::AcquisitionGate> catalystAcquisitionGates{};
+    /** Dense native objective completion values used by legacy catalyst progress items. */
+    std::vector<std::int32_t> catalystObjectiveValues{};
     /** Compact 0..3 special plug-category code of every dense installed item row. */
     std::array<std::uint8_t, state::build_data::items::kDefinitionCapacity> specialPlugCategories{};
     /** Inventory routing rows held until the paired bucket-definition table is resolved. */
@@ -85,6 +148,24 @@ struct Storage {
     std::array<state::build_data::progressions::Definition,
                state::build_data::progressions::kDefinitionCapacity>
         progressionRows{};
+    std::array<state::build_data::progressions::Step,
+               state::build_data::progressions::kStepCapacity>
+        progressionSteps{};
+    std::size_t progressionStepCount{};
+    /** Season pass reward rows and the wrapper items they grant. */
+    std::array<state::build_data::season_pass::Reward,
+               state::build_data::season_pass::kRewardCapacity>
+        seasonPassRewards{};
+    std::array<state::build_data::season_pass::Package,
+               state::build_data::season_pass::kPackageCapacity>
+        seasonPassPackages{};
+    std::size_t seasonPassRewardCount{};
+    std::size_t seasonPassPackageCount{};
+    /** Repeatable bounty rows, keyed by the item-type pair their pool shares. */
+    std::array<state::build_data::bounties::Definition,
+               state::build_data::bounties::kDefinitionCapacity>
+        bountyRows{};
+    std::size_t bountyCount{};
     std::array<state::build_data::collectibles::Definition,
                state::build_data::collectibles::kDefinitionCapacity>
         collectibleRows{};
@@ -93,6 +174,10 @@ struct Storage {
         materialRequirementRows{};
     std::array<state::build_data::items::Definition, state::build_data::items::kDefinitionCapacity>
         rows{};
+    /** Incident-target rows held until the sobject table is published. */
+    std::array<state::build_data::sobjects::Definition,
+               state::build_data::sobjects::kDefinitionCapacity>
+        sobjectRows{};
 };
 
 /**
@@ -117,21 +202,17 @@ struct Storage {
 /** Publishes parsed inventory buckets after applying the extracted item-slot relation. */
 [[nodiscard]] bool publish_buckets(Storage& storage) noexcept;
 
-/**
- * Adds one definition index to the deduplicated requested set.
- * @param definitionIndex Native
- * item index.
- * @param requested Requested-set storage.
- */
+/** @return True when the catalyst catalog is published or cannot exist on this executable. */
+[[nodiscard]] bool exotic_catalysts_settled() noexcept;
+
+/** Adds one native definition index to the deduplicated request set. */
 void request(std::uint16_t definitionIndex, DetailRequests& requested) noexcept;
 
 /**
  * Adds every socket lane's initial plug to the requested set.
  * A lane using native defaults falls back to this plug, so its detail must exist.
- * @param row
- * Item row already read from its definition blob.
- * @param itemDefinitionCount Installed
- * item-table bound.
+ * @param row Item row already read from its definition blob.
+ * @param itemDefinitionCount Installed item-table bound.
  * @param requested Requested-set storage.
  */
 void append_initial_plugs(const tables::items::Row& row,
@@ -140,13 +221,10 @@ void append_initial_plugs(const tables::items::Row& row,
 
 /**
  * Materializes requested native indices in ascending order.
- * @param requested Deduplicated
- * native-index set.
+ * @param requested Deduplicated native-index set.
  * @param output Fixed detail-index storage.
- * @param count Receives the
- * number of selected rows, or zero when output is too small.
- * @return True when every selected
- * row fits.
+ * @param count Receives the number of selected rows, or zero when output is too small.
+ * @return True when every selected row fits.
  */
 [[nodiscard]] bool materialize_requests(const DetailRequests& requested,
                                         std::span<std::uint16_t> output,
@@ -212,18 +290,17 @@ read_investment_constants(const reader::Source& source,
  * @param count Receives the number of rows built.
  * @return True when the table reads; a subclass that fails is skipped, not fatal.
  */
-[[nodiscard]] bool
-build_character_abilities(const reader::Source& source,
-                          reader::Scratch& scratch,
-                          std::span<const std::byte> root,
-                          std::vector<std::byte>& table,
-                          std::vector<std::byte>& definition,
-                          std::vector<std::byte>& blob,
-                          std::span<state::build_data::abilities::Definition> output,
-                          std::size_t& count,
-                          std::span<state::build_data::socket_entry_buckets::Definition>
-                              entryBucketOutput,
-                          std::size_t& entryBucketCount) noexcept;
+[[nodiscard]] bool build_character_abilities(
+    const reader::Source& source,
+    reader::Scratch& scratch,
+    std::span<const std::byte> root,
+    std::vector<std::byte>& table,
+    std::vector<std::byte>& definition,
+    std::vector<std::byte>& blob,
+    std::span<state::build_data::abilities::Definition> output,
+    std::size_t& count,
+    std::span<state::build_data::socket_entry_buckets::Definition> entryBucketOutput,
+    std::size_t& entryBucketCount) noexcept;
 
 /**
  * Resolves which of the 12 semantic ability buckets every entry in one socket-entry list reaches.
@@ -243,23 +320,71 @@ build_character_abilities(const reader::Source& source,
         output) noexcept;
 
 /**
- * Reads the progression definition table and the object array each definition routes to.
- * The table is inline rows, not index rows. The scope byte in a row picks the replicated object
- * holding that progression, and the row's place among rows of that scope is its slot there.
+ * Reads one root's two unlock mapping tables into the pass slot maps.
+ * @param source Package source.
+ * @param storage Pass storage receiving the four maps.
+ * @param root Investment root bytes.
+ * @return True when both account maps read. A character map may stay unmapped.
+ */
+[[nodiscard]] bool read_unlock_slot_maps(const reader::Source& source,
+                                         Storage& storage,
+                                         std::span<const std::byte> root) noexcept;
+
+/** @param map Slot map. @param slot Raw unlock slot. @return Bank index, or the unmapped one. */
+[[nodiscard]] std::uint16_t bank_index(const SlotMap& map, std::int32_t slot) noexcept;
+
+/**
+ * Reads nodes and resolves their value slots, owned records and lore parent bars.
+ * The record rows must already be built: a node's lore-book flag and parent bar come from them.
+ * @param source Package source.
+ * @param storage Pass storage holding the record rows and the objective bank.
+ * @param root Investment root bytes.
+ * @return True when the node table read and produced at least one row.
+ */
+[[nodiscard]] bool build_nodes(const reader::Source& source,
+                               Storage& storage,
+                               std::span<const std::byte> root) noexcept;
+
+/**
+ * Reads records and resolves their flags, objectives, intervals and rewards.
+ * @param source Package source.
+ * @param storage Pass storage receiving the record rows and all three flat banks.
+ * @param root Investment root bytes.
+ * @return True when the record table read and produced at least one row.
+ */
+[[nodiscard]] bool build_records(const reader::Source& source,
+                                 Storage& storage,
+                                 std::span<const std::byte> root) noexcept;
+
+/**
+ * Reads progression definitions, their rank steps, and their replicated-object slots.
  * @param source Package source.
  * @param scratch Reader scratch.
  * @param root Investment root bytes.
- * @param blob Scratch storage for the table.
- * @param output Row storage in native definition order.
- * @param count Receives the number of rows read.
- * @return True when the table reads and every row fits.
+ * @param blob Scratch storage for the progression table.
+ * @param output Definition storage.
+ * @param count Receives the definitions read.
+ * @param steps Flat step bank storage the definitions name by range.
+ * @param stepCount Receives the steps read.
+ * @return True when the table read and produced at least one row.
  */
 [[nodiscard]] bool build_progressions(const reader::Source& source,
                                       reader::Scratch& scratch,
                                       std::span<const std::byte> root,
                                       std::vector<std::byte>& blob,
                                       std::span<state::build_data::progressions::Definition> output,
-                                      std::size_t& count) noexcept;
+                                      std::size_t& count,
+                                      std::span<state::build_data::progressions::Step> steps,
+                                      std::size_t& stepCount) noexcept;
+
+/** Reads the season pass reward list and the wrapper items it grants. */
+[[nodiscard]] bool build_season_pass(const reader::Source& source,
+                                     Storage& storage,
+                                     std::span<const std::byte> root) noexcept;
+
+/** Reads the item-type of every repeatable bounty, which is what groups a vendor pool. */
+[[nodiscard]] bool
+build_bounties(const reader::Source& source, Storage& storage, std::size_t itemCount) noexcept;
 
 /**
  * Copies the block key material this pass borrows.
@@ -314,6 +439,14 @@ void report_socket_plug_count(std::size_t rules,
                               std::size_t members,
                               std::size_t skipped) noexcept;
 
+/**
+ * Reports released, placeholder, and unsupported catalyst catalog counts.
+ * @param report Complete catalog report from the build pass.
+ * @param built True when all released catalyst relations were safe.
+ */
+void report_catalyst_catalog(const state::build_data::items::catalysts::Report& report,
+                             bool built) noexcept;
+
 /** Reports the validated installed bucket/equipment-slot coverage. */
 void report_bucket_equipment_mapping(std::size_t mappedSlots) noexcept;
 
@@ -351,18 +484,7 @@ void report(std::size_t published, const char* reason) noexcept;
                                             Storage& storage,
                                             std::span<const std::byte> root) noexcept;
 
-/**
- * Reads and publishes the root's dense collectible-to-item mapping table.
- * @param source
- * Package source.
- * @param storage Pass storage, including scratch bytes and bounded row storage.
-
- * * @param root Investment root bytes.
- * @param itemDefinitionCount Number of rows in the
- * installed item index table.
- * @return True when every tag, class, bound, and item link validates
- * and publishes.
- */
+/** Reads and publishes the dense collectible-to-item mapping. */
 [[nodiscard]] bool build_collectibles(const reader::Source& source,
                                       Storage& storage,
                                       std::span<const std::byte> root,

@@ -9,4 +9,12 @@ namespace sunrise::core::path {
  */
 void remove_stale_siblings(const wchar_t* finalPath) noexcept;
 
+/**
+ * Publishes one complete sibling while open delete-sharing readers keep the old file.
+ * @param temporaryPath Existing writer-owned sibling path.
+ * @param finalPath Final path to create or replace.
+ * @return True when the sibling became the complete final file.
+ */
+[[nodiscard]] bool publish_sibling(const wchar_t* temporaryPath, const wchar_t* finalPath) noexcept;
+
 } // namespace sunrise::core::path

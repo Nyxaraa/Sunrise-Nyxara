@@ -54,32 +54,6 @@ choose_copy(const request_selection::ActivityManagerSelectionResult& parsed) noe
 }
 
 /**
- * Reports the destination the client asked for.
- * Without it a wrong destination only shows up several messages later, as a wrong roster.
- * @param source Parsed selection carrying a package name.
- */
-void report_selection(const request_selection::ActivityManagerSelection& source) noexcept {
-    std::array<char, core::log::kLineCapacity> line{};
-    const int written =
-        std::snprintf(line.data(),
-                      line.size(),
-                      "ev=bap svc=6 stage=selection result=ok name=%.*s activity=%d "
-                      "from_activity=%d reason=%d bubble=0x%X spawn=0x%X",
-                      static_cast<int>(source.packageNameLength),
-                      reinterpret_cast<const char*>(source.packageName.data()),
-                      static_cast<int>(source.activityIndex),
-                      static_cast<int>(source.sourceActivityIndex),
-                      static_cast<int>(source.reason),
-                      source.hasArrivalBubbleHash ? source.arrivalBubbleHash : 0U,
-                      source.hasSpawnSetHash ? source.spawnSetHash : 0U);
-    if (written > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::info,
-                         {line.data(), static_cast<std::size_t>(written)});
-    }
-}
-
-/**
  * Reports the destination an operator forced, so a run shows where the client was sent.
  * @param forced Destination the forced selection produced.
  */
@@ -134,17 +108,18 @@ prepare_allocation(const request_selection::ActivityManagerSelectionResult& pars
         }
         return state::activity::prepare_session(sessionId, allocation);
     }
-    report_selection(source);
     state::activity::destination::DestinationSelection destination{};
     destination.packageName = source.packageName;
     destination.packageNameLength = source.packageNameLength;
     destination.reason = source.reason;
-    destination.previousActivityIndex = source.sourceActivityIndex;
+    destination.sourceActivityIndex = source.sourceActivityIndex;
     destination.activityIndex = source.activityIndex;
     destination.hasElementIndex = source.hasElementIndex;
     destination.elementIndex = source.hasElementIndex
                                    ? source.elementIndex
                                    : state::activity::destination::kAbsentElementIndex;
+    destination.hasSelectionNonce = source.hasSelectionNonce;
+    destination.selectionNonce = source.selectionNonce;
     destination.hasArrivalBubbleHash = source.hasArrivalBubbleHash;
     destination.arrivalBubbleHash = source.arrivalBubbleHash;
     destination.hasSpawnSetHash = source.hasSpawnSetHash;
@@ -185,8 +160,8 @@ bool encode_response(std::span<const std::byte> requestBody,
     middleware::bap::activity_host_manager::Request request;
     request_selection::ActivityManagerSelectionResult selection{};
     // Reading the destination out of the PUT is best effort. A malformed PUT must never cost the
-    // reply: the parser checks all 7,719 bytes, so one unsupported field would strand the activity
-    // route, and the client rejects any service-7 body that is not exactly 137 bytes.
+    // reply. The client rejects any service-7 body that is not exactly 137 bytes, so one
+    // unsupported field would otherwise strand the activity route.
     if (!middleware::bap::activity_host_manager::request::parse_request(requestBody, request)) {
         core::log::write(core::log::Channel::server,
                          core::log::Level::warn,

@@ -9,7 +9,6 @@ namespace sunrise::client::hooks::network::content_config::coordinator {
 /** State copied at ingress and kept until egress. */
 struct CallLease final {
     void* original{};
-    ContentFetch fetch{};
     bool accepting{};
     bool tracked{};
 };

@@ -34,6 +34,16 @@ namespace sunrise::middleware::encoding::bits {
 [[nodiscard]] bool skip_raw(Reader& reader, std::size_t count) noexcept;
 
 /**
+ * Copies bits straight from a reader into a writer.
+ * The stream stays bit aligned, so a body can be moved without a byte boundary.
+ * @param source Open reader positioned at the first bit.
+ * @param output Open writer.
+ * @param bitCount Bits to move.
+ * @return True when every bit was available and fit.
+ */
+[[nodiscard]] bool copy(Reader& source, Writer& output, std::size_t bitCount) noexcept;
+
+/**
  * Reads one raw 64-bit integer.
  * A raw field keeps memory order, so an engine integer arrives low byte first.
  * @param reader Open reader.

@@ -104,6 +104,11 @@ struct Storage {
     std::size_t accumulatedCount{};
     std::array<spawn_state::NameHash, spawn_state::kNameHashCapacity> nameHashes{};
     std::size_t nameHashCount{};
+    /** Every point's position and set, in extraction order. The closest-spawn query reads it. */
+    std::array<spawn_state::Point, spawn_state::kPointCapacity> points{};
+    std::size_t pointCount{};
+    /** Points the bank had no room for. The rest of the catalogue is unaffected. */
+    std::size_t pointsDropped{};
     /** Entry the next batch resumes from, so the pass continues across calls. */
     std::size_t cursor{};
     /** Entries whose blob never read inside the window, so the pass moved past them. */

@@ -69,21 +69,27 @@ constexpr std::uint16_t kByteBits = 8;
 constexpr std::uint8_t kMessageIdWidth = 6;
 /** The declared decoded size after it is 18 bits. */
 constexpr std::uint8_t kMessageSizeWidth = 18;
+/** The filler length is a 14-bit field. */
+constexpr std::uint8_t kFillerLengthWidth = 14;
+/** The filler body limit is 9,920 bits. */
+constexpr std::uint64_t kMaximumFillerBits = 9920;
+/** Byte padding can carry at most seven bits. */
+constexpr std::size_t kMaximumPaddingBits = 7;
 
 /**
  * Reads one ternary packet status.
  * @param reader Open reader.
- * @param received Receives true for the two codes that mean received.
+ * @param status Receives the decoded status.
  * @return True when a complete code was present.
  */
-[[nodiscard]] bool read_status(bits::Reader& reader, bool& received) noexcept {
+[[nodiscard]] bool read_status(bits::Reader& reader, AckState::Status& status) noexcept {
     std::uint64_t first = 0;
     if (!reader.read(kFlagWidth, first)) {
         return false;
     }
     if (first == 0) {
         // Code 0 is status 1, the ordinary received case.
-        received = true;
+        status = AckState::Status::received;
         return true;
     }
     std::uint64_t second = 0;
@@ -91,7 +97,7 @@ constexpr std::uint8_t kMessageSizeWidth = 18;
         return false;
     }
     // Code 10 is status 0, unresolved. Code 11 is status 2, received out of order.
-    received = second != 0;
+    status = second != 0 ? AckState::Status::receivedOutOfOrder : AckState::Status::unresolved;
     return true;
 }
 
@@ -128,6 +134,7 @@ constexpr std::uint8_t kMessageSizeWidth = 18;
     }
     output.receiveHead = static_cast<std::uint16_t>(base);
     output.received = {};
+    output.status = {};
     output.reportedCount = 0;
     if (prefix == kStatusExtended) {
         std::uint64_t extension = 0;
@@ -145,20 +152,22 @@ constexpr std::uint8_t kMessageSizeWidth = 18;
             return false;
         }
         for (std::uint64_t index = 0; index < count; ++index) {
-            bool received = false;
-            if (!read_status(reader, received)) {
+            AckState::Status status{};
+            if (!read_status(reader, status)) {
                 return false;
             }
             if (index < output.received.size()) {
-                output.received[index] = received;
+                output.status[index] = status;
+                output.received[index] = status != AckState::Status::unresolved;
                 output.reportedCount = static_cast<std::uint8_t>(index + 1);
             }
         }
     } else if (prefix == kStatusExplicit) {
-        for (bool& entry : output.received) {
-            if (!read_status(reader, entry)) {
+        for (std::size_t index = 0; index < output.received.size(); ++index) {
+            if (!read_status(reader, output.status[index])) {
                 return false;
             }
+            output.received[index] = output.status[index] != AckState::Status::unresolved;
         }
         output.reportedCount = static_cast<std::uint8_t>(output.received.size());
     } else if (prefix == kStatusSingle) {
@@ -169,9 +178,13 @@ constexpr std::uint8_t kMessageSizeWidth = 18;
         }
         // The named entry is the last one and the only one that is not an ordinary receive.
         output.received.fill(true);
+        output.status.fill(AckState::Status::received);
+        output.status[static_cast<std::size_t>(index)] =
+            outOfOrder != 0 ? AckState::Status::receivedOutOfOrder : AckState::Status::unresolved;
         output.received[static_cast<std::size_t>(index)] = outOfOrder != 0;
         output.reportedCount = static_cast<std::uint8_t>(index + 1);
     } else {
+        // Prefix kStatusEmpty names no entry but still carries one ring bit that must be consumed.
         std::uint64_t ringState = 0;
         if (!reader.read(kFlagWidth, ringState)) {
             return false;
@@ -308,25 +321,36 @@ bool decode_established(std::span<const std::byte> payload,
 
 /** Reports whether one acknowledgement covers a packet this host sent. */
 bool acknowledgement_covers(const AckState& ack, std::uint16_t sentSequence) noexcept {
+    return acknowledgement_outcome(ack, sentSequence) != AckOutcome::unresolved;
+}
+
+/** Returns the exact packet outcome carried by one acknowledgement. */
+AckOutcome acknowledgement_outcome(const AckState& ack, std::uint16_t sentSequence) noexcept {
     if (!ack.ringInitialized) {
-        return false;
+        return AckOutcome::unresolved;
     }
     const auto base = static_cast<std::uint16_t>(ack.receiveHead % kPacketRingSize);
     const auto sent = static_cast<std::uint16_t>(sentSequence % kPacketRingSize);
     const auto distance = static_cast<std::uint16_t>((base - sent) % kPacketRingSize);
     if (distance >= kPacketRingSize / 2) {
         // The base is behind the packet, so the peer has not reached it yet.
-        return false;
+        return AckOutcome::unresolved;
     }
     if (distance == 0) {
         // The base is the newest packet the peer holds, and it carries no status entry.
-        return true;
+        return AckOutcome::received;
     }
     if (distance <= ack.reportedCount) {
-        return ack.received[distance - 1U];
+        const AckState::Status status = ack.status[distance - 1U];
+        if (status == AckState::Status::receivedOutOfOrder) {
+            return AckOutcome::receivedOutOfOrder;
+        }
+        return status == AckState::Status::received || ack.received[distance - 1U]
+                   ? AckOutcome::received
+                   : AckOutcome::unresolved;
     }
     // Older than every entry the peer named, so it has left the peer's window.
-    return true;
+    return AckOutcome::received;
 }
 
 /** Writes the packet head and the acknowledgement handler payload. */
@@ -418,14 +442,8 @@ bool enqueue_message(state::gameplay::OutboundQueue& queue,
         return false;
     }
     bits::Reader reader(body);
-    std::size_t remaining = bodyBits;
-    while (remaining != 0) {
-        const auto width = static_cast<std::uint8_t>(remaining < kByteBits ? remaining : kByteBits);
-        std::uint64_t value = 0;
-        if (!reader.read(width, value) || !writer.write(value, width)) {
-            return false;
-        }
-        remaining -= width;
+    if (!bits::copy(reader, writer, bodyBits)) {
+        return false;
     }
     std::size_t stagedBytes = 0;
     if (!writer.finish(stagedBytes)) {
@@ -460,15 +478,9 @@ bool enqueue_message(state::gameplay::OutboundQueue& queue,
         fragment = {};
         bits::Writer chunk(fragment.bytes);
         std::size_t written = 0;
-        std::size_t pending = take;
-        while (pending != 0) {
-            const auto width = static_cast<std::uint8_t>(pending < kByteBits ? pending : kByteBits);
-            std::uint64_t value = 0;
-            if (!source.read(width, value) || !chunk.write(value, width)) {
-                restore();
-                return false;
-            }
-            pending -= width;
+        if (!bits::copy(source, chunk, take)) {
+            restore();
+            return false;
         }
         if (!chunk.finish(written)) {
             restore();
@@ -502,10 +514,36 @@ bool enqueue_message(state::gameplay::OutboundQueue& queue,
     return true;
 }
 
+/** Reads the bounded outer filler and requires exact zero byte padding. */
+bool read_filler_and_padding(bits::Reader& reader, FillerTrailer& output) noexcept {
+    FillerTrailer candidate{};
+    std::uint64_t present = 0;
+    if (!reader.read(kFlagWidth, present)) {
+        return false;
+    }
+    candidate.present = present != 0;
+    if (candidate.present) {
+        std::uint64_t bitCount = 0;
+        if (!reader.read(kFillerLengthWidth, bitCount) || bitCount == 0
+            || bitCount > kMaximumFillerBits || !reader.skip(static_cast<std::size_t>(bitCount))) {
+            return false;
+        }
+        candidate.bitCount = static_cast<std::size_t>(bitCount);
+    }
+
+    const std::size_t paddingBits = reader.remaining_bits();
+    std::uint64_t padding = 0;
+    if (paddingBits > kMaximumPaddingBits
+        || !reader.read(static_cast<std::uint8_t>(paddingBits), padding) || padding != 0) {
+        return false;
+    }
+    output = candidate;
+    return true;
+}
+
 /** Writes the filler trailer that ends every packet. */
 bool write_absent_filler(bits::Writer& writer) noexcept {
-    // Two bits close a packet: the extended-presence bit, then the external-body present bit.
-    // The reader consumes both, so both must be written even though both are zero.
+    // Two absent bits close a packet: the external component, then the filler trailer.
     return writer.write(0, kFlagWidth) && writer.write(0, kFlagWidth);
 }
 

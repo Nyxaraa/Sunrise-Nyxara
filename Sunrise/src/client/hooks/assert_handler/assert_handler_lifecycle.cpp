@@ -1,15 +1,16 @@
 #include "assert_handler_lifecycle.h"
 
+#include <Windows.h>
+
 #include "../../../core/logging/log.h"
 #include "../../targets/game/assert_handler.h"
 #include "assert_handler_observer.h"
 
 namespace sunrise::client::hooks::assert_handler {
+namespace {
 
 SRWLOCK g_lock{SRWLOCK_INIT};
 bool g_installed{};
-
-namespace {
 
 /** Calls the native setter after the expected-value ownership check. */
 [[nodiscard]] bool set_handler(const targets::game::assert_handler::Targets& targets,

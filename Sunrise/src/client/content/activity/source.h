@@ -19,7 +19,8 @@ inline constexpr std::size_t kSlotCount =
 /** Lock-owned storage for one scenario walk. */
 struct ScenarioSource {
     const packages::reader::Source* source{};
-    packages::reader::Scratch scratch{};
+    /** Caller-owned reader storage. It outlives the scenario so its block cache carries over. */
+    packages::reader::Scratch* scratch{};
     std::array<std::vector<std::byte>, kSlotCount> slots{};
 };
 

@@ -109,11 +109,8 @@ selector_destination(const Walk& walk, std::uint8_t entryIndex, std::uint8_t& bu
 
 /**
  * Chooses the active plug source of every entry group, and any bundled siblings a pick carries.
- * An entry group holds alternatives, and the summary selection names which one the character has.
- * A pick can also bundle several consecutive same-group entries that publish together (an
- * Attunement's melee, plus the passive nodes it carries with it); those siblings normally carry
- * their own distinct plug source, so they are marked forced-active directly rather than relying on
- * a plug-source match.
+ * A group holds alternatives and the summary selection names one. A pick can also bundle same-group
+ * entries that publish together; those carry their own source, so they are marked forced-active.
  * @param walk Subclass walk state.
  * @param sources Receives one active plug source per group, keyed by group.
  * @param forcedActive Receives which entries are active regardless of plug source.
@@ -123,11 +120,9 @@ void chosen_sources(const Walk& walk,
                     std::array<bool, pool::kEntryCapacity>& forcedActive) noexcept {
     sources.fill(pool::kNoPlugSource);
     forcedActive.fill(false);
-    // A group of 2 or 3 entries (grenade, movement, class ability) is an ordinary set of mutually
-    // exclusive alternatives: exactly one contributes its hashes. An Attunement's group is far
-    // wider (it packs several 4-node options into one group id), so a population past the widest
-    // single bundle is the signal that this group's members activate in same-sized runs rather
-    // than as lone alternatives.
+    // A group of 2 or 3 entries is mutually exclusive alternatives: exactly one contributes its
+    // hashes. An Attunement's group packs several 4-node options into one group id, so a
+    // population past the widest single bundle means its members activate in same-sized runs.
     std::array<std::uint16_t, 256> groupPopulation{};
     for (std::size_t index = 0; index < walk.entryCount; ++index) {
         ++groupPopulation[walk.entries[index].group];
@@ -137,7 +132,8 @@ void chosen_sources(const Walk& walk,
             continue;
         }
         const pool::Entry& entry = walk.entries[entryIndex];
-        if (entry.plugSource == pool::kNoPlugSource || sources[entry.group] != pool::kNoPlugSource) {
+        if (entry.plugSource == pool::kNoPlugSource
+            || sources[entry.group] != pool::kNoPlugSource) {
             continue;
         }
         sources[entry.group] = entry.plugSource;
@@ -200,14 +196,9 @@ void chosen_sources(const Walk& walk,
 }
 
 /**
- * Claims a bucket kind for every forced-active bundle sibling the 6 canonical selections do not
- * already cover. An Attunement bundle can carry a member that fully replaces an ability (Phoenix
- * Dive replacing the class ability, rather than an ordinary Rift variant) under its own distinct
- * bucket, separate from the class's ordinary one, even though it is not itself one of the 6
- * summary picks. Its hash would otherwise never be filed, because nothing ever claims that
- * bucket's kind. A sibling with no destination bucket (a passive node) or one whose bucket is
- * already claimed is skipped rather than treated as a failure, since most bundle members are
- * exactly that.
+ * Claims a bucket kind for every forced-active bundle sibling the 6 canonical selections miss.
+ * A bundle member can replace an ability outright under its own bucket, and nothing else ever
+ * claims that kind. A sibling with no bucket, or one already claimed, is skipped, not failed.
  * @param walk Subclass walk state.
  * @param forcedActive Entries active regardless of plug source, from a bundled pick.
  * @param output Bucket kinds, extended in place.
@@ -301,10 +292,8 @@ bool build_ability_buckets(const reader::Source& source,
 
 /**
  * Resolves which of the 12 semantic ability buckets every entry in one socket-entry list reaches.
- * A pick's table position does not say which ability slot it fills; a bundled group (an
- * Attunement, for example) can freely mix its members across slots. Only the selector chain each
- * entry's own pool declares says where it lands, so this walks every entry once and records it,
- * independent of any character's current selection.
+ * Table position does not say which slot an entry fills and a bundled group can mix slots; only
+ * the selector chain does, so every entry is walked once, independent of any character.
  * @param source Package source.
  * @param scratch Reader scratch.
  * @param listDefinition One socket-entry list's definition bytes.

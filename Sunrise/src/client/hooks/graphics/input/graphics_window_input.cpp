@@ -2,11 +2,13 @@
 
 #include <atomic>
 #include <bit>
+#include <shared_mutex>
 
 #include "../../../../core/ui/layout/credits/sunrise_credits_badge.h"
 #include "../../../../core/ui/modules/logs/logs.h"
 #include "../../../../core/ui/runtime/ui_visibility_runtime.h"
 #include "../renderer/renderer.h"
+#include "core/threading/srw_lock.h"
 #include "input.h"
 
 namespace sunrise::client::hooks::graphics::input {
@@ -24,7 +26,7 @@ struct Binding {
 
 Binding g_binding{};
 std::atomic_uint g_activeCallbacks{};
-SRWLOCK g_inputLock{SRWLOCK_INIT};
+core::threading::SrwLock g_inputLock{};
 
 /** Counts active procedure calls so teardown can be retried before module unload. */
 class CallbackGuard final {
@@ -48,9 +50,8 @@ public:
  * @return Original procedure for the matching record, or null when nothing matches.
  */
 [[nodiscard]] WNDPROC original_for(HWND window) noexcept {
-    AcquireSRWLockShared(&g_inputLock);
+    const std::shared_lock lock(g_inputLock);
     const WNDPROC original = g_binding.window == window ? g_binding.original : nullptr;
-    ReleaseSRWLockShared(&g_inputLock);
     return original;
 }
 
@@ -122,15 +123,13 @@ bool install(HWND window) noexcept {
     if (window == nullptr || IsWindow(window) == FALSE) {
         return false;
     }
-    AcquireSRWLockExclusive(&g_inputLock);
+    const std::lock_guard lock(g_inputLock);
     if (g_binding.installed) {
         const bool sameWindow = g_binding.window == window;
-        ReleaseSRWLockExclusive(&g_inputLock);
         return sameWindow;
     }
     if (g_activeCallbacks.load(std::memory_order_acquire) != 0) {
         // A retired procedure keeps its forwarding record until every old call returns.
-        ReleaseSRWLockExclusive(&g_inputLock);
         return false;
     }
 
@@ -138,26 +137,22 @@ bool install(HWND window) noexcept {
     const LONG_PTR original =
         SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&window_procedure));
     if (original == 0 && GetLastError() != ERROR_SUCCESS) {
-        ReleaseSRWLockExclusive(&g_inputLock);
         return false;
     }
     g_binding = Binding{window, std::bit_cast<WNDPROC>(original), true};
-    ReleaseSRWLockExclusive(&g_inputLock);
     return true;
 }
 
 /** Restores the original procedure only when Sunrise still owns the chain head. */
 bool uninstall() noexcept {
-    AcquireSRWLockExclusive(&g_inputLock);
+    const std::lock_guard lock(g_inputLock);
     if (!g_binding.installed) {
         const bool idle = g_activeCallbacks.load(std::memory_order_acquire) == 0;
-        ReleaseSRWLockExclusive(&g_inputLock);
         return idle;
     }
     if (IsWindow(g_binding.window) == FALSE) {
         g_binding.installed = false;
         const bool idle = g_activeCallbacks.load(std::memory_order_acquire) == 0;
-        ReleaseSRWLockExclusive(&g_inputLock);
         return idle;
     }
 
@@ -165,19 +160,16 @@ bool uninstall() noexcept {
     const LONG_PTR current = GetWindowLongPtrW(g_binding.window, GWLP_WNDPROC);
     const LONG_PTR replacement = reinterpret_cast<LONG_PTR>(&window_procedure);
     if (current == 0 && GetLastError() != ERROR_SUCCESS) {
-        ReleaseSRWLockExclusive(&g_inputLock);
         return false;
     }
     if (current == reinterpret_cast<LONG_PTR>(g_binding.original)) {
         // The window owner already put our forwarding target back itself.
         g_binding.installed = false;
         const bool idle = g_activeCallbacks.load(std::memory_order_acquire) == 0;
-        ReleaseSRWLockExclusive(&g_inputLock);
         return idle;
     }
     if (current != replacement) {
         // A later subclass owns the chain head now, so do not overwrite it.
-        ReleaseSRWLockExclusive(&g_inputLock);
         return false;
     }
 
@@ -185,19 +177,17 @@ bool uninstall() noexcept {
     const LONG_PTR replaced = SetWindowLongPtrW(
         g_binding.window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_binding.original));
     if (replaced == 0 && GetLastError() != ERROR_SUCCESS) {
-        ReleaseSRWLockExclusive(&g_inputLock);
         return false;
     }
     // Keep the forwarding target until a later install replaces this retired record.
     g_binding.installed = false;
     const bool idle = g_activeCallbacks.load(std::memory_order_acquire) == 0;
-    ReleaseSRWLockExclusive(&g_inputLock);
     return idle;
 }
 
 /** Checks whether Sunrise is still installed, or still sits below a later subclass. */
 bool active(HWND window) noexcept {
-    AcquireSRWLockShared(&g_inputLock);
+    const std::shared_lock lock(g_inputLock);
     bool installed = g_binding.installed && g_binding.window == window && IsWindow(window) != FALSE
                      && IsWindowVisible(window) != FALSE;
     if (installed) {
@@ -209,7 +199,6 @@ bool active(HWND window) noexcept {
             installed = current != reinterpret_cast<LONG_PTR>(g_binding.original);
         }
     }
-    ReleaseSRWLockShared(&g_inputLock);
     return installed;
 }
 

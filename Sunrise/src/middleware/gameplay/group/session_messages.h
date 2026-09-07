@@ -81,11 +81,14 @@ struct SessionBoot {
 /** Body of a time-synchronize probe or response. */
 struct TimeSynchronize {
     std::uint64_t sessionId{};
-    /** The three-sample form carries the two later samples; the one-sample form does not. */
+    /** True selects the three-sample reply. False is the one-sample request. */
     bool threeSample{};
-    std::uint64_t sampleA{};
-    std::uint64_t sampleB{};
-    std::uint64_t sampleC{};
+    /** Requester's millisecond clock at send. The reply echoes it. */
+    std::uint64_t requesterSendTime{};
+    /** Responder's millisecond clock at receive. Reply only. */
+    std::uint64_t responderReceiveTime{};
+    /** Responder's millisecond clock at send. Reply only. */
+    std::uint64_t responderSendTime{};
 };
 
 /** Writes a peer-connect body. @return True when every field fit. */
@@ -160,7 +163,7 @@ struct MembershipMember {
     bool connectionPresent{};
     std::uint32_t joinCompatibility{};
     std::uint64_t joinTimestamp{};
-    /** The third connection value has no recovered name; zero is its cleared value. */
+    /** The third connection value has no known name; zero is its cleared value. */
     std::uint8_t connectionValue{};
     /** True publishes the player slot below. A member with no player publishes none. */
     bool ownsPlayerSlot{};
@@ -185,6 +188,17 @@ struct MembershipPlayer {
     std::uint32_t addSequence{};
     /** One-bit field the local add takes from its caller. Zero is its cleared value. */
     bool flag{};
+    /** True publishes the profile group below. Without it the peer's player has no account soid
+     *  and its own simulation refuses to create the player. */
+    bool hasProfile{};
+    /** Value the profile group leads with. Zero is the receiver's cleared value. */
+    std::uint32_t profileValue{};
+    /** Player kind, 0 through 3. The wire carries it plus one in three bits. */
+    std::uint8_t profileKind{};
+    /** Account soid the profile block's `+192` field carries. */
+    std::uint64_t accountSoid{};
+    /** Character soid the same field carries second. */
+    std::uint64_t characterSoid{};
 };
 
 /** Complete membership snapshot one host publishes. */

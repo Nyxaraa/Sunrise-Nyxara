@@ -10,16 +10,20 @@
 namespace sunrise::server::bap::encrypted::push::activity {
 
 /**
- * Appends the ordered join-result and entity-slot svc9 notifications.
+ * Appends the whole svc9 burst one join is answered with.
+ * The membership body rides this burst rather than a later tick, so it cannot land in the middle of
+ * the client's own slot rearrangement.
  * @param scratch Lock-owned transform buffers.
- * @param activity Join scalars and the exact lease mask State picked.
+ * @param session Connection whose staged-membership flag this sets on success.
+ * @param activity Join scalars, the lease mask State picked, and the member table read for it.
  * @param key Active AES-GCM session key.
  * @param nonce Local send nonce advanced once per staged notification.
  * @param response Lock-owned complete-frame staging storage.
- * @param written Existing staged byte count, updated only after both notifications exist.
- * @return True when both notifications encode atomically.
+ * @param written Existing staged byte count, updated only after the notifications exist.
+ * @return True when every notification the join owes encodes atomically.
  */
 [[nodiscard]] bool append_join_notifications(Scratch& scratch,
+                                             Session& session,
                                              const activity_message::ActivityPlan& activity,
                                              std::span<const std::byte, state::kAesKeySize> key,
                                              std::array<std::byte, state::kBapNonceSize>& nonce,

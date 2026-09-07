@@ -13,9 +13,11 @@
 namespace sunrise::client::hooks::bootflow {
 namespace {
 
+using core::log::kLineCapacity;
+
 /**
- * `World_CheckActivityBubbles`* @ `0x7FF74208DB80`. Matched from its prologue through the activity
- * object load and the handle shift, which is unique in the image.
+ * `World_CheckActivityBubbles`*, matched from its prologue through the activity object load
+ * and the handle shift, which is unique in the image.
  */
 constexpr std::string_view kCheckSignatureText =
     "48 89 5C 24 ? 48 89 6C 24 ? 48 89 74 24 ? 57 41 56 41 57 48 83 EC ? 48 8B 79 10 41 8B C0 "
@@ -25,8 +27,8 @@ constexpr auto kCheckSignature =
     signature<signature_length(kCheckSignatureText)>(kCheckSignatureText);
 
 /**
- * Slot written into the container. Any non-zero value pins the record. 1 is what the game's own
- * activity-swap path passes, so nothing downstream sees a number it cannot make itself.
+ * Slot written into the container; any non-zero value pins the record.
+ * 1 is what the game's own activity-swap path passes.
  */
 constexpr std::int32_t kRemoteSlot = 1;
 
@@ -35,9 +37,6 @@ constexpr std::uint8_t kNotArmed = 0;
 
 /** Lines allowed per run. The check runs once per activity container. */
 constexpr unsigned kMaxReports = 4;
-
-/** Size of one forcing line, set by its slot fields. */
-constexpr std::size_t kLineCapacity = 96;
 
 using CheckBubbles =
     std::uint8_t(__fastcall*)(void*, void*, std::int32_t, void*, std::int64_t, std::int32_t);
@@ -70,8 +69,8 @@ void report(std::int32_t slot) noexcept {
 
 /**
  * Passes a non-zero owner activity slot into the roster container.
- * Argument 6 is the only writer of the slot, at `0x7FF74208DC13`. Every other argument is passed
- * on untouched, including argument 5, whose own arm has nothing to do with the record.
+ * Argument 6 is the only writer of the slot. Every other argument is passed on untouched,
+ * including argument 5, whose own arm has nothing to do with the record.
  * @return The check's own result, or the not-armed result when the trampoline is gone.
  */
 __declspec(noinline) std::uint8_t __fastcall check(void* container,
@@ -95,30 +94,35 @@ __declspec(noinline) std::uint8_t __fastcall check(void* container,
 
 } // namespace
 
-/** Attaches the owner activity slot force. */
-bool install_owner_activity_slot() noexcept {
+/** Stages the owner activity slot force. */
+StageResult stage_owner_activity_slot(hooking::detour::Spec& spec) noexcept {
     if (g_handle.attached) {
-        return true;
+        return StageResult::attached;
     }
     std::byte* const target = scan_main_image_unique(kCheckSignature, "check_activity_bubbles");
     if (target == nullptr) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=owner_slot result=fail reason=target");
-        return false;
+        return StageResult::unavailable;
     }
-    const hooking::detour::Spec spec{target, reinterpret_cast<void*>(&check)};
-    if (!hooking::detour::install(spec, g_handle)) {
+    spec = hooking::detour::Spec{target, reinterpret_cast<void*>(&check)};
+    return StageResult::staged;
+}
+
+/** Takes the owner activity slot force's attached handle, or a detached one. */
+void publish_owner_activity_slot(const hooking::detour::Handle& handle) noexcept {
+    if (!handle.attached) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=owner_slot result=fail reason=attach");
-        return false;
+        return;
     }
+    g_handle = handle;
     g_original.store(reinterpret_cast<CheckBubbles>(g_handle.original), std::memory_order_release);
     core::log::write(core::log::Channel::client,
                      core::log::Level::info,
                      "ev=bootflow stage=owner_slot result=ok");
-    return true;
 }
 
 /** Detaches the owner activity slot force. */

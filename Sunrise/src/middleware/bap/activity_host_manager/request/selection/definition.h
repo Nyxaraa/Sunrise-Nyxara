@@ -39,6 +39,10 @@ struct ActivityManagerSelection final {
     bool hasElementIndex{};
     /** Element index, required bias of 1 removed. */
     std::int16_t elementIndex{};
+    /** True when the second optional 64-bit scalar carried a selection nonce. */
+    bool hasSelectionNonce{};
+    /** Exact selection nonce from the second optional 64-bit scalar. */
+    std::uint64_t selectionNonce{};
     /** Number of filled entries in skulls. */
     std::uint8_t skullCount{};
     /** Gameplay selections. Entries past skullCount stay zero. */

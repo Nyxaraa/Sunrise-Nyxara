@@ -1,10 +1,64 @@
+#include <array>
 #include <cstring>
 #include <limits>
 
 #include "../../../../state/build_data/runtime.h"
+#include "../../../../state/build_data/sobjects/sobject_catalog.h"
 #include "internal.h"
 
 namespace sunrise::client::content::items::packages {
+namespace {
+
+/**
+ * Reads the one flag slot a collectible's acquired-state expression tests.
+ * A collectible gated by anything other than one plain flag test keeps the unavailable slot.
+ * @param table Collectible table bytes.
+ * @param at Collectible row offset.
+ * @param slot Receives the tested slot, or the unavailable slot.
+ */
+void read_acquired_flag_slot(std::span<const std::byte> table,
+                             std::size_t at,
+                             std::uint16_t& slot) noexcept {
+    namespace domain = state::build_data::collectibles;
+    slot = domain::kUnavailableFlagSlot;
+    tables::Array expression{};
+    std::array<std::uint32_t, 2> instruction{};
+    if (!tables::find_optional_array_at(
+            table, at + tables::kCollectibleAcquiredExpressionField, expression)
+        || expression.count != 1 || expression.elementClass != tables::kInvestmentExpressionRowClass
+        || expression.dataOffset + sizeof instruction > table.size()) {
+        return;
+    }
+    std::memcpy(instruction.data(), table.data() + expression.dataOffset, sizeof instruction);
+    if (instruction[0] == tables::kUnlockReadFlagOpcode
+        && instruction[1] < domain::kUnavailableFlagSlot) {
+        slot = static_cast<std::uint16_t>(instruction[1]);
+    }
+}
+
+/**
+ * Resolves one unlock flag slot to the bank row it feeds.
+ * @param table Unlock flag slot table bytes.
+ * @param rows Located slot array, which is keyed by slot.
+ * @param slot Slot to resolve.
+ * @return The bank row, or the unavailable row when the slot is not in the table.
+ */
+[[nodiscard]] std::uint16_t flag_bank_index(std::span<const std::byte> table,
+                                            const tables::Array& rows,
+                                            std::uint16_t slot) noexcept {
+    namespace domain = state::build_data::collectibles;
+    const std::size_t at = rows.dataOffset
+                           + static_cast<std::size_t>(slot) * tables::kUnlockSlotRowStride
+                           + tables::kUnlockSlotBankIndexOffset;
+    std::uint16_t index = domain::kUnavailableFlagIndex;
+    if (slot >= rows.count || at + sizeof index > table.size()) {
+        return domain::kUnavailableFlagIndex;
+    }
+    std::memcpy(&index, table.data() + at, sizeof index);
+    return index;
+}
+
+} // namespace
 
 /** Reads the fixed collectible table and publishes its native-index item links. */
 bool build_collectibles(const reader::Source& source,
@@ -12,6 +66,46 @@ bool build_collectibles(const reader::Source& source,
                         std::span<const std::byte> root,
                         std::uint64_t itemDefinitionCount) noexcept {
     namespace domain = state::build_data::collectibles;
+
+    // A collectible picked up in the world arrives as an incident, and its target is a row of the
+    // sobject table. Without that table the target is a bare number.
+    if (!state::build_data::sobject_definitions_ready()) {
+        namespace sobjects = state::build_data::sobjects;
+        for (const std::uint32_t tag :
+             {tables::kSobjectTablePrimaryTag, tables::kSobjectTableAlternateTag}) {
+            std::vector<std::byte>& blob = storage.definition;
+            if (!reader::read_tag(source, storage.scratch, tag, blob)
+                || blob.size() < tables::kSobjectFirstRow) {
+                continue;
+            }
+            std::uint64_t rowCount = 0;
+            std::memcpy(&rowCount, blob.data() + tables::kSobjectCountOffset, sizeof rowCount);
+            if (rowCount == 0 || rowCount > sobjects::kDefinitionCapacity
+                || tables::kSobjectFirstRow
+                           + static_cast<std::size_t>(rowCount) * tables::kSobjectRowStride
+                       > blob.size()) {
+                continue;
+            }
+            const auto count = static_cast<std::size_t>(rowCount);
+            for (std::size_t row = 0; row < count; ++row) {
+                const std::size_t at = tables::kSobjectFirstRow + row * tables::kSobjectRowStride;
+                sobjects::Definition& definition = storage.sobjectRows[row];
+                std::memcpy(&definition.nameHash,
+                            blob.data() + at + tables::kSobjectNameHashOffset,
+                            sizeof definition.nameHash);
+                std::memcpy(&definition.lane4,
+                            blob.data() + at + tables::kSobjectLaneOffset,
+                            sizeof definition.lane4);
+                std::memcpy(&definition.typeCode,
+                            blob.data() + at + tables::kSobjectTypeCodeOffset,
+                            sizeof definition.typeCode);
+            }
+            (void)state::build_data::publish_sobject_definitions(
+                std::span(storage.sobjectRows).first(count));
+            break;
+        }
+    }
+
     if (state::build_data::collectible_definitions_ready()) {
         return true;
     }
@@ -43,6 +137,19 @@ bool build_collectibles(const reader::Source& source,
                                        / tables::kMaterialRequirementSetRowStride) {
         return false;
     }
+
+    // The slot table is keyed by slot, so it resolves each collectible's acquired flag to the
+    // bank row the object its kind names carries.
+    std::uint32_t slotTableTag = 0;
+    tables::Array slotRows{};
+    if (!tables::slot_tag(root, tables::kUnlockFlagSlotTableSlot, slotTableTag) || slotTableTag == 0
+        || !reader::read_tag(source, storage.scratch, slotTableTag, storage.unlockSlotTable)
+        || !tables::find_array_at(std::span<const std::byte>{storage.unlockSlotTable},
+                                  tables::kTableArrayDescriptor,
+                                  slotRows)) {
+        return false;
+    }
+    const std::span<const std::byte> slotTable{storage.unlockSlotTable};
 
     std::uint32_t tableTag = 0;
     std::uint32_t tableClass = 0;
@@ -87,6 +194,11 @@ bool build_collectibles(const reader::Source& source,
         output.collectibleHash = collectibleHash;
         output.collectibleIndex = static_cast<std::uint16_t>(row);
         output.itemDefinitionIndex = itemDefinitionIndex;
+        read_acquired_flag_slot(table, at, output.acquiredFlagSlot);
+        if (output.acquiredFlagSlot != domain::kUnavailableFlagSlot) {
+            output.acquiredFlagIndex =
+                flag_bank_index(slotTable, slotRows, output.acquiredFlagSlot);
+        }
         if (requirementSetIndex == domain::kUnavailableMaterialRequirementSetIndex) {
             continue;
         }

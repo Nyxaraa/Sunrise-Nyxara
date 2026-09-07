@@ -97,11 +97,13 @@ void report(const Storage& storage, const char* result) noexcept {
     const int written = std::snprintf(line.data(),
                                       line.size(),
                                       "ev=build_data stage=spawn_sets tags=%zu stems=%zu "
-                                      "hashes=%zu bound=%zu components=%zu containers=%zu "
-                                      "read=%zu skipped=%zu ms=%llu result=%s",
+                                      "hashes=%zu points=%zu dropped=%zu bound=%zu components=%zu "
+                                      "containers=%zu read=%zu skipped=%zu ms=%llu result=%s",
                                       storage.entryCount,
                                       storage.stemCount,
                                       storage.nameHashCount,
+                                      storage.pointCount,
+                                      storage.pointsDropped,
                                       storage.spawnComponentCount,
                                       storage.componentCount,
                                       storage.containerCount,
@@ -145,7 +147,7 @@ bool build(const reader::Source& source, reader::Scratch& scratch) noexcept {
             // A build that installs no spawn set has a whole empty catalogue, not a failed pass.
             report(storage, storage.entryCount == 0 ? "empty" : "sweep");
             reset(storage);
-            return state::build_data::publish_spawn_sets({}, {});
+            return state::build_data::publish_spawn_sets({}, {}, {});
         }
         readDeadlineTick = GetTickCount64() + kReadWindowMs;
         report(storage, "collected");
@@ -163,14 +165,15 @@ bool build(const reader::Source& source, reader::Scratch& scratch) noexcept {
         // A retry cannot help, and an empty catalogue still finishes the pipeline.
         report(storage, "read");
         reset(storage);
-        return state::build_data::publish_spawn_sets({}, {});
+        return state::build_data::publish_spawn_sets({}, {}, {});
     }
     if (result != AdvanceResult::complete) {
         return false;
     }
     const bool published = state::build_data::publish_spawn_sets(
         std::span(storage.stems).first(storage.stemCount),
-        std::span(storage.nameHashes).first(storage.nameHashCount));
+        std::span(storage.nameHashes).first(storage.nameHashCount),
+        std::span(storage.points).first(storage.pointCount));
     report(storage, published ? "ok" : "publish");
     if (published) {
         bytes.clear();

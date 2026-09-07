@@ -1,6 +1,7 @@
 #include "egress_connection_replacements.h"
 
 #include "../../internal.h"
+#include "../../policy/egress_policy_logging.h"
 #include "../../policy/policy.h"
 #include "../../resolver/redirect.h"
 
@@ -15,6 +16,7 @@ constexpr INT kAllowedAddressCount = 1;
 /** Redirects one complete IPv4 destination to the exact redirect target. */
 int WSAAPI connect_socket(SOCKET socket, const sockaddr* name, int nameLength) noexcept {
     const auto call = original<decltype(&::connect)>(HookSlot::connect);
+    policy::log_send_target(policy::SocketOperation::connect, name, nameLength, 0);
     sockaddr_in redirected{};
     const bool targetsRedirect = policy::redirect_ipv4(name, nameLength, redirected);
     if (call == nullptr
@@ -35,6 +37,7 @@ int WSAAPI connect_socket_ex(SOCKET socket,
                              LPQOS socketQos,
                              LPQOS groupQos) noexcept {
     const auto call = original<decltype(&::WSAConnect)>(HookSlot::wsaConnect);
+    policy::log_send_target(policy::SocketOperation::connect, name, nameLength, 0);
     sockaddr_in redirected{};
     const bool targetsRedirect = policy::redirect_ipv4(name, nameLength, redirected);
     if (call == nullptr

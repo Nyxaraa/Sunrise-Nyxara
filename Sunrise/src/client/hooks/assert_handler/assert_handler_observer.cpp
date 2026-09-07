@@ -7,17 +7,20 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 
 #include "../../../core/logging/log.h"
 #include "../../targets/game/assert_handler.h"
+#include "../net_tick_probe/net_tick_probe.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::client::hooks::assert_handler {
 namespace {
 
+using core::log::kLineCapacity;
+
 /** The game formats assert text into a buffer of this size, so it bounds ours too. */
 constexpr std::size_t kTextCapacity = 1024;
-/** One log line carries the message plus its fixed prefix. */
-constexpr std::size_t kLineCapacity = 1152;
 /** Consecutive repeats of one message written in full before counting takes over. */
 constexpr std::uint32_t kRepeatHead = 8;
 /** One repeat in this many is written after that, so a stuck assert never goes silent. */
@@ -34,7 +37,7 @@ constexpr int kGraphicsHaltCategory = 6;
 /** The handler the game installed, called with the same printf-style arguments the sites use. */
 using NativeHandler = void(__cdecl*)(int, const char*, ...);
 
-SRWLOCK g_lock{SRWLOCK_INIT};
+core::threading::SrwLock g_lock{};
 /** Last message seen, so a message that repeats every frame is counted rather than written. */
 std::array<char, kTextCapacity> g_lastText{};
 std::uint32_t g_repeats{};
@@ -53,7 +56,7 @@ std::uint32_t g_seen{};
  * @return True when the caller writes a log line.
  */
 [[nodiscard]] bool admit(const char* text, std::uint32_t& seen, std::uint32_t& repeats) noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     ++g_seen;
     if (std::strcmp(g_lastText.data(), text) == 0) {
         ++g_repeats;
@@ -66,7 +69,6 @@ std::uint32_t g_seen{};
     }
     seen = g_seen;
     repeats = g_repeats;
-    ReleaseSRWLockExclusive(&g_lock);
     return repeats <= kRepeatHead || repeats % kRepeatStride == 0;
 }
 
@@ -81,6 +83,9 @@ void report(int code, const char* text) noexcept {
     if (!admit(text, seen, repeats)) {
         return;
     }
+    // A repeating assert is the one thing still running when the game's networking tick stops, so
+    // the latch that gates that tick is read from here. The probe throttles itself.
+    net_tick_probe::sample();
     std::array<char, kLineCapacity> line{};
     const int written = std::snprintf(line.data(),
                                       line.size(),
@@ -111,7 +116,7 @@ void chain(int code, const char* text) noexcept {
     if (resolved.original == nullptr) {
         return;
     }
-    std::array<char, 64> line{};
+    std::array<char, kLineCapacity> line{};
     const int written =
         std::snprintf(line.data(), line.size(), "ev=assert stage=halt arg0=%d result=native", code);
     if (written > 0) {
@@ -124,9 +129,8 @@ void chain(int code, const char* text) noexcept {
 }
 
 /**
- * Replacement assert handler. The sites call this slot as a printf-style callback. Returning
- * without calling the game's own handler is what makes the assert non-fatal. That handler builds
- * a crash ticket, shows a dialog and blocks.
+ * Replacement assert handler, called through the slot as a printf-style callback.
+ * Returning without calling the game's own handler is what makes the assert non-fatal.
  * @param code Halt category from the assert site.
  * @param format Native printf-style format string.
  */

@@ -82,4 +82,35 @@ bool append(Scratch& scratch,
     return encoded;
 }
 
+/** Appends one prepared snapshot as a complete frame. */
+bool append_prepared(Scratch& scratch,
+                     const snapshot::Prepared& prepared,
+                     std::span<const std::byte, state::kAesKeySize> key,
+                     std::span<const std::byte, state::kBapNonceSize> nonce,
+                     std::span<std::byte> response,
+                     std::size_t& written) noexcept {
+    return append(scratch,
+                  prepared.family,
+                  prepared.rawClearSize,
+                  prepared.compressedClearSize,
+                  key,
+                  nonce,
+                  response,
+                  written);
+}
+
+/** Appends one prepared snapshot and advances the nonce only when the whole frame fits. */
+bool append_prepared_frame(Scratch& scratch,
+                           const snapshot::Prepared& prepared,
+                           std::span<const std::byte, state::kAesKeySize> key,
+                           std::array<std::byte, state::kBapNonceSize>& nonce,
+                           std::span<std::byte> response,
+                           std::size_t& written) noexcept {
+    if (!append_prepared(scratch, prepared, key, nonce, response, written)) {
+        return false;
+    }
+    middleware::secure_channel::advance_nonce(nonce);
+    return true;
+}
+
 } // namespace sunrise::server::bap::encrypted::push::queuez_frame

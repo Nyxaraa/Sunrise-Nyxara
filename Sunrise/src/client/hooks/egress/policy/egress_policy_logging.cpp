@@ -1,8 +1,10 @@
 #include "egress_policy_logging.h"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string_view>
 
 #include "../../../../core/logging/log.h"
@@ -74,6 +76,73 @@ struct CallerSite final {
 }
 
 } // namespace
+
+/** Datagram-send and connect targets reported per run, enough to show every channel dialed. */
+constexpr unsigned kMaxSendTargets = 400;
+std::atomic<unsigned> g_sendTargetsReported{0};
+
+/** Logs the destination one datagram send or connect actually targets, capped per process. */
+void log_send_target(SocketOperation operation,
+                     const sockaddr* destination,
+                     int destinationLength,
+                     std::size_t payloadBytes) noexcept {
+    if (g_sendTargetsReported.fetch_add(1, std::memory_order_relaxed) >= kMaxSendTargets) {
+        return;
+    }
+    std::uint32_t address = 0;
+    std::uint16_t port = 0;
+    if (destination != nullptr && destinationLength >= static_cast<int>(sizeof(sockaddr_in))) {
+        sockaddr_in endpoint{};
+        std::memcpy(&endpoint, destination, sizeof(endpoint));
+        if (endpoint.sin_family == AF_INET) {
+            address = ntohl(endpoint.sin_addr.s_addr);
+            port = ntohs(endpoint.sin_port);
+        }
+    }
+    std::array<char, 128> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=egress stage=%s target=0x%08X:%u bytes=%zu",
+                                      operation == SocketOperation::connect ? "dial" : "datagram",
+                                      address,
+                                      static_cast<unsigned>(port),
+                                      payloadBytes);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::debug,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
+/** Logs the connected peer one send targets, capped per process. */
+void log_send_peer(SOCKET socket, std::size_t payloadBytes) noexcept {
+    if (g_sendTargetsReported.fetch_add(1, std::memory_order_relaxed) >= kMaxSendTargets) {
+        return;
+    }
+    sockaddr_storage peer{};
+    int peerLength = static_cast<int>(sizeof(peer));
+    std::uint32_t address = 0;
+    std::uint16_t port = 0;
+    if (::getpeername(socket, reinterpret_cast<sockaddr*>(&peer), &peerLength) != SOCKET_ERROR
+        && peer.ss_family == AF_INET) {
+        sockaddr_in endpoint{};
+        std::memcpy(&endpoint, &peer, sizeof(endpoint));
+        address = ntohl(endpoint.sin_addr.s_addr);
+        port = ntohs(endpoint.sin_port);
+    }
+    std::array<char, 128> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=egress stage=connected target=0x%08X:%u bytes=%zu",
+                                      address,
+                                      static_cast<unsigned>(port),
+                                      payloadBytes);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::debug,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
 
 /** Logs one fixed event for a refused call, with no endpoint or payload data. */
 void log_decision(SocketOperation operation, bool targetsRedirect, bool allowed) noexcept {

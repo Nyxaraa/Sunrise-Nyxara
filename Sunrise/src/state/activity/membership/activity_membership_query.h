@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstddef>
 #include <cstdint>
@@ -12,9 +12,9 @@ struct PendingMutation final {
     Snapshot snapshot{};
     /** A second copy, so a changed identity plan is caught before commit. */
     Identity identityGuard{};
-    /** Sparse authoritative input, kept whether or not a delivery snapshot exists. */
+    /** Sparse client-state input, kept whether or not a delivery snapshot exists. */
     AuthoritativeUpdate authoritativeInput{};
-    /** A second copy, so a changed authoritative plan is caught before commit. */
+    /** A second copy, so a changed client-state plan is caught before commit. */
     AuthoritativeUpdate authoritativeGuard{};
     std::uint64_t sessionId{};
     std::uint64_t expectedStateRevision{};
@@ -30,9 +30,8 @@ struct PendingMutation final {
     bool changesState{};
     /**
      * Set when the delta moves the player to a different region.
-     * The region is not a published membership field, so this is separate from changesState. The
-     * citizen advertisement is rebuilt from it, so a move advances the revision and sends the
-     * roster at once.
+     * The region is not a published field, so this is separate from changesState. A move rebuilds
+     * the citizen advertisement, advances the revision and sends the roster at once.
      */
     bool movesRegion{};
     /**
@@ -88,22 +87,119 @@ struct PendingMutation final {
 [[nodiscard]] bool acknowledged(std::uint64_t sessionId) noexcept;
 
 /**
- * Advances the published membership revision so an already-applied snapshot can be corrected.
- * The client applies one update per revision and drops every repeat. A body published with a
- * stale citizen advertisement can only be replaced at a new revision.
- * @param sessionId Joined activity session.
- * @return True when the revision advanced.
+ * Arms or clears the host-named region the client teleports to.
+ * The client reads these fields out of the message-12 region-block tail and starts a type-7
+ * slice-set transition to the named region, so this is the host's only mid-activity move.
+ * @param sessionId Joined activity session to move.
+ * @param sliceSetIndex Authored region to move to, or the absent sentinel to clear the arm.
+ * @param sliceSetHash Slice-set name hash that region belongs to.
+ * @return True when the session exists and the arm changed.
  */
-[[nodiscard]] bool republish(std::uint64_t sessionId) noexcept;
+[[nodiscard]] bool arm_host_teleport(std::uint64_t sessionId,
+                                     std::int32_t sliceSetIndex,
+                                     std::uint32_t sliceSetHash) noexcept;
 
 /**
- * Reads the region the client last reported it was in.
- * The client names its own position and it changes as the player crosses a bubble boundary, so it
- * beats the destination's own arrival slice set wherever the host must say where the player is.
+ * Arms one native hard wipe on an exact session generation. Arming the same request key again
+ * is accepted; another key is refused while a wipe or a host teleport is active.
+ * @param requestKey Script request that owns the wipe. @param region Region the party is in.
+ * @param spawnSetHash Authored spawn set the party respawns at.
+ */
+[[nodiscard]] bool arm_hard_wipe(const SessionBinding& binding,
+                                 std::uint64_t requestKey,
+                                 std::int32_t region,
+                                 std::uint32_t spawnSetHash) noexcept;
+
+/** @return True while an armed wipe's spawn block still has to reach the client. */
+[[nodiscard]] bool hard_wipe_needs_publish(std::uint64_t sessionId) noexcept;
+
+/** Releases the wipe the request key armed, so the client's wait is answered. */
+[[nodiscard]] bool release_hard_wipe(const SessionBinding& binding,
+                                     std::uint64_t requestKey) noexcept;
+
+/** @return The spawn set the armed wipe named for this region, or zero. */
+[[nodiscard]] std::uint32_t checkpoint_spawn_hash(std::uint64_t sessionId,
+                                                  std::int32_t region) noexcept;
+
+/**
  * @param sessionId Joined activity session.
- * @return The reported region index, or -1 when none has arrived.
+ * @return True while a host-named teleport is armed and unspent.
+ */
+[[nodiscard]] bool host_teleport_armed(std::uint64_t sessionId) noexcept;
+
+/**
+ * Prepares a membership-revision advance so an already-applied snapshot can be corrected.
+ * The client applies one update per revision and drops every repeat, so a body published with a
+ * stale citizen advertisement can only be replaced at a new revision.
+ * @param sessionId Joined activity session.
+ * @param mutation Cleared, then receives the next snapshot and exact State guards.
+ * @return True when the next revision can be staged.
+ */
+[[nodiscard]] bool prepare_republish(std::uint64_t sessionId, PendingMutation& mutation) noexcept;
+
+/**
+ * Reads the pending region leg the client last reported.
+ * This is the region it is loading or precaching, so it names a target before the client is there.
+ * After a z-leg switch it names the region behind the player; after a completed transition, -1.
+ * @param sessionId Joined activity session.
+ * @return The pending region index, or -1.
  */
 [[nodiscard]] std::int32_t reported_region(std::uint64_t sessionId) noexcept;
+
+/**
+ * Reads the region the client is in.
+ * The current leg names the slice set the client holds. While it holds none, the pending leg
+ * names where it is loading into, and that is where the host has to say the player is.
+ * @param sessionId Joined activity session.
+ * @return The current region, else the pending one, else -1.
+ */
+[[nodiscard]] std::int32_t player_region(std::uint64_t sessionId) noexcept;
+
+/**
+ * Reads the slice set from the client's newest D6 teleport state.
+ * Unlike the reported region, this stays on the package slice selected for the transition while
+ * the player moves between regions inside that slice.
+ * @param sessionId Joined activity session.
+ * @return The reported slice-set index, or -1 before a D6 teleport state arrives.
+ */
+[[nodiscard]] std::int32_t reported_slice_set(std::uint64_t sessionId) noexcept;
+
+/** Where the client says it is: its two region legs and the bubble its refresh names current. */
+struct ClientPlacement final {
+    /** Pending region leg: the load or precache target, or the region behind a z-leg switch. */
+    std::int32_t region{kAbsentRegionIndex};
+    /** Current region leg: the region of the slice set the client holds, -1 while none. */
+    std::int32_t currentRegion{kAbsentRegionIndex};
+    std::int32_t bubble{kMinimumRefreshBubble};
+    /** Membership revision the refresh that named the bubble had applied. */
+    std::uint32_t bubbleRevision{kAbsentRevision};
+    /** The client wrote its status back while holding a region: it is in the world. */
+    bool entered{};
+};
+
+/**
+ * Records the world state the client's character write-back (ws 702) reports.
+ * The body's field at objB `+12068` reads 8 once the client is in the world, and 1 through a
+ * load. So the value decides entry, and the send's timing does not.
+ * @param inWorld True when the field carries the in-world value.
+ */
+void note_client_writeback(bool inWorld) noexcept;
+
+/**
+ * Reads the client's region legs and current bubble together.
+ * @param sessionId Joined activity session.
+ * @return All three reports, each at its absent value until it arrives.
+ */
+[[nodiscard]] ClientPlacement reported_placement(std::uint64_t sessionId) noexcept;
+
+/**
+ * Names the region the client has instantiated.
+ * The current leg of the client's member record follows the slice-set manager. It moves only
+ * when a slice-set switch has run, and reads -1 while no slice set is held.
+ * @param placement The client's reports.
+ * @return The current region, or -1 while the client holds none.
+ */
+[[nodiscard]] std::int32_t instantiated_region(const ClientPlacement& placement) noexcept;
 
 /**
  * Reads the newest session the client has reported a region on.
@@ -113,6 +209,14 @@ struct PendingMutation final {
  * @return That session id, or the fallback.
  */
 [[nodiscard]] std::uint64_t live_region_session(std::uint64_t fallback) noexcept;
+
+/**
+ * Reads the member key the client joined this activity session under.
+ * A peer that joins the gameplay group carries the same key as its join id.
+ * @param sessionId Joined activity session.
+ * @return The member key, or zero before any identity is published.
+ */
+[[nodiscard]] std::uint64_t member_key(std::uint64_t sessionId) noexcept;
 
 /**
  * Reads the identity value message 12 publishes at member record `+16`.
@@ -134,10 +238,11 @@ struct PendingMutation final {
                                            PendingMutation& mutation) noexcept;
 
 /**
- * Commits one identity, authoritative, refresh, or acknowledgement operation.
+ * Commits one identity, client-state, refresh, republish, or acknowledgement operation.
  * @param mutation Prepared plan. Always cleared before this function returns.
  * @return True when the operation commits or needs no State change.
  */
-[[nodiscard]] bool commit(PendingMutation& mutation) noexcept;
+[[nodiscard]] bool commit(PendingMutation& mutation,
+                          CommittedClientState* clientState = nullptr) noexcept;
 
 } // namespace sunrise::state::activity::membership

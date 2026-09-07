@@ -20,42 +20,28 @@ namespace item_details = build_data::items::details;
 namespace inventory_buckets = build_data::inventory::buckets;
 namespace family4_loadout = middleware::datagen::family4::loadout;
 
-/** Prepares one native-row-checked selected-character inventory insertion. */
-bool prepare_item_acquisition(std::uint16_t collectibleIndex,
-                              std::uint32_t definitionHash,
-                              PendingItemAcquisition& mutation) noexcept {
-    mutation = {};
-    const AccountState account = account_snapshot();
-    build_data::collectibles::Definition collectible{};
-    build_data::items::Definition grantedDefinition{};
-    if (definitionHash == authored_inventory::kNoDefinitionHash || !account::valid(account)
-        || !valid_profile_inventory(account)
-        || !build_data::find_collectible_definition(collectibleIndex, collectible)
-        || collectible.itemDefinitionIndex
-               == build_data::collectibles::kUnavailableItemDefinitionIndex
-        || !build_data::find_item_definition_index(collectible.itemDefinitionIndex,
-                                                   grantedDefinition)
-        || grantedDefinition.definitionHash != definitionHash) {
-        report_acquisition("prepare", "fail", "input", definitionHash, 0, 0, 0, 0, 0, 0);
-        return false;
-    }
+namespace runtime::detail {
 
-    AccountState chargedAccount{};
-    bool profileChanged = false;
-    if (!apply_collection_materials(account, collectible, chargedAccount, profileChanged)) {
-        report_acquisition("prepare", "fail", "materials", definitionHash, 0, 0, 0, 0, 0, 0);
-        return false;
-    }
-
-    std::size_t characterIndex = account.characterCount;
-    for (std::size_t index = 0; index < account.characterCount; ++index) {
+/** @return The selected character's index, or the character count when none is selected. */
+[[nodiscard]] std::size_t selected_character_index(const AccountState& account) noexcept {
+    const std::size_t count = (std::min)(account.characterCount, account.characters.size());
+    for (std::size_t index = 0; index < count; ++index) {
         if (account.characters[index].selected) {
-            characterIndex = index;
-            break;
+            return index;
         }
     }
-    if (characterIndex == account.characterCount) {
-        report_acquisition("prepare", "fail", "selection", definitionHash, 0, 0, 0, 0, 0, 0);
+    return account.characters.size();
+}
+
+/** Stages the common selected-character insertion path. */
+[[nodiscard]] bool finalize_item_acquisition(const AccountState& account,
+                                             const AccountState& chargedAccount,
+                                             std::uint32_t definitionHash,
+                                             bool profileChanged,
+                                             const GrantSource& source,
+                                             PendingItemAcquisition& mutation) noexcept {
+    const std::size_t characterIndex = selected_character_index(account);
+    if (characterIndex >= account.characterCount) {
         return false;
     }
 
@@ -63,31 +49,11 @@ bool prepare_item_acquisition(std::uint16_t collectibleIndex,
     if (before.inventory.count >= before.inventory.values.size()
         || before.nextInventorySerial
                >= static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)())) {
-        report_acquisition("prepare",
-                           "fail",
-                           "state_capacity",
-                           definitionHash,
-                           before.soid,
-                           0,
-                           before.inventory.count,
-                           0,
-                           0,
-                           before.nextInventorySerial);
         return false;
     }
 
     std::uint64_t instanceSoid = 0;
     if (!next_item_instance_soid(account, instanceSoid)) {
-        report_acquisition("prepare",
-                           "fail",
-                           "soid",
-                           definitionHash,
-                           before.soid,
-                           0,
-                           before.inventory.count,
-                           0,
-                           0,
-                           before.nextInventorySerial);
         return false;
     }
 
@@ -110,17 +76,7 @@ bool prepare_item_acquisition(std::uint16_t collectibleIndex,
     std::uint8_t equipmentSlot = 0;
     if (!account::valid(candidate) || identity_uses_soid(candidate, instanceSoid)
         || !family4_loadout::resolve(candidate, characterIndex, resolved)
-        || !find_acquired_row(resolved, instanceSoid, inventoryRow, equipmentSlot)) {
-        report_acquisition("prepare",
-                           "fail",
-                           "resolve_or_bucket_full",
-                           definitionHash,
-                           before.soid,
-                           instanceSoid,
-                           inventoryIndex,
-                           0,
-                           0,
-                           after.nextInventorySerial);
+        || !find_unequipped_row(resolved, instanceSoid, inventoryRow, equipmentSlot)) {
         return false;
     }
 
@@ -132,161 +88,517 @@ bool prepare_item_acquisition(std::uint16_t collectibleIndex,
     mutation.characterSoid = before.soid;
     mutation.acquiredInstanceSoid = instanceSoid;
     mutation.acquiredDefinitionHash = definitionHash;
-    mutation.materialRequirementSetHash = collectible.materialRequirementSetHash;
-    mutation.expectedNextInventorySerial = before.nextInventorySerial;
+    mutation.materialRequirementSetHash = source.materialRequirementSetHash;
     mutation.characterIndex = characterIndex;
     mutation.expectedInventoryCount = before.inventory.count;
     mutation.expectedProfileItemCount = account.profileItemCount;
     mutation.afterProfileItemCount = chargedAccount.profileItemCount;
     mutation.inventoryIndex = inventoryIndex;
-    mutation.collectibleIndex = collectibleIndex;
+    mutation.collectibleIndex = source.collectibleIndex;
     mutation.inventoryRow = inventoryRow;
     mutation.equipmentSlot = equipmentSlot;
-    mutation.materialRequirementCount = collectible.materialRequirementCount;
+    mutation.materialRequirementCount = source.materialRequirementCount;
     mutation.profileChanged = profileChanged;
+    mutation.directGrant = source.direct;
     mutation.prepared = true;
-    report_acquisition("prepare",
-                       "ok",
-                       "ready",
-                       definitionHash,
-                       before.soid,
-                       instanceSoid,
-                       inventoryIndex,
-                       inventoryRow,
-                       equipmentSlot,
-                       after.nextInventorySerial);
     return true;
 }
 
-/** Produces the full account after-image while a prepared character pull remains current. */
-bool preview_item_acquisition(const PendingItemAcquisition& mutation,
-                              AccountState& after) noexcept {
-    after = {};
-    if (!mutation.prepared || mutation.accountSoid == 0 || mutation.characterSoid == 0
-        || mutation.acquiredInstanceSoid == 0 || mutation.characterIndex >= kCharacterCapacity
+} // namespace runtime::detail
+
+/** Prepares one native-row-checked selected-character inventory insertion. */
+bool prepare_item_acquisition(std::uint16_t collectibleIndex,
+                              std::uint32_t definitionHash,
+                              PendingItemAcquisition& mutation) noexcept {
+    mutation = {};
+    const AccountState account = account_snapshot();
+    build_data::collectibles::Definition collectible{};
+    build_data::items::Definition grantedDefinition{};
+    // A vendor purchase names an item, not a collectible, so the collectible steps are skipped
+    // rather than faked. The item is still validated, just by its own hash.
+    const bool hasCollectible = collectibleIndex != build_data::collectibles::kNoCollectibleIndex;
+    if (definitionHash == authored_inventory::kNoDefinitionHash || !account::valid(account)
+        || !valid_profile_inventory(account)) {
+        return false;
+    }
+    if (hasCollectible) {
+        if (!build_data::find_collectible_definition(collectibleIndex, collectible)
+            || collectible.itemDefinitionIndex
+                   == build_data::collectibles::kUnavailableItemDefinitionIndex
+            || !build_data::find_item_definition_index(collectible.itemDefinitionIndex,
+                                                       grantedDefinition)
+            || grantedDefinition.definitionHash != definitionHash) {
+            return false;
+        }
+    } else if (!build_data::find_item_definition_hash(definitionHash, grantedDefinition)
+               || grantedDefinition.definitionHash != definitionHash) {
+        return false;
+    }
+
+    AccountState chargedAccount = account;
+    bool profileChanged = false;
+    // Nothing is charged without a collectible: the cost lives on the collectible's material
+    // requirements, and a sale row's own cost fields are still role-open.
+    if (hasCollectible
+        && !apply_collection_materials(account, collectible, chargedAccount, profileChanged)) {
+        return false;
+    }
+
+    return finalize_item_acquisition(
+        account,
+        chargedAccount,
+        definitionHash,
+        profileChanged,
+        {.materialRequirementSetHash = collectible.materialRequirementSetHash,
+         .collectibleIndex = collectibleIndex,
+         .materialRequirementCount = collectible.materialRequirementCount},
+        mutation);
+}
+
+/** Prepares one direct selected-character inventory grant, with no Collections row or charge. */
+bool prepare_item_acquisition_for_item(std::uint16_t itemDefinitionIndex,
+                                       PendingItemAcquisition& mutation) noexcept {
+    mutation = {};
+    const AccountState account = account_snapshot();
+    build_data::items::Definition grantedDefinition{};
+    if (!account::valid(account) || !valid_profile_inventory(account)
+        || !build_data::find_item_definition_index(itemDefinitionIndex, grantedDefinition)
+        || grantedDefinition.definitionHash == authored_inventory::kNoDefinitionHash) {
+        return false;
+    }
+
+    return finalize_item_acquisition(
+        account, account, grantedDefinition.definitionHash, false, {.direct = true}, mutation);
+}
+
+/** Prepares a fixed Season wrapper expansion without exposing a partial package. */
+bool prepare_direct_item_bundle(std::uint32_t sourceDefinitionHash,
+                                std::span<const std::uint16_t> itemDefinitionIndices,
+                                PendingDirectItemBundle& mutation) noexcept {
+    mutation = {};
+    build_data::season_pass::Package package{};
+    if (!build_data::find_season_pass_package(sourceDefinitionHash, package)
+        || itemDefinitionIndices.size() != package.itemCount) {
+        return false;
+    }
+
+    std::array<std::uint32_t, build_data::season_pass::kPackageItemCapacity> hashes{};
+    for (std::size_t index = 0; index < itemDefinitionIndices.size(); ++index) {
+        const std::uint16_t definitionIndex = itemDefinitionIndices[index];
+        build_data::items::Definition definition{};
+        item_details::Definition detail{};
+        inventory_buckets::Descriptor bucket{};
+        if (!build_data::find_item_definition_index(definitionIndex, definition)
+            || definition.definitionHash != package.items[index]
+            || !build_data::find_configured_item_detail(definitionIndex, detail)
+            || detail.definitionIndex != definition.definitionIndex
+            || detail.definitionHash != definition.definitionHash
+            || detail.bucketId != definition.bucketId
+            || detail.instancedDefinitionState != item_details::InstancedDefinitionState::instanced
+            || !detail.equipmentSlot.has_value()
+            || !build_data::find_inventory_bucket_descriptor(detail.bucketId, bucket)
+            || bucket.arraySelector != inventory_buckets::ArraySelector::character) {
+            return false;
+        }
+        hashes[index] = definition.definitionHash;
+    }
+
+    const AccountState account = account_snapshot();
+    const std::size_t characterIndex = selected_character_index(account);
+    if (!account::valid(account) || characterIndex >= account.characterCount) {
+        return false;
+    }
+    const CharacterState& before = account.characters[characterIndex];
+    if (before.nextInventorySerial
+            > static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)())
+        || itemDefinitionIndices.size() > before.inventory.values.size() - before.inventory.count
+        || itemDefinitionIndices.size()
+               > static_cast<std::size_t>((std::numeric_limits<std::int32_t>::max)())
+                     - before.nextInventorySerial) {
+        return false;
+    }
+
+    std::uint64_t firstSoid = 0;
+    if (!next_item_instance_soid(account, firstSoid)
+        || itemDefinitionIndices.size() - 1U
+               > (std::numeric_limits<std::uint64_t>::max)() - firstSoid) {
+        return false;
+    }
+
+    CharacterState after = before;
+    const std::int32_t level = acquisition_level(before);
+    for (std::size_t index = 0; index < itemDefinitionIndices.size(); ++index) {
+        authored_inventory::Item granted{};
+        granted.instanceSoid = firstSoid + index;
+        granted.definitionHash = hashes[index];
+        granted.level = level;
+        granted.quantity = 1;
+        granted.mutationSerial = static_cast<std::int32_t>(after.nextInventorySerial++);
+        after.inventory.values[after.inventory.count++] = granted;
+    }
+
+    AccountState candidate = account;
+    candidate.characters[characterIndex] = after;
+    family4_loadout::ResolvedLoadout resolved{};
+    if (!account::valid(candidate)
+        || !family4_loadout::resolve(candidate, characterIndex, resolved)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < itemDefinitionIndices.size(); ++index) {
+        std::uint16_t row = 0;
+        std::uint8_t slot = 0;
+        if (!find_unequipped_row(resolved, firstSoid + index, row, slot)) {
+            return false;
+        }
+    }
+
+    mutation.beforeCharacter = before;
+    mutation.afterCharacter = after;
+    mutation.accountSoid = account.primarySoid;
+    mutation.characterSoid = before.soid;
+    mutation.firstInstanceSoid = firstSoid;
+    mutation.sourceDefinitionHash = sourceDefinitionHash;
+    mutation.characterIndex = characterIndex;
+    mutation.expectedInventoryCount = before.inventory.count;
+    mutation.itemCount = itemDefinitionIndices.size();
+    mutation.prepared = true;
+    return true;
+}
+
+/**
+ * Takes the selected character's next inventory mutation serial under the State lock.
+ * @param mutationSerial Receives the reserved serial; zero when nothing was reserved.
+ * @return False when no character is selected or its serial space is exhausted.
+ */
+bool reserve_selected_character_inventory_serial(std::int32_t& mutationSerial) noexcept {
+    mutationSerial = 0;
+    AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
+    AccountState& account = runtime::storage::g_state.account;
+    const std::size_t characterIndex = selected_character_index(account);
+    const bool ready =
+        account::valid(account) && characterIndex < account.characterCount
+        && account.characters[characterIndex].nextInventorySerial
+               < static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)());
+    if (ready) {
+        mutationSerial =
+            static_cast<std::int32_t>(account.characters[characterIndex].nextInventorySerial++);
+    }
+    ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+    return ready;
+}
+
+namespace runtime::detail {
+
+/**
+ * Checks that a prepared insertion still agrees with its Collections row or direct grant.
+ * @return False when the mutation's shape, its cost fields, or its item no longer hold.
+ */
+[[nodiscard]] static bool
+valid_item_acquisition_source(const PendingItemAcquisition& mutation) noexcept {
+    if (!mutation.prepared || mutation.characterSoid == 0 || mutation.acquiredInstanceSoid == 0
+        || mutation.accountSoid == 0
+        || mutation.acquiredDefinitionHash == authored_inventory::kNoDefinitionHash
+        || mutation.characterIndex >= kCharacterCapacity
+        || mutation.expectedInventoryCount >= authored_inventory::kCharacterItemCapacity
+        || mutation.inventoryIndex != mutation.expectedInventoryCount
+        || mutation.afterCharacter.inventory.count != mutation.expectedInventoryCount + 1U
+        || mutation.inventoryIndex >= mutation.afterCharacter.inventory.count
+        || mutation.afterCharacter.inventory.values[mutation.inventoryIndex].instanceSoid
+               != mutation.acquiredInstanceSoid
+        || mutation.afterCharacter.inventory.values[mutation.inventoryIndex].definitionHash
+               != mutation.acquiredDefinitionHash
         || mutation.expectedProfileItemCount > authored_inventory::kProfileItemCapacity
         || mutation.afterProfileItemCount > authored_inventory::kProfileItemCapacity) {
         return false;
     }
-    const AccountState current = account_snapshot();
-    if (mutation.characterIndex >= current.characterCount
+    if (mutation.directGrant) {
+        build_data::items::Definition definition{};
+        return mutation.collectibleIndex == 0 && mutation.materialRequirementSetHash == 0
+               && mutation.materialRequirementCount == 0
+               && same_profile_views(mutation.beforeProfileItems,
+                                     mutation.expectedProfileItemCount,
+                                     mutation.afterProfileItems,
+                                     mutation.afterProfileItemCount)
+               && build_data::find_item_definition_hash(mutation.acquiredDefinitionHash,
+                                                        definition);
+    }
+
+    if (mutation.collectibleIndex == build_data::collectibles::kNoCollectibleIndex) {
+        // The guard is that prepare and commit agree. Without a collectible they agree on there
+        // being none, which means both cost fields must still be clear.
+        build_data::items::Definition definition{};
+        return mutation.materialRequirementSetHash == 0 && mutation.materialRequirementCount == 0
+               && build_data::find_item_definition_hash(mutation.acquiredDefinitionHash,
+                                                        definition);
+    }
+
+    build_data::collectibles::Definition collectible{};
+    build_data::items::Definition definition{};
+    return build_data::find_collectible_definition(mutation.collectibleIndex, collectible)
+           && collectible.itemDefinitionIndex
+                  != build_data::collectibles::kUnavailableItemDefinitionIndex
+           && collectible.materialRequirementSetHash == mutation.materialRequirementSetHash
+           && collectible.materialRequirementCount == mutation.materialRequirementCount
+           && build_data::find_item_definition_index(collectible.itemDefinitionIndex, definition)
+           && definition.definitionHash == mutation.acquiredDefinitionHash;
+}
+
+/** Applies one validated insertion over an exact current account without taking State locks. */
+[[nodiscard]] bool materialize_item_acquisition(const AccountState& current,
+                                                const PendingItemAcquisition& mutation,
+                                                AccountState& after) noexcept {
+    std::uint64_t nextSoid = 0;
+    if (!valid_item_acquisition_source(mutation)
+        || mutation.characterIndex >= current.characterCount
         || current.primarySoid != mutation.accountSoid
         || !same_character(current.characters[mutation.characterIndex], mutation.beforeCharacter)
         || !same_profile_inventory(
-            current, mutation.beforeProfileItems, mutation.expectedProfileItemCount)) {
+            current, mutation.beforeProfileItems, mutation.expectedProfileItemCount)
+        || !next_item_instance_soid(current, nextSoid)
+        || nextSoid != mutation.acquiredInstanceSoid) {
         return false;
     }
+
     after = current;
     after.profileItems = mutation.afterProfileItems;
     after.profileItemCount = mutation.afterProfileItemCount;
     after.characters[mutation.characterIndex] = mutation.afterCharacter;
     family4_loadout::ResolvedLoadout resolved{};
-    std::uint16_t checkedRow = 0;
-    std::uint8_t checkedSlot = 0;
+    std::uint16_t row = 0;
+    std::uint8_t slot = 0;
     return account::valid(after) && valid_profile_inventory(after)
            && family4_loadout::resolve(after, mutation.characterIndex, resolved)
-           && find_acquired_row(resolved, mutation.acquiredInstanceSoid, checkedRow, checkedSlot)
-           && checkedRow == mutation.inventoryRow && checkedSlot == mutation.equipmentSlot;
+           && find_unequipped_row(resolved, mutation.acquiredInstanceSoid, row, slot)
+           && row == mutation.inventoryRow && slot == mutation.equipmentSlot;
+}
+
+/** Rebuilds one package from installed policy and rejects any altered after-image. */
+[[nodiscard]] bool materialize_direct_item_bundle(const AccountState& current,
+                                                  const PendingDirectItemBundle& mutation,
+                                                  AccountState& after) noexcept {
+    build_data::season_pass::Package package{};
+    std::uint64_t firstSoid = 0;
+    if (!mutation.prepared
+        || !build_data::find_season_pass_package(mutation.sourceDefinitionHash, package)
+        || mutation.itemCount != package.itemCount || mutation.accountSoid == 0
+        || mutation.characterSoid == 0 || mutation.firstInstanceSoid == 0
+        || mutation.characterIndex >= current.characterCount
+        || mutation.expectedInventoryCount >= authored_inventory::kCharacterItemCapacity
+        || current.primarySoid != mutation.accountSoid
+        || !same_character(current.characters[mutation.characterIndex], mutation.beforeCharacter)
+        || !current.characters[mutation.characterIndex].selected
+        || current.characters[mutation.characterIndex].soid != mutation.characterSoid
+        || mutation.beforeCharacter.inventory.count != mutation.expectedInventoryCount
+        || mutation.itemCount
+               > mutation.beforeCharacter.inventory.values.size() - mutation.expectedInventoryCount
+        || mutation.beforeCharacter.nextInventorySerial
+               > static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)())
+        || mutation.itemCount > static_cast<std::size_t>((std::numeric_limits<std::int32_t>::max)())
+                                    - mutation.beforeCharacter.nextInventorySerial
+        || !next_item_instance_soid(current, firstSoid) || firstSoid != mutation.firstInstanceSoid
+        || mutation.itemCount - 1U > (std::numeric_limits<std::uint64_t>::max)() - firstSoid) {
+        return false;
+    }
+
+    CharacterState canonical = mutation.beforeCharacter;
+    const std::int32_t level = acquisition_level(canonical);
+    for (std::size_t index = 0; index < mutation.itemCount; ++index) {
+        build_data::items::Definition definition{};
+        item_details::Definition detail{};
+        inventory_buckets::Descriptor bucket{};
+        if (!build_data::find_item_definition_hash(package.items[index], definition)
+            || !build_data::find_configured_item_detail(definition.definitionIndex, detail)
+            || detail.definitionHash != definition.definitionHash
+            || detail.definitionIndex != definition.definitionIndex
+            || detail.bucketId != definition.bucketId
+            || detail.instancedDefinitionState != item_details::InstancedDefinitionState::instanced
+            || !detail.equipmentSlot.has_value()
+            || !build_data::find_inventory_bucket_descriptor(detail.bucketId, bucket)
+            || bucket.arraySelector != inventory_buckets::ArraySelector::character) {
+            return false;
+        }
+        authored_inventory::Item granted{};
+        granted.instanceSoid = firstSoid + index;
+        granted.definitionHash = package.items[index];
+        granted.level = level;
+        granted.quantity = 1;
+        granted.mutationSerial = static_cast<std::int32_t>(canonical.nextInventorySerial++);
+        canonical.inventory.values[canonical.inventory.count++] = granted;
+    }
+    if (!same_character(canonical, mutation.afterCharacter)) {
+        return false;
+    }
+
+    after = current;
+    after.characters[mutation.characterIndex] = canonical;
+    family4_loadout::ResolvedLoadout resolved{};
+    if (!account::valid(after)
+        || !family4_loadout::resolve(after, mutation.characterIndex, resolved)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < mutation.itemCount; ++index) {
+        std::uint16_t row = 0;
+        std::uint8_t slot = 0;
+        if (!find_unequipped_row(resolved, firstSoid + index, row, slot)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace runtime::detail
+
+/** Produces the full account after-image while a prepared character pull remains current. */
+bool preview_item_acquisition(const PendingItemAcquisition& mutation,
+                              AccountState& after) noexcept {
+    after = {};
+    return materialize_item_acquisition(account_snapshot(), mutation, after);
+}
+
+/** Produces the full account after-image while a prepared package remains current. */
+bool preview_direct_item_bundle(const PendingDirectItemBundle& mutation,
+                                AccountState& after) noexcept {
+    after = {};
+    return materialize_direct_item_bundle(account_snapshot(), mutation, after);
 }
 
 /** Commits one prepared insertion only while its prepare-time loadout remains current. */
 bool commit_item_acquisition(PendingItemAcquisition& mutation) noexcept {
-    const PendingItemAcquisition prepared = mutation;
-    mutation = {};
-    const auto fail = [&prepared](std::string_view reason) noexcept {
-        report_acquisition("commit",
-                           "fail",
-                           reason,
-                           prepared.acquiredDefinitionHash,
-                           prepared.characterSoid,
-                           prepared.acquiredInstanceSoid,
-                           prepared.inventoryIndex,
-                           prepared.inventoryRow,
-                           prepared.equipmentSlot,
-                           prepared.afterCharacter.nextInventorySerial);
-        return false;
-    };
-    if (!prepared.prepared || prepared.characterSoid == 0 || prepared.acquiredInstanceSoid == 0
-        || prepared.accountSoid == 0
-        || prepared.acquiredDefinitionHash == authored_inventory::kNoDefinitionHash
-        || prepared.characterIndex >= kCharacterCapacity
-        || prepared.expectedInventoryCount >= authored_inventory::kCharacterItemCapacity
-        || prepared.inventoryIndex != prepared.expectedInventoryCount
-        || prepared.afterCharacter.inventory.count != prepared.expectedInventoryCount + 1U
-        || prepared.inventoryIndex >= prepared.afterCharacter.inventory.count
-        || prepared.afterCharacter.inventory.values[prepared.inventoryIndex].instanceSoid
-               != prepared.acquiredInstanceSoid
-        || prepared.afterCharacter.inventory.values[prepared.inventoryIndex].definitionHash
-               != prepared.acquiredDefinitionHash
-        || prepared.expectedProfileItemCount > authored_inventory::kProfileItemCapacity
-        || prepared.afterProfileItemCount > authored_inventory::kProfileItemCapacity) {
-        return fail("mutation");
-    }
-
-    build_data::collectibles::Definition collectible{};
-    if (!build_data::find_collectible_definition(prepared.collectibleIndex, collectible)
-        || collectible.itemDefinitionIndex
-               == build_data::collectibles::kUnavailableItemDefinitionIndex
-        || collectible.materialRequirementSetHash != prepared.materialRequirementSetHash
-        || collectible.materialRequirementCount != prepared.materialRequirementCount) {
-        return fail("collectible");
-    }
-
-    report_acquisition("commit_begin",
-                       "ok",
-                       "ready",
-                       prepared.acquiredDefinitionHash,
-                       prepared.characterSoid,
-                       prepared.acquiredInstanceSoid,
-                       prepared.inventoryIndex,
-                       prepared.inventoryRow,
-                       prepared.equipmentSlot,
-                       prepared.afterCharacter.nextInventorySerial);
-
+    const PendingItemAcquisition& prepared = mutation;
+    const PendingConsumption consume{mutation};
     AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
-    AccountState candidate = runtime::storage::g_state.account;
-    if (prepared.characterIndex >= candidate.characterCount
-        || candidate.primarySoid != prepared.accountSoid
-        || !same_profile_inventory(
-            candidate, prepared.beforeProfileItems, prepared.expectedProfileItemCount)) {
-        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
-        return fail("account");
+    AccountState candidate{};
+    const bool ready =
+        materialize_item_acquisition(runtime::storage::g_state.account, prepared, candidate);
+    if (ready) {
+        runtime::storage::g_state.account = candidate;
     }
-    CharacterState& character = candidate.characters[prepared.characterIndex];
-    if (!character.selected || character.soid != prepared.characterSoid
-        || !same_character(character, prepared.beforeCharacter)) {
-        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
-        return fail("stale");
+    ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+    return ready;
+}
+
+namespace runtime::detail {
+
+/**
+ * Resolves one stackable profile-bucket item with its configured detail row.
+ * @param item Receives the item definition.
+ * @param detail Receives the configured detail row.
+ * @return False when the two rows disagree or the item is not a stackable profile item.
+ */
+[[nodiscard]] static bool resolve_profile_item(std::uint16_t itemDefinitionIndex,
+                                               build_data::items::Definition& item,
+                                               item_details::Definition& detail) noexcept {
+    inventory_buckets::Descriptor bucket{};
+    return build_data::find_item_definition_index(itemDefinitionIndex, item)
+           && item.definitionHash != authored_inventory::kNoDefinitionHash
+           && build_data::find_configured_item_detail(itemDefinitionIndex, detail)
+           && detail.definitionIndex == item.definitionIndex
+           && detail.definitionHash == item.definitionHash && detail.bucketId == item.bucketId
+           && detail.instancedDefinitionState == item_details::InstancedDefinitionState::stackable
+           && detail.maxStackSize > 0
+           && build_data::find_inventory_bucket_descriptor(detail.bucketId, bucket)
+           && bucket.arraySelector == inventory_buckets::ArraySelector::profile;
+}
+
+/** Stages the common profile-stack insertion path. */
+[[nodiscard]] bool
+finalize_profile_item_acquisition(const AccountState& account,
+                                  const AccountState& chargedAccount,
+                                  std::uint32_t definitionHash,
+                                  const item_details::Definition& detail,
+                                  bool actionSource,
+                                  std::int32_t quantity,
+                                  const GrantSource& source,
+                                  PendingProfileItemAcquisition& mutation) noexcept {
+    if (quantity <= 0 || quantity > detail.maxStackSize) {
+        return false;
+    }
+    std::size_t profileIndex = chargedAccount.profileItemCount;
+    std::int32_t previousQuantity = 0;
+    std::int32_t previousMutationSerial = 0;
+    std::int32_t greatestMutationSerial = 0;
+    bool appended = true;
+    for (std::size_t index = 0; index < account.profileItemCount; ++index) {
+        greatestMutationSerial =
+            (std::max)(greatestMutationSerial, account.profileItems[index].mutationSerial);
+    }
+    for (std::size_t index = 0; index < chargedAccount.profileItemCount; ++index) {
+        const authored_inventory::ProfileItem& existing = chargedAccount.profileItems[index];
+        greatestMutationSerial = (std::max)(greatestMutationSerial, existing.mutationSerial);
+        if (existing.definitionHash != definitionHash) {
+            continue;
+        }
+        if (existing.quantity > detail.maxStackSize) {
+            return false;
+        }
+        if (appended && existing.quantity <= detail.maxStackSize - quantity) {
+            profileIndex = index;
+            previousQuantity = existing.quantity;
+            previousMutationSerial = existing.mutationSerial;
+            appended = false;
+        }
+    }
+    if (greatestMutationSerial == (std::numeric_limits<std::int32_t>::max)()
+        || (appended && chargedAccount.profileItemCount >= chargedAccount.profileItems.size())
+        || quantity > detail.maxStackSize - previousQuantity) {
+        return false;
     }
 
-    candidate.profileItems = prepared.afterProfileItems;
-    candidate.profileItemCount = prepared.afterProfileItemCount;
-    character = prepared.afterCharacter;
-    family4_loadout::ResolvedLoadout resolved{};
-    std::uint16_t checkedRow = 0;
-    std::uint8_t checkedSlot = 0;
-    if (!account::valid(candidate) || !valid_profile_inventory(candidate)
-        || identity_uses_soid(candidate, prepared.acquiredInstanceSoid)
-        || !family4_loadout::resolve(candidate, prepared.characterIndex, resolved)
-        || !find_acquired_row(resolved, prepared.acquiredInstanceSoid, checkedRow, checkedSlot)
-        || checkedRow != prepared.inventoryRow || checkedSlot != prepared.equipmentSlot) {
-        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
-        return fail("resolve");
+    std::uint64_t acquiredInstanceSoid =
+        appended ? 0 : chargedAccount.profileItems[profileIndex].instanceSoid;
+    if (!appended && actionSource != (acquiredInstanceSoid != 0)) {
+        return false;
     }
-    runtime::storage::g_state.account = candidate;
-    ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
-    report_acquisition("commit_end",
-                       "ok",
-                       "published",
-                       prepared.acquiredDefinitionHash,
-                       prepared.characterSoid,
-                       prepared.acquiredInstanceSoid,
-                       prepared.inventoryIndex,
-                       prepared.inventoryRow,
-                       prepared.equipmentSlot,
-                       prepared.afterCharacter.nextInventorySerial);
-    return true;
+    if (appended && actionSource
+        && !next_profile_item_instance_soid(chargedAccount, acquiredInstanceSoid)) {
+        return false;
+    }
+
+    AccountState after = chargedAccount;
+    const std::int32_t acquiredMutationSerial = greatestMutationSerial + 1;
+    if (appended) {
+        after.profileItems[profileIndex] = {
+            acquiredInstanceSoid, definitionHash, quantity, acquiredMutationSerial};
+        ++after.profileItemCount;
+    } else {
+        after.profileItems[profileIndex].quantity += quantity;
+        after.profileItems[profileIndex].mutationSerial = acquiredMutationSerial;
+    }
+    const std::int32_t acquiredQuantity = after.profileItems[profileIndex].quantity;
+    if (after.profileItems[profileIndex].instanceSoid != acquiredInstanceSoid
+        || acquiredQuantity <= previousQuantity || acquiredQuantity > detail.maxStackSize
+        || !account::valid(after) || !valid_profile_inventory(after)) {
+        return false;
+    }
+
+    mutation.beforeItems = account.profileItems;
+    mutation.afterItems = after.profileItems;
+    mutation.accountSoid = account.primarySoid;
+    mutation.acquiredInstanceSoid = acquiredInstanceSoid;
+    mutation.acquiredDefinitionHash = definitionHash;
+    mutation.materialRequirementSetHash = source.materialRequirementSetHash;
+    mutation.expectedItemCount = account.profileItemCount;
+    mutation.afterItemCount = after.profileItemCount;
+    mutation.profileIndex = profileIndex;
+    mutation.previousQuantity = previousQuantity;
+    mutation.acquiredQuantity = acquiredQuantity;
+    mutation.previousMutationSerial = previousMutationSerial;
+    mutation.acquiredMutationSerial = acquiredMutationSerial;
+    mutation.collectibleIndex = source.collectibleIndex;
+    mutation.bucketId = detail.bucketId;
+    mutation.materialRequirementCount = source.materialRequirementCount;
+    mutation.actionSource = actionSource;
+    mutation.appended = appended;
+    mutation.directGrant = source.direct;
+    mutation.prepared = true;
+    if (valid_profile_mutation_shape(mutation)) {
+        return true;
+    }
+    mutation = {};
+    return false;
 }
+
+} // namespace runtime::detail
 
 /** Prepares one checked profile-stack increment or append for a Collections pull. */
 bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
@@ -297,222 +609,68 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
     build_data::collectibles::Definition collectible{};
     build_data::items::Definition item{};
     item_details::Definition detail{};
-    inventory_buckets::Descriptor bucket{};
     if (definitionHash == authored_inventory::kNoDefinitionHash || !account::valid(account)
         || !valid_profile_inventory(account)
-        || !build_data::find_collectible_definition(collectibleIndex, collectible)
-        || collectible.itemDefinitionIndex
-               == build_data::collectibles::kUnavailableItemDefinitionIndex
         || !build_data::find_item_definition_hash(definitionHash, item)
-        || item.definitionHash != definitionHash
-        || item.definitionIndex != collectible.itemDefinitionIndex
-        || !build_data::find_configured_item_detail(item.definitionIndex, detail)
-        || detail.definitionIndex != item.definitionIndex || detail.definitionHash != definitionHash
-        || detail.bucketId != item.bucketId
-        || detail.instancedDefinitionState != item_details::InstancedDefinitionState::stackable
-        || detail.maxStackSize <= 0
-        || !build_data::find_inventory_bucket_descriptor(detail.bucketId, bucket)
-        || bucket.arraySelector != inventory_buckets::ArraySelector::profile) {
-        report_profile_acquisition("prepare",
-                                   "fail",
-                                   "definition_or_profile",
-                                   definitionHash,
-                                   account.primarySoid,
-                                   0,
-                                   0,
-                                   0,
-                                   account.profileItemCount,
-                                   0,
-                                   0,
-                                   false);
+        // The item resolves first, because the collectible cross-check reads it. With no
+        // collectible the item's own hash is the whole check.
+        || (collectibleIndex != build_data::collectibles::kNoCollectibleIndex
+            && (!build_data::find_collectible_definition(collectibleIndex, collectible)
+                || collectible.itemDefinitionIndex
+                       == build_data::collectibles::kUnavailableItemDefinitionIndex
+                || item.definitionIndex != collectible.itemDefinitionIndex))
+        || !resolve_profile_item(item.definitionIndex, item, detail)
+        || item.definitionHash != definitionHash) {
         return false;
     }
-    AccountState chargedAccount{};
+    AccountState chargedAccount = account;
     bool materialsChanged = false;
-    if (!apply_collection_materials(account, collectible, chargedAccount, materialsChanged)) {
-        report_profile_acquisition("prepare",
-                                   "fail",
-                                   "materials",
-                                   definitionHash,
-                                   account.primarySoid,
-                                   0,
-                                   detail.bucketId,
-                                   0,
-                                   account.profileItemCount,
-                                   0,
-                                   0,
-                                   false);
+    // Nothing is charged without a collectible: the cost lives on the collectible's material
+    // requirements, and a sale row's own cost fields are still role-open.
+    if (collectibleIndex != build_data::collectibles::kNoCollectibleIndex
+        && !apply_collection_materials(account, collectible, chargedAccount, materialsChanged)) {
         return false;
     }
     (void)materialsChanged;
     const bool actionSource =
         build_data::is_profile_action_source(item.definitionIndex, item.bucketId);
 
-    std::size_t profileIndex = chargedAccount.profileItemCount;
-    std::int32_t previousQuantity = 0;
-    std::int32_t previousMutationSerial = 0;
-    std::int32_t greatestMutationSerial = 0;
-    bool appended = true;
-    for (std::size_t index = 0; index < chargedAccount.profileItemCount; ++index) {
-        greatestMutationSerial =
-            (std::max)(greatestMutationSerial, chargedAccount.profileItems[index].mutationSerial);
-    }
-    for (std::size_t index = 0; index < chargedAccount.profileItemCount; ++index) {
-        const authored_inventory::ProfileItem& existing = chargedAccount.profileItems[index];
-        if (existing.definitionHash != definitionHash) {
-            continue;
-        }
-        if (existing.quantity > detail.maxStackSize) {
-            report_profile_acquisition("prepare",
-                                       "fail",
-                                       "existing_quantity",
-                                       definitionHash,
-                                       account.primarySoid,
-                                       existing.instanceSoid,
-                                       detail.bucketId,
-                                       index,
-                                       chargedAccount.profileItemCount,
-                                       existing.quantity,
-                                       existing.quantity,
-                                       false);
-            return false;
-        }
-        if (appended && existing.quantity < detail.maxStackSize) {
-            profileIndex = index;
-            previousQuantity = existing.quantity;
-            previousMutationSerial = existing.mutationSerial;
-            appended = false;
-        }
-    }
-    if (greatestMutationSerial == (std::numeric_limits<std::int32_t>::max)()
-        || (appended && chargedAccount.profileItemCount >= chargedAccount.profileItems.size())) {
-        report_profile_acquisition(
-            "prepare",
-            "fail",
-            "state_capacity",
-            definitionHash,
-            account.primarySoid,
-            appended ? 0 : chargedAccount.profileItems[profileIndex].instanceSoid,
-            detail.bucketId,
-            profileIndex,
-            chargedAccount.profileItemCount,
-            0,
-            0,
-            true);
-        return false;
-    }
+    return finalize_profile_item_acquisition(
+        account,
+        chargedAccount,
+        definitionHash,
+        detail,
+        actionSource,
+        1,
+        {.materialRequirementSetHash = collectible.materialRequirementSetHash,
+         .collectibleIndex = collectibleIndex,
+         .materialRequirementCount = collectible.materialRequirementCount},
+        mutation);
+}
 
-    std::uint64_t acquiredInstanceSoid =
-        appended ? 0 : chargedAccount.profileItems[profileIndex].instanceSoid;
-    if (actionSource != (acquiredInstanceSoid != 0) && !appended) {
-        report_profile_acquisition("prepare",
-                                   "fail",
-                                   "identity_policy",
-                                   definitionHash,
-                                   account.primarySoid,
-                                   acquiredInstanceSoid,
-                                   detail.bucketId,
-                                   profileIndex,
-                                   chargedAccount.profileItemCount,
-                                   previousQuantity,
-                                   previousQuantity,
-                                   false);
+/** Prepares one direct profile-stack grant, with no Collections row or material charge. */
+bool prepare_profile_item_acquisition_for_item(std::uint16_t itemDefinitionIndex,
+                                               std::int32_t quantity,
+                                               PendingProfileItemAcquisition& mutation) noexcept {
+    mutation = {};
+    const AccountState account = account_snapshot();
+    build_data::items::Definition item{};
+    item_details::Definition detail{};
+    if (quantity <= 0 || !account::valid(account) || !valid_profile_inventory(account)
+        || !resolve_profile_item(itemDefinitionIndex, item, detail)) {
         return false;
     }
-    if (appended && actionSource
-        && !next_profile_item_instance_soid(chargedAccount, acquiredInstanceSoid)) {
-        report_profile_acquisition("prepare",
-                                   "fail",
-                                   "identity_capacity",
-                                   definitionHash,
-                                   account.primarySoid,
-                                   acquiredInstanceSoid,
-                                   detail.bucketId,
-                                   profileIndex,
-                                   chargedAccount.profileItemCount,
-                                   0,
-                                   0,
-                                   true);
-        return false;
-    }
+    const bool actionSource =
+        build_data::is_profile_action_source(item.definitionIndex, item.bucketId);
 
-    AccountState after = chargedAccount;
-    const std::int32_t acquiredMutationSerial = greatestMutationSerial + 1;
-    if (appended) {
-        after.profileItems[profileIndex] = {
-            acquiredInstanceSoid, definitionHash, 1, acquiredMutationSerial};
-        ++after.profileItemCount;
-    } else {
-        ++after.profileItems[profileIndex].quantity;
-        after.profileItems[profileIndex].mutationSerial = acquiredMutationSerial;
-    }
-    const std::int32_t acquiredQuantity = after.profileItems[profileIndex].quantity;
-    if (after.profileItems[profileIndex].instanceSoid != acquiredInstanceSoid
-        || acquiredQuantity <= previousQuantity || acquiredQuantity > detail.maxStackSize
-        || !account::valid(after) || !valid_profile_inventory(after)) {
-        report_profile_acquisition("prepare",
-                                   "fail",
-                                   "bucket_full_or_quantity",
-                                   definitionHash,
-                                   account.primarySoid,
-                                   acquiredInstanceSoid,
-                                   detail.bucketId,
-                                   profileIndex,
-                                   after.profileItemCount,
-                                   previousQuantity,
-                                   acquiredQuantity,
-                                   appended);
-        return false;
-    }
-
-    mutation.beforeItems = account.profileItems;
-    mutation.afterItems = after.profileItems;
-    mutation.accountSoid = account.primarySoid;
-    mutation.acquiredInstanceSoid = acquiredInstanceSoid;
-    mutation.acquiredDefinitionHash = definitionHash;
-    mutation.materialRequirementSetHash = collectible.materialRequirementSetHash;
-    mutation.expectedItemCount = account.profileItemCount;
-    mutation.afterItemCount = after.profileItemCount;
-    mutation.profileIndex = profileIndex;
-    mutation.previousQuantity = previousQuantity;
-    mutation.acquiredQuantity = acquiredQuantity;
-    mutation.previousMutationSerial = previousMutationSerial;
-    mutation.acquiredMutationSerial = acquiredMutationSerial;
-    mutation.collectibleIndex = collectibleIndex;
-    mutation.bucketId = detail.bucketId;
-    mutation.materialRequirementCount = collectible.materialRequirementCount;
-    mutation.actionSource = actionSource;
-    mutation.appended = appended;
-    mutation.prepared = true;
-    if (!valid_profile_mutation_shape(mutation)) {
-        mutation = {};
-        report_profile_acquisition("prepare",
-                                   "fail",
-                                   "mutation",
-                                   definitionHash,
-                                   account.primarySoid,
-                                   acquiredInstanceSoid,
-                                   detail.bucketId,
-                                   profileIndex,
-                                   after.profileItemCount,
-                                   previousQuantity,
-                                   acquiredQuantity,
-                                   appended);
-        return false;
-    }
-    report_profile_acquisition("prepare",
-                               "ok",
-                               "ready",
-                               definitionHash,
-                               account.primarySoid,
-                               acquiredInstanceSoid,
-                               detail.bucketId,
-                               profileIndex,
-                               after.profileItemCount,
-                               previousQuantity,
-                               acquiredQuantity,
-                               appended);
-    return true;
+    return finalize_profile_item_acquisition(account,
+                                             account,
+                                             item.definitionHash,
+                                             detail,
+                                             actionSource,
+                                             quantity,
+                                             {.direct = true},
+                                             mutation);
 }
 
 /** Produces the exact account after-image while the captured profile view is still current. */
@@ -520,39 +678,14 @@ bool preview_profile_item_acquisition(const PendingProfileItemAcquisition& mutat
                                       AccountState& after) noexcept {
     after = {};
     const AccountState current = account_snapshot();
-    const bool ready = materialize_profile_acquisition(current, mutation, after);
-    report_profile_acquisition("preview",
-                               ready ? "ok" : "fail",
-                               ready ? "ready" : "stale_or_invalid",
-                               mutation.acquiredDefinitionHash,
-                               mutation.accountSoid,
-                               mutation.acquiredInstanceSoid,
-                               mutation.bucketId,
-                               mutation.profileIndex,
-                               mutation.afterItemCount,
-                               mutation.previousQuantity,
-                               mutation.acquiredQuantity,
-                               mutation.appended);
-    return ready;
+    return materialize_profile_acquisition(current, mutation, after);
 }
 
 /** Commits one profile-stack after-image only while its exact prepare-time view remains current. */
 bool commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) noexcept {
-    const PendingProfileItemAcquisition prepared = mutation;
-    mutation = {};
+    const PendingProfileItemAcquisition& prepared = mutation;
+    const PendingConsumption consume{mutation};
     if (!valid_profile_mutation_shape(prepared)) {
-        report_profile_acquisition("commit",
-                                   "fail",
-                                   "mutation",
-                                   prepared.acquiredDefinitionHash,
-                                   prepared.accountSoid,
-                                   prepared.acquiredInstanceSoid,
-                                   prepared.bucketId,
-                                   prepared.profileIndex,
-                                   prepared.afterItemCount,
-                                   prepared.previousQuantity,
-                                   prepared.acquiredQuantity,
-                                   prepared.appended);
         return false;
     }
 
@@ -564,18 +697,6 @@ bool commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) no
         runtime::storage::g_state.account = candidate;
     }
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
-    report_profile_acquisition("commit",
-                               ready ? "ok" : "fail",
-                               ready ? "published" : "stale_or_invalid",
-                               prepared.acquiredDefinitionHash,
-                               prepared.accountSoid,
-                               prepared.acquiredInstanceSoid,
-                               prepared.bucketId,
-                               prepared.profileIndex,
-                               prepared.afterItemCount,
-                               prepared.previousQuantity,
-                               prepared.acquiredQuantity,
-                               prepared.appended);
     return ready;
 }
 

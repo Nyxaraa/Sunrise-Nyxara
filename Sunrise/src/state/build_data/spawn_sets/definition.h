@@ -6,6 +6,11 @@
 
 namespace sunrise::state::build_data::spawn_sets {
 
+/** Three floats make one world position, in the basis the game stores a body position in. */
+inline constexpr std::size_t kPositionComponents = 3;
+/** Spawn points kept across every stem. A pass that reaches this drops the rest and says so. */
+inline constexpr std::size_t kPointCapacity = 65'536;
+
 /**
  * Map-package stems the class sweep finds. The live count is 77.
  * A stem is the key a destination joins its spawn sets by.
@@ -66,6 +71,13 @@ struct NameHash {
     /** One when more activity packages declare it than the row can hold. */
     std::uint8_t activityPackageOverflow{};
     std::array<std::uint16_t, kPackageCapacity> activityPackages{};
+};
+
+/** One spawn point. The set is named by hash, because the flat bank is built after the points. */
+struct Point {
+    std::array<float, kPositionComponents> position{};
+    std::uint32_t nameHash{};
+    std::uint16_t stemIndex{};
 };
 
 } // namespace sunrise::state::build_data::spawn_sets

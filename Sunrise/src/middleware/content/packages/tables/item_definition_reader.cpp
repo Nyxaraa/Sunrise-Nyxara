@@ -11,6 +11,12 @@ namespace {
 constexpr std::size_t kMaxStackSizeOffset = 180;
 /** A nonzero predicate byte marks an instanced definition. */
 constexpr std::size_t kInstancedOffset = 187;
+/**
+ * Definition byte 186 is the item tier: 1 common, 2 uncommon, 3 rare, 4 legendary, 5 exotic, and
+ * 0 for rows outside the rarity ladder such as currencies. Confirmed against every installed
+ * legendary weapon and armor row and the currency rows.
+ */
+constexpr std::size_t kTierOffset = 186;
 /** The equipment block is self-relative from this offset, zero when absent. */
 constexpr std::size_t kEquipmentBlockOffset = 16;
 /** The equipment block stores its signed slot id here. */
@@ -28,6 +34,25 @@ constexpr std::size_t kSocketPlugOffset = 2;
 constexpr std::size_t kFixedFieldEnd = kInstancedOffset + 1;
 /** Optional plug category used to expand three native reusable plug families. */
 constexpr std::size_t kPlugCategoryOffset = 392;
+/**
+ * The plug block is an embedded record whose class marker precedes its fields. It usually starts
+ * at byte 388, so the category sits at kPlugCategoryOffset, but an optional record ahead of it
+ * moves it, so the block is located by its marker inside this window rather than assumed.
+ */
+constexpr std::uint32_t kPlugBlockClass = 0x808077E3U;
+constexpr std::size_t kPlugBlockSearchStart = 0x100;
+constexpr std::size_t kPlugBlockSearchEnd = 0x300;
+/** Category hash and server-roll set ordinal, relative to the plug block marker. */
+constexpr std::size_t kPlugBlockCategoryOffset = 4;
+constexpr std::size_t kPlugBlockRollSetOffset = 0x26;
+/**
+ * A plug that grants another plug's effect (a Year-1 armor masterwork result naming the stat
+ * perk it stands for) carries one linked-plug record; its item index sits at byte 12.
+ */
+constexpr std::uint32_t kLinkedPlugClass = 0x80803036U;
+constexpr std::size_t kLinkedPlugIndexOffset = 12;
+/** A roll-set ordinal outside the ladder: none, or the marker for a plug rolled by no set. */
+constexpr std::uint16_t kNoRollSet = 0;
 /** Embedded reusable-list array descriptor inside one 80-byte ordinary socket entry. */
 constexpr std::size_t kEmbeddedPlugListOffset = 64;
 /** Reusable and randomized shared plug-set row indices inside one socket entry. */
@@ -220,6 +245,46 @@ constexpr std::size_t kStatEntryValue = 20;
  * @param definition Whole item definition bytes.
  * @param row Receives the declared stat rows and values.
  */
+/** @return The offset of the first record of one class inside a window, or the blob size. */
+[[nodiscard]] std::size_t find_record(std::span<const std::byte> definition,
+                                      std::uint32_t recordClass,
+                                      std::size_t start,
+                                      std::size_t end) noexcept {
+    const std::size_t limit = (std::min)(end, definition.size());
+    for (std::size_t offset = start; offset + sizeof(std::uint32_t) <= limit;
+         offset += sizeof(std::uint32_t)) {
+        std::uint32_t marker = 0;
+        if (read(definition, offset, marker) && marker == recordClass) {
+            return offset;
+        }
+    }
+    return definition.size();
+}
+
+/**
+ * Reads the located plug block: its category (which corrects the fixed-offset read for a shifted
+ * block), the ordinal of the server roll set that grants the plug, and any linked plug.
+ */
+void read_plug_block(std::span<const std::byte> definition, Row& row) noexcept {
+    row.rollSetIndex = kNoRollSet;
+    row.linkedPlugIndex = kUnavailablePlug;
+    const std::size_t block =
+        find_record(definition, kPlugBlockClass, kPlugBlockSearchStart, kPlugBlockSearchEnd);
+    if (block < definition.size()) {
+        (void)read(definition, block + kPlugBlockCategoryOffset, row.plugCategoryHash);
+        (void)read(definition, block + kPlugBlockRollSetOffset, row.rollSetIndex);
+    }
+    const std::size_t linked = find_record(definition, kLinkedPlugClass, 0, definition.size());
+    if (linked < definition.size()) {
+        (void)read(definition, linked + kLinkedPlugIndexOffset, row.linkedPlugIndex);
+    }
+}
+
+/**
+ * Reads the investment stat block into the row.
+ * @param definition Whole item definition record.
+ * @param row Receives the stats, left empty when the block is absent or malformed.
+ */
 void read_stats(std::span<const std::byte> definition, Row& row) noexcept {
     row.statCount = 0;
     std::int64_t blockRelative = 0;
@@ -273,12 +338,14 @@ bool read_definition(std::span<const std::byte> definition, Row& row) noexcept {
     std::uint8_t instanced = 0;
     if (!read(definition, kBucketIdOffset, row.bucketId)
         || !read(definition, kMaxStackSizeOffset, row.maxStackSize)
+        || !read(definition, kTierOffset, row.tier)
         || !read(definition, kInstancedOffset, instanced)) {
         return false;
     }
     row.instanced = instanced != 0;
     // Short legacy definitions simply do not declare a plug category.
     (void)read(definition, kPlugCategoryOffset, row.plugCategoryHash);
+    read_plug_block(definition, row);
     (void)read(definition,
                kInsertionMaterialRequirementSetIndexOffset,
                row.insertionMaterialRequirementSetIndex);

@@ -30,10 +30,6 @@ bool parse_header(std::span<const std::byte, layout::kHeaderSize> bytes, Header&
     header.entryTable =
         static_cast<std::uint64_t>(field<std::uint32_t>(bytes, layout::HeaderOffsets::kEntryTable))
         + layout::kEntryTableAdjustment;
-    header.blockTable =
-        header.entryTable
-        + static_cast<std::uint64_t>(header.entryCount) * sizeof(layout::EntryRecord)
-        + layout::kBlockTableGap;
     return header.entryCount != 0 && header.blockCount != 0;
 }
 

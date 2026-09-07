@@ -35,7 +35,8 @@ struct Entry {
     std::uint64_t instanceSoid{};
     /** Current stack quantity, set from the item definition for non-instanced rows. */
     std::int32_t quantity{};
-    /** Rising serial that keeps inventory mutation and eviction order. */
+    /** Rising serial that keeps inventory mutation and eviction order; the Client also orders a
+     *  bucket's grid cells by it. */
     std::int32_t mutationSerial{};
     /** Native item-state bits accumulated by inventory mutations. */
     std::uint32_t flags{};

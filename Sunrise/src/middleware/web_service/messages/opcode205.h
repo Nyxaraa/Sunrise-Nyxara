@@ -24,12 +24,15 @@ inline constexpr std::uint16_t kOpcode = 205;
  * Encodes the whole family-5 investment response from one State snapshot.
  * @param message Parsed request whose envelope fields are echoed.
  * @param investment Account-wide family-5 and unlock State.
+ * @param serverClockSeconds Server clock in seconds. Must be newer than the preceding opcode-503
+ * snapshot, or the Client's family-5 boot task sees no change and waits out its timeout.
  * @param output Caller-owned svc-11 response-body storage.
  * @param written Receives encoded response-body bytes.
  * @return True when the request and all State rows are safe and the response fits.
  */
 [[nodiscard]] bool encode_response(const Message& message,
                                    const state::InvestmentState& investment,
+                                   std::uint64_t serverClockSeconds,
                                    std::span<std::byte> output,
                                    std::size_t& written) noexcept;
 

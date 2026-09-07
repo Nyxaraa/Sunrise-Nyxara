@@ -13,8 +13,7 @@ constexpr std::size_t kSecondFieldOffset = encoding::kU64Size;
 /** Parses the fixed 2-field big-endian patch-epoch prefix. */
 bool parse_patch_epoch(std::span<const std::byte> input, PatchEpoch& epoch) noexcept {
     epoch = {};
-    // The bound is only what the reads below need. An exact length is the client's business.
-    if (input.size() < kEncodedSize) {
+    if (input.size() != kEncodedSize) {
         return false;
     }
 

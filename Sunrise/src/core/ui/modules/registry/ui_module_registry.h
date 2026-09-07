@@ -30,7 +30,6 @@ public:
     /** @return Registry revision captured with the descriptors. */
     [[nodiscard]] std::uint64_t revision() const noexcept;
 
-    /** @return A copy of every module, taken under the lock, in menu order. */
 private:
     friend RegistrySnapshot snapshot() noexcept;
 
@@ -73,13 +72,15 @@ public:
      * @param displayName Menu label.
      * @param callback Module frame entry.
      * @param prepare Optional state reset, run under the slot lock before registering.
+     * @param companionCallback Optional companion windows drawn on every visible UI frame.
      * @return True when the slot holds a registration afterwards.
      */
     [[nodiscard]] bool acquire(Owner owner,
                                std::string_view stableId,
                                std::string_view displayName,
                                FrameCallback callback,
-                               void (*prepare)() noexcept = nullptr) noexcept;
+                               void (*prepare)() noexcept = nullptr,
+                               FrameCallback companionCallback = nullptr) noexcept;
 
     /**
      * Removes the page when the slot holds one.

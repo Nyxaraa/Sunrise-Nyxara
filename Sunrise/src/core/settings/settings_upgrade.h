@@ -14,7 +14,8 @@ namespace sunrise::core::settings::upgrade {
 
 /**
  * Rewrites an older settings document onto the current layout. Members whose value form changed
- * take the bundled default, and every other member is copied through unchanged.
+ * take the bundled default, renamed members keep their value under the new name, and every other
+ * member is copied through unchanged.
  * @param document Borrowed settings file text.
  * @param bundled Borrowed default document holding the replacement members.
  * @param output Receives the rewritten document.

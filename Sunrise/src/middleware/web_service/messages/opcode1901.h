@@ -28,14 +28,13 @@ struct Replacement {
 
 /**
  * Exact logical fields carried by the native equipped socket-action descriptor.
- *
- * The descriptor is a counted run of replacements followed by the one item they all apply to, so
- * its width grows with the count rather than being fixed.
+ * The descriptor is a counted run of replacements followed by the one item they apply to, so its
+ * width grows with the count rather than being fixed.
  */
 struct Request {
     std::array<Replacement, kReplacementCapacity> replacements{};
     std::size_t replacementCount{};
-    /** Selector exactly as the descriptor carries it, kept for the request trace. */
+    /** Selector exactly as the descriptor carries it, before any decode. */
     std::uint64_t equipmentSelector{};
     /** The item-instance identity that selector encodes, already decoded. */
     std::uint64_t instanceIdentityToken{};
@@ -43,11 +42,8 @@ struct Request {
 
 /**
  * Answers whether one decoded selector names a given item instance.
- *
- * The selector carries only part of the instance identity, so naming an instance is a comparison
- * against that part rather than an equality. Callers hold whole identities and must not have to
- * know which part of one reaches the wire.
- *
+ * The selector carries only part of the instance identity, so this compares against that part
+ * rather than testing equality. Callers hold whole identities and pass them unchanged.
  * @param instanceIdentityToken Decoded selector from a parsed request.
  * @param instanceSoid Whole item-instance identity held by State.
  * @return True when the selector names that instance.
@@ -57,11 +53,8 @@ struct Request {
 
 /**
  * Parses the exact reflected opcode-1901 descriptor.
- *
- * The native request is a bounded replacement array followed by the target's semantic equipment
- * selector. The supported wire shape contains exactly one replacement and requires every optional
- * identity carried by that replacement and target.
- *
+ * The request is a bounded replacement array followed by the target's equipment selector. Every
+ * optional identity in that array and target is required.
  * @param message Parsed Web Service envelope.
  * @param request Receives the plug, socket descriptor, auxiliary identity, and equipment slot.
  * @return True only for the complete canonical 24-byte one-replacement request.

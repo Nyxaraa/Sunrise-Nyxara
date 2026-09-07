@@ -27,10 +27,9 @@ struct SubclassSelection {
 };
 
 /**
- * Builds the selection for one subclass item. Only sprint is fixed; the grenade, super, melee,
- * movement and class entries are that item's own authored choices (each owned subclass remembers
- * its own picks independently), and the bucket the class ability publishes into follows the
- * owning character's class.
+ * Builds the selection for one subclass item. Only sprint is fixed; grenade, super, melee,
+ * movement and class entries are that item's own authored choices, and the class-ability bucket
+ * follows the owning character's class.
  * @param item Authored subclass item carrying its own ability choices.
  * @param characterClass Owning character's class, which the class-ability bucket follows.
  * @param output Receives the 6 selected entries.
@@ -41,11 +40,10 @@ void subclass_selection(const state::account::inventory::Item& item,
 
 /**
  * Resolves one item's socket-entry states and selector lanes.
- * Only a list that carries a super lane belongs to a subclass, so every other item keeps its
- * absent and ready states and publishes no selector.
+ * Only a list carrying a super lane belongs to a subclass, so every other item keeps its absent
+ * and ready states and publishes no selector.
  * @param definition Installed socket-entry-list mapping.
- * @param item Authored item being resolved; only its own ability choices matter when it is a
- * subclass.
+ * @param item Authored item being resolved; only a subclass carries ability choices.
  * @param characterClass Owning character's class, which the class-ability bucket follows.
  * @param acquiredSubclassAbilityMask Owning character's runtime acquired-entry mask.
  * @param output Receives the state of every fixed lane.

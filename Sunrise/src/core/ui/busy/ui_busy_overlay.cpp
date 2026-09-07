@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdio>
 #include <imgui.h>
 
 #include "../scaling/dpi/ui_dpi_scaling.h"
@@ -49,8 +50,9 @@ constexpr std::array<const char*, static_cast<std::size_t>(Task::count)> kHeadin
     "Sunrise Initializing",
     "Sunrise Extracting",
     "Sunrise Caching",
+    "Sunrise Building SDK",
 };
-/** The detail line is the same for every task: what the user should do, not what runs. */
+/** Fallback detail for tasks that do not publish finer progress. */
 constexpr char kDetail[] = "Please be patient and do not close the game.";
 
 /** Fade left after the last task ended. Owned by the presentation thread. */
@@ -111,6 +113,7 @@ bool draw() noexcept {
     if (task != kHeadings.size()) {
         g_shownTask = task;
     }
+    const internal::Progress progress = internal::progress(static_cast<Task>(g_shownTask));
 
     const float margin = scaling::dpi::pixels(kViewportMargin);
     const float barWidth = scaling::dpi::pixels(kProgressWidth);
@@ -125,10 +128,25 @@ bool draw() noexcept {
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
     if (ImGui::Begin("##sunrise_busy", nullptr, kOverlayFlags)) {
         ImGui::TextUnformatted(kHeadings[g_shownTask]);
-        ImGui::TextDisabled("%s", kDetail);
-        ImGui::ProgressBar(kIndeterminateRate * static_cast<float>(ImGui::GetTime()),
-                           {barWidth, kAutomaticProgressHeight},
-                           "");
+        ImGui::TextDisabled(
+            "%s",
+            progress.available && progress.detail[0] != '\0' ? progress.detail.data() : kDetail);
+        std::array<char, 48> count{};
+        if (progress.available && progress.total != 0) {
+            (void)std::snprintf(count.data(),
+                                count.size(),
+                                "%u / %u",
+                                static_cast<unsigned>(progress.current),
+                                static_cast<unsigned>(progress.total));
+        }
+        const float fraction = progress.determinate
+                                   ? std::clamp(static_cast<float>(progress.current)
+                                                    / static_cast<float>(progress.total),
+                                                0.0F,
+                                                1.0F)
+                                   : kIndeterminateRate * static_cast<float>(ImGui::GetTime());
+        ImGui::ProgressBar(
+            fraction, {barWidth, kAutomaticProgressHeight}, count[0] != '\0' ? count.data() : "");
     }
     ImGui::End();
     ImGui::PopStyleVar();

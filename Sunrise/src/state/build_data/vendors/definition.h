@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -8,12 +7,12 @@ namespace sunrise::state::build_data::vendors {
 
 /** Rows of the installed vendor index. The live table has 511. */
 inline constexpr std::size_t kIndexCapacity = 512;
-/** Vendor definitions this catalog holds rows for. A definition is read only when asked for. */
-inline constexpr std::size_t kDefinitionCapacity = 32;
-/** Sale rows across every held definition. One installed definition declares 277. */
-inline constexpr std::size_t kSaleRowCapacity = 4096;
-/** Installed rows across every held definition. One installed definition declares 43. */
-inline constexpr std::size_t kInstalledRowCapacity = 2048;
+/** Every index row gets a definition, so the two capacities are the same. */
+inline constexpr std::size_t kDefinitionCapacity = kIndexCapacity;
+/** Sale rows across every definition. The live total is 15,768 and one vendor declares 1,044. */
+inline constexpr std::size_t kSaleRowCapacity = 16'384;
+/** Category rows across every definition. The live total is 2,479 and one vendor declares 129. */
+inline constexpr std::size_t kInstalledRowCapacity = 4'096;
 
 /** One vendor index row is 24 bytes: hash at +0, definition tag at +16. */
 inline constexpr std::size_t kIndexRowStride = 24;
@@ -21,8 +20,12 @@ inline constexpr std::size_t kIndexRowStride = 24;
 inline constexpr std::size_t kSaleRowStride = 184;
 /** One installed row is 24 bytes. */
 inline constexpr std::size_t kInstalledRowStride = 24;
-/** One row of the unnamed third array is 80 bytes. */
+/** One interaction row is 80 bytes. */
 inline constexpr std::size_t kThirdRowStride = 80;
+/** One price-override row is 48 bytes: the cost item index, then the units it charges. */
+inline constexpr std::size_t kSaleCostRowStride = 48;
+/** Element class of a sale row's price-override array. */
+inline constexpr std::uint32_t kSaleCostRowClass = 0x80807865U;
 
 /** Wrapper class of the vendor index blob. */
 inline constexpr std::uint32_t kIndexWrapperClass = 0x8080784AU;
@@ -37,8 +40,8 @@ inline constexpr std::uint32_t kSaleRowClass = 0x80807861U;
 
 /** Sale row +176 carries this when the row names no secondary item. */
 inline constexpr std::uint16_t kAbsentSecondaryItem = 0xFFFFU;
-/** Sale row +100 carries this when it selects no installed row. The client tests for it. */
-inline constexpr std::int32_t kAbsentInstalledIndex = -1;
+/** Sale row +100 carries this when the row belongs to no category. The client tests for it. */
+inline constexpr std::int32_t kAbsentCategoryIndex = -1;
 
 /** One row of the installed vendor index, which maps a vendor hash to its definition tag. */
 struct IndexEntry {
@@ -80,49 +83,26 @@ struct Definition {
     std::uint16_t thirdCount{};
 };
 
-/**
- * One sale row of one vendor definition.
- * Do not name a raw field a cost, award, stock or quantity without its mutation reader.
- */
+/** A sale row charging nothing carries this instead of a cost item. */
+inline constexpr std::uint16_t kAbsentCostItem = 0xFFFFU;
+
+/** One sale row of one vendor definition. */
 struct SaleRow {
-    /** Vendor index row of the definition owning this sale row. */
-    std::uint16_t vendorIndex{};
-    /** Sale row ordinal inside that definition. */
-    std::uint16_t rowIndex{};
+    /** Row +100. The row's vendor category. The catalog bounds it by the category count. */
+    std::int32_t categoryIndex{};
+    /** First price-override row's charged units. Zero when the row charges nothing. */
+    std::uint32_t costQuantity{};
     /** Row +70. Main sale item-definition index. */
     std::uint16_t itemIndex{};
     /** Row +176. `kAbsentSecondaryItem` when the row names none. */
     std::uint16_t secondaryItemIndex{};
-    /** Row +100. Row of the owning definition's installed array, and of a parallel runtime table.
-     */
-    std::int32_t installedIndex{};
-    /** Row +104, raw f32 bits. Role open. */
-    std::uint32_t raw104{};
-    /** Row +108. Role open. */
-    std::uint32_t raw108{};
-    /** Row +172. Role open, and it is not the field the runtime selector reads. */
-    std::int32_t raw172{};
-    /** Row +8 expression count. */
-    std::uint32_t expressionCount8{};
-    /** Row +32 nested-record count. */
-    std::uint32_t nestedRecordCount{};
-    /** Row +120 expression count. */
-    std::uint32_t expressionCount120{};
-    /** Row +136 array count. Role open. */
-    std::uint32_t count136{};
-    /** Row +160 inline expression count. */
-    std::uint32_t expressionCount160{};
-    /** Row +154 feature branch byte. */
-    std::uint8_t featureBranch{};
+    /** First price-override row's item, or `kAbsentCostItem` when the row charges nothing. */
+    std::uint16_t costItemIndex{kAbsentCostItem};
 };
 
-/** One installed row, kept whole because no field of it has a closed consumer. */
+/** One category row, reduced to the definition hash a rowless request resolves through. */
 struct InstalledRow {
-    /** Vendor index row of the definition owning this installed row. */
-    std::uint16_t vendorIndex{};
-    /** Installed row ordinal inside that definition. */
-    std::uint16_t rowIndex{};
-    std::array<std::uint8_t, kInstalledRowStride> raw{};
+    std::uint32_t definitionHash{};
 };
 
 } // namespace sunrise::state::build_data::vendors

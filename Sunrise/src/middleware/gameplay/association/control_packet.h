@@ -48,11 +48,13 @@ struct ControlPacket {
     std::array<std::byte, kIntegerSize> publicValue{};
     /** Echo of the offer's word B. Present on the response only. */
     std::uint32_t responseValue{};
+    /** Clear direct-address trailer retained byte for byte across the response. */
+    std::array<std::byte, kTrailerSize> trailer{};
 };
 
 /**
  * Decodes one received control datagram.
- * The clear address trailer is stripped first. A datagram with no room for it is refused.
+ * The clear address trailer is stripped first. Both association words start at bit zero.
  * @param datagram Whole received payload.
  * @param output Receives the packet only when every field of the opcode was present.
  * @return True for a complete offer or response. Other opcodes decode their header only.
@@ -62,14 +64,11 @@ struct ControlPacket {
 /**
  * Encodes one control datagram.
  * @param packet Fields to write. The opcode selects which of them are read.
- * @param destinationPort Host-order UDP port of the destination, written into the trailer.
  * @param output Caller storage of at least kControlCapacity bytes.
  * @param written Receives the datagram length on success.
  * @return True when the whole packet and its trailer fit the output.
  */
-[[nodiscard]] bool encode(const ControlPacket& packet,
-                          std::uint16_t destinationPort,
-                          std::span<std::byte> output,
-                          std::size_t& written) noexcept;
+[[nodiscard]] bool
+encode(const ControlPacket& packet, std::span<std::byte> output, std::size_t& written) noexcept;
 
 } // namespace sunrise::middleware::gameplay::association

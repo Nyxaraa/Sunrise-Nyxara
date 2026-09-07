@@ -4,6 +4,7 @@
 #include <cstddef>
 
 #include "../../encoding/bit_raw.h"
+#include "current_activity_body.h"
 
 namespace sunrise::middleware::gameplay::group {
 
@@ -21,6 +22,12 @@ constexpr std::uint8_t kHostIdWidth = 64;
 constexpr std::uint8_t kAddressWidth = 32;
 /** Width of the `activity-host` port. */
 constexpr std::uint8_t kPortWidth = 16;
+/** Width of each `active-join-controls` capacity or slot count. */
+constexpr std::uint8_t kJoinCountWidth = 6;
+/** Width of the `active-join-controls` policy flags. */
+constexpr std::uint8_t kJoinPolicyWidth = 5;
+/** Width of the `active-join-controls` queue mode. */
+constexpr std::uint8_t kJoinQueueModeWidth = 2;
 /** Bits in one byte. */
 constexpr unsigned kByteBits = 8;
 /** Mask of one byte. */
@@ -31,6 +38,41 @@ constexpr std::uint8_t kGroupSize = 16;
 constexpr std::uint8_t kGroupCount = 2;
 /** Only the low 25 bits of either mask name a parameter. */
 constexpr std::uint64_t kParameterMaskBits = 0x1FFFFFF;
+/** A request-body width of zero means that parameter has no known request codec. */
+constexpr std::uint16_t kNoRequestCodec = 0;
+
+/**
+ * Width in bits of each parameter's request body, indexed by registry index.
+ * The bodies are interleaved with no length prefix, so these widths are what locates the next one.
+ * A zero means the grammar is unrecovered and the walk stops: every later offset would be wrong.
+ */
+constexpr std::array<std::uint16_t, kParameterCount> kRequestBodyWidths{
+    23,              // 0: value6 bias 1, value9 bias 1, value8
+    34,              // 1: four value6, three bits, value5, value2
+    kNoRequestCodec, // 2: shared 140-byte schema
+    208,             // 3: raw64, value64, raw32, value32, value16
+    kNoRequestCodec, // 4: nested request root
+    kNoRequestCodec, // 5: nested request root
+    kNoRequestCodec, // 6: nested request root
+    kNoRequestCodec, // 7: activity descriptor root
+    kNoRequestCodec, // 8: activity descriptor root
+    3,               // 9: value2, bit
+    14,              // 10: value6, value5, value2, bit
+    4,               // 11: value4
+    kNoRequestCodec, // 12: bounded address record
+    kNoRequestCodec, // 13: same codec as 12
+    69,              // 14: raw64, value5
+    1,               // 15: bit
+    28,              // 16: value4, value4, value20
+    1,               // 17: bit
+    6,               // 18: value6
+    23,              // 19: value3, value6, value6, value8
+    42,              // 20: value7, value3, value32
+    kNoRequestCodec, // 21: nested request root
+    kNoRequestCodec, // 22: nested root
+    kNoRequestCodec, // 23: nested root
+    kNoRequestCodec, // 24: single-record request
+};
 
 /**
  * Reduces one parameter mask to the presence bits the encoder writes ahead of it.
@@ -46,6 +88,26 @@ constexpr std::uint64_t kParameterMaskBits = 0x1FFFFFF;
         }
     }
     return groups;
+}
+
+/**
+ * Writes the `active-join-controls` body.
+ * Wire order is the four counts, the three lane enables, the policy flags, then the queue mode.
+ * @param writer Open writer.
+ * @param body Field values.
+ * @return True when every field fit.
+ */
+[[nodiscard]] bool write_active_join_controls(bits::Writer& writer,
+                                              const ActiveJoinControlsParameter& body) noexcept {
+    return writer.write(body.totalPlayerCapacity, kJoinCountWidth)
+           && writer.write(body.userJoinSlots, kJoinCountWidth)
+           && writer.write(body.partyJoinSlots, kJoinCountWidth)
+           && writer.write(body.remainingPlayerCapacity, kJoinCountWidth)
+           && writer.write(body.userJoinEnabled ? 1U : 0U, kFlagWidth)
+           && writer.write(body.partyJoinEnabled ? 1U : 0U, kFlagWidth)
+           && writer.write(body.remainingJoinEnabled ? 1U : 0U, kFlagWidth)
+           && writer.write(body.joinPolicyFlags, kJoinPolicyWidth)
+           && writer.write(body.joinQueueMode, kJoinQueueModeWidth);
 }
 
 /**
@@ -67,8 +129,26 @@ constexpr std::uint64_t kParameterMaskBits = 0x1FFFFFF;
 }
 
 /**
+ * Writes one activity descriptor, the body `current-activity` and `previous-activity` share.
+ * A clear root bit leaves the peer's own initialised descriptor. A running activity must name both
+ * its selection nonce and active index, or watch-video and the rejoin blocker cannot resolve it.
+ * @param writer Open writer.
+ * @return True when the body fit.
+ */
+[[nodiscard]] bool write_descriptor(bits::Writer& writer,
+                                    std::int8_t reason,
+                                    std::int16_t actualActivityIndex,
+                                    std::int16_t activityIndex,
+                                    std::uint64_t nonce) noexcept {
+    return current_activity::descriptor_is_valid(reason, actualActivityIndex, activityIndex, nonce)
+               ? current_activity::write_body(
+                     writer, reason, actualActivityIndex, activityIndex, nonce)
+               : writer.write(0U, kRootBitClear);
+}
+
+/**
  * Writes one carried parameter body.
- * A clear root bit is a complete body for both tag-reflection parameters. It skips the field
+ * A clear root bit is a complete body for every tag-reflection parameter. It skips the field
  * walk and leaves the reader's own values in place.
  * @param writer Open writer.
  * @param parameter Registry index.
@@ -78,9 +158,28 @@ constexpr std::uint64_t kParameterMaskBits = 0x1FFFFFF;
 [[nodiscard]] bool write_parameter_body(bits::Writer& writer,
                                         std::uint8_t parameter,
                                         const ParameterUpdate& update) noexcept {
-    if (parameter == static_cast<std::uint8_t>(Parameter::publicSessionReservations)
-        || parameter == static_cast<std::uint8_t>(Parameter::currentActivity)) {
+    if (parameter == static_cast<std::uint8_t>(Parameter::publicSessionReservations)) {
         return writer.write(0U, kRootBitClear);
+    }
+    if (parameter == static_cast<std::uint8_t>(Parameter::activeJoinControls)) {
+        return write_active_join_controls(writer, update.activeJoinControls);
+    }
+    if (parameter == static_cast<std::uint8_t>(Parameter::hostSelected)) {
+        return writer.write(update.hostSelected ? 1U : 0U, kFlagWidth);
+    }
+    if (parameter == static_cast<std::uint8_t>(Parameter::currentActivity)) {
+        return write_descriptor(writer,
+                                update.currentActivityReason,
+                                update.currentActualActivityIndex,
+                                update.currentActivityIndex,
+                                update.currentActivityNonce);
+    }
+    if (parameter == static_cast<std::uint8_t>(Parameter::previousActivity)) {
+        return write_descriptor(writer,
+                                update.previousActivityReason,
+                                update.previousActualActivityIndex,
+                                update.previousActivityIndex,
+                                update.previousActivityNonce);
     }
     if (parameter == static_cast<std::uint8_t>(Parameter::activityHost)) {
         return write_activity_host(writer, update.activityHost);
@@ -131,6 +230,33 @@ bool read_parameter_request(bits::Reader& reader, ParameterRequestHeader& output
     }
     candidate.modeFlag = mode != 0;
     output = candidate;
+    return true;
+}
+
+/** Walks the request bodies that follow a parameter request header. */
+bool walk_parameter_request(bits::Reader& reader,
+                            std::uint64_t requestedMask,
+                            ParameterRequestWalk& walk) noexcept {
+    walk = {};
+    const std::uint64_t selected = requestedMask & kParameterMaskBits;
+    for (std::uint8_t parameter = 0; parameter < kParameterCount; ++parameter) {
+        if (((selected >> parameter) & 1ULL) == 0) {
+            continue;
+        }
+        const std::uint16_t width = kRequestBodyWidths[parameter];
+        if (width == kNoRequestCodec) {
+            walk.ambiguousParameter = parameter;
+            walk.tailBits = static_cast<std::uint32_t>(reader.remaining_bits());
+            return true;
+        }
+        if (!reader.skip(width)) {
+            walk.tailBits = static_cast<std::uint32_t>(reader.remaining_bits());
+            return false;
+        }
+        walk.walkedMask |= 1ULL << parameter;
+    }
+    walk.tailBits = static_cast<std::uint32_t>(reader.remaining_bits());
+    walk.complete = true;
     return true;
 }
 

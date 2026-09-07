@@ -26,17 +26,52 @@ struct Path {
     std::array<wchar_t, kPathCapacity> chars{};
 };
 
+/** One package path resolution owned by a single reader. */
+struct PackageLocation {
+    Path stem{};
+    Path latestPath{};
+    std::uint32_t patchIndex{};
+    bool found{};
+};
+
+/** Ends a bucket chain and names no slot. */
+inline constexpr std::size_t kNoSlot = static_cast<std::size_t>(-1);
+
+/**
+ * Key to slot index for one rotating cache.
+ * A slot holds one key at a time, so its chain link lives in its own row and a lookup never scans.
+ */
+struct SlotIndex {
+    /** First slot of each bucket, or kNoSlot. The row count is always a power of two. */
+    std::vector<std::size_t> buckets{};
+    /** Next slot sharing the same bucket, one row per cache slot. */
+    std::vector<std::size_t> links{};
+};
+
+/** One resolved package held by a reader, keyed by the package id the tag handle names. */
+struct PackageLocationSlot {
+    PackageLocation location{};
+    std::uint16_t packageId{};
+    bool held{};
+};
+
+/**
+ * Package locations one reader holds. 528 packages are installed.
+ * Lookup probes forward from the id, so the table must stay well above the installed count.
+ */
+inline constexpr std::size_t kPackageLocationSlots = 2048;
+
 /** Oodle writes past the requested size, so every destination carries slack. */
 inline constexpr std::size_t kBlockSlack = 64;
 
 /**
  * Decoded blocks kept between reads.
- * A tag read decodes a whole block for an entry of a few hundred bytes, and a walk revisits the
- * same block many times, so keeping the last few makes a walk affordable.
+ * A tag read decodes a whole block for an entry of a few hundred bytes. A walk revisits the same
+ * block many times, so keeping the last few makes a walk affordable.
  */
 inline constexpr std::size_t kBlockCacheSlots = 8;
 /** Package headers kept between reads, so one tag read costs no header read of its own. */
-inline constexpr std::size_t kHeaderCacheSlots = 8;
+inline constexpr std::size_t kHeaderCacheSlots = 64;
 
 /** One decoded block and the package block it came from. */
 struct BlockSlot {
@@ -59,7 +94,7 @@ struct HeaderSlot {
 };
 
 /** Package files one reader keeps open. A read reaches the package and any patch that holds it. */
-inline constexpr std::size_t kFileSlots = 4;
+inline constexpr std::size_t kFileSlots = 64;
 /** Packages whose tables one reader holds. A pass reads one package before moving to the next. */
 inline constexpr std::size_t kTableSlots = 2;
 /** A tag handle indexes 13 bits of entries, so no package declares more than this. */
@@ -80,6 +115,8 @@ struct FileSlot {
 /** One package's entry and block tables, held so a tag read costs no file read of its own. */
 struct TableSlot {
     Path path{};
+    /** Package and patch this slot holds, so a lookup compares no path text. */
+    std::uint64_t key{};
     std::array<layout::EntryRecord, kEntryCapacity> entries{};
     std::array<layout::BlockRecord, kBlockCapacity> blocks{};
     std::uint32_t entryCount{};
@@ -97,15 +134,63 @@ struct Scratch {
     std::array<std::byte, layout::kBlockSize> ciphertext{};
     std::array<std::byte, layout::kBlockSize> plaintext{};
     std::array<std::byte, layout::kBlockSize + kBlockSlack> decompressed{};
-    std::array<BlockSlot, kBlockCacheSlots> blocks{};
+    /**
+     * Decoded blocks, sized by prepare_blocks. A pass that walks many scenarios of one destination
+     * re-reads the same blocks, so its cache is worth more than the default.
+     */
+    std::vector<BlockSlot> blocks{};
+    /** Slot of each cached block key, so a large cache costs no scan. */
+    SlotIndex blockIndex{};
+    /** Next slot to replace once the cache is full. */
+    std::size_t blockCursor{};
     std::array<HeaderSlot, kHeaderCacheSlots> headers{};
     std::array<FileSlot, kFileSlots> files{};
-    std::array<TableSlot, kTableSlots> tables{};
+    /**
+     * Package tables, sized by prepare_caches. A miss re-reads the whole entry and block
+     * table, so a pass that alternates packages pays half a megabyte of file reads per switch.
+     */
+    std::vector<TableSlot> tables{};
+    /** Slot of each held package, keyed by package and patch so no path is compared. */
+    SlotIndex tableIndex{};
+    /** Next table slot to replace once every slot is held. */
+    std::size_t tableCursor{};
+    /** Package locations resolved for this reader's current source directory. */
+    std::vector<PackageLocationSlot> packageLocations{};
+    /** Owned copy of the source directory; changing Source clears the locations above. */
+    Path packageDirectory{};
+    /** Characters held in packageDirectory. Zero when the directory did not fit. */
+    std::size_t packageDirectoryLength{};
+    /** Preserves a successful read if caching its location runs out of memory. */
+    PackageLocation packageLocationFallback{};
     /** Rising use counter that sets the block cache's replacement order. */
     std::uint64_t useCounter{};
     /** Rising use counter that sets the file and table replacement order. */
     std::uint64_t slotCounter{};
+    /** Block cache hits and misses, so the read path is measured rather than assumed. */
+    std::uint64_t blockHits{};
+    std::uint64_t blockMisses{};
+    /** Bytes of block this scratch decoded, cache hits excluded. */
+    std::uint64_t blockBytes{};
+    /** Per-reader package-location hits and cold resolutions. */
+    std::uint64_t packageLocationHits{};
+    std::uint64_t packageLocationMisses{};
 };
+
+/**
+ * Sizes one reader's block cache and drops whatever it held.
+ * @param scratch Reader whose cache is resized.
+ * @param slots Blocks to keep. Each costs 256 KiB, and zero restores the small default.
+ * @return True when the storage was reserved.
+ */
+[[nodiscard]] bool prepare_blocks(Scratch& scratch, std::size_t slots) noexcept;
+
+/**
+ * Sizes one reader's package-table cache and drops whatever it held.
+ * @param scratch Reader whose cache is resized.
+ * @param slots Packages to hold. Each costs 512 KiB, and zero restores the small default.
+ * @return True when the storage was reserved.
+ */
+[[nodiscard]] bool prepare_tables(Scratch& scratch, std::size_t slots) noexcept;
 
 /** Everything one tag read needs from the caller. */
 struct Source {
@@ -128,6 +213,8 @@ struct ClassEntry {
     std::uint32_t tag{};
     /** Leaf name without the patch suffix or extension. Valid only during the visitor call. */
     std::wstring_view packageFamily;
+    /** Highest installed patch selected for this package family. */
+    std::uint32_t patchIndex{};
 };
 
 /** Visitor for when the package family is part of the extracted domain key. */
@@ -177,6 +264,20 @@ void release_caches() noexcept;
  * @param scratch The reader's own storage.
  */
 void close_files(Scratch& scratch) noexcept;
+
+/**
+ * Reports one tag's package entry class without reading, decrypting, or decompressing its
+ * body.
+ * @param source Installed package directory; block keys are not consumed.
+ * @param scratch Reader-owned package location and table caches.
+ * @param tag Tag whose entry-table row is inspected.
+ * @param classId Receives the physical class recorded by the package entry.
+ * @return True when the tag and its entry-table row resolve.
+ */
+[[nodiscard]] bool read_tag_class(const Source& source,
+                                  Scratch& scratch,
+                                  std::uint32_t tag,
+                                  std::uint32_t& classId) noexcept;
 
 /**
  * Reads one tagged entry without reporting its class.

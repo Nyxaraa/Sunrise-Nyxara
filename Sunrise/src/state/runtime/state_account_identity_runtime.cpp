@@ -1,50 +1,20 @@
 ﻿/** Instance identity helpers: generated SOIDs, ownership tests, and loadout row lookups. */
 
-#include <Windows.h>
-
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <limits>
-#include <string_view>
-#include <utility>
 
-#include "../../core/logging/log.h"
-#include "../../middleware/datagen/family4/loadout/loadout_resolver.h"
-#include "../build_data/runtime.h"
-#include "runtime.h"
-#include "state.h"
 #include "state_account_transaction_helpers.h"
-#include "storage/internal.h"
 
 namespace sunrise::state {
 namespace runtime::detail {
 
 namespace authored_inventory = account::inventory;
-namespace item_details = build_data::items::details;
-namespace inventory_buckets = build_data::inventory::buckets;
 namespace family4_loadout = middleware::datagen::family4::loadout;
 
 /** First SOID reserved for item instances created by this local runtime. */
 constexpr std::uint64_t kFirstGeneratedItemSoid = 0x4000000000000001ULL;
-
-/** Returns one character-owned instance's definition hash for bounded transaction diagnostics. */
-[[nodiscard]] std::uint32_t character_item_definition_hash(const CharacterState& character,
-                                                           std::uint64_t instanceSoid) noexcept {
-    for (const auto& item : character.equipment.slots) {
-        if (item.has_value() && item->instanceSoid == instanceSoid) {
-            return item->definitionHash;
-        }
-    }
-    for (std::size_t index = 0; index < character.inventory.count; ++index) {
-        if (character.inventory.values[index].instanceSoid == instanceSoid) {
-            return character.inventory.values[index].definitionHash;
-        }
-    }
-    return 0;
-}
 
 /** @return True when any account, character, profile-stack, or character-item key owns one SOID. */
 [[nodiscard]] bool account_owns_soid(const AccountState& account, std::uint64_t soid) noexcept {
@@ -152,27 +122,6 @@ constexpr std::uint64_t kFirstGeneratedItemSoid = 0x4000000000000001ULL;
         level = (std::max)(level, character.inventory.values[index].level);
     }
     return level;
-}
-
-/** Finds the one resolved unequipped row created by an acquisition candidate. */
-[[nodiscard]] bool find_acquired_row(const family4_loadout::ResolvedLoadout& loadout,
-                                     std::uint64_t instanceSoid,
-                                     std::uint16_t& inventoryRow,
-                                     std::uint8_t& equipmentSlot) noexcept {
-    bool found = false;
-    for (std::size_t index = 0; index < loadout.itemCount; ++index) {
-        const family4_loadout::ResolvedItem& item = loadout.items[index];
-        if (item.instance.instanceSoid != instanceSoid) {
-            continue;
-        }
-        if (found || item.equipped) {
-            return false;
-        }
-        found = true;
-        inventoryRow = item.inventoryRow;
-        equipmentSlot = item.equipmentSlot;
-    }
-    return found;
 }
 
 /** Finds the unique resolved unequipped position for one instance. */

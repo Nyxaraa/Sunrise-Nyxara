@@ -9,7 +9,7 @@ namespace {
 constexpr std::size_t kFamilyTypeOffset = 0;
 /** The 8-byte big-endian root id follows the family selector. */
 constexpr std::size_t kFamilyRootOffset = kFamilyTypeOffset + sizeof(std::uint8_t);
-/** The smallest svc-12 body ends after the root id. */
+/** The svc-12 body is exactly the family selector and the root id. */
 constexpr std::size_t kBodySize = kFamilyRootOffset + encoding::kU64Size;
 
 } // namespace
@@ -17,8 +17,8 @@ constexpr std::size_t kBodySize = kFamilyRootOffset + encoding::kU64Size;
 /** Decodes the fixed authenticated family-subscription selector. */
 bool parse(std::span<const std::byte> input, queuez::Subscription& subscription) noexcept {
     subscription = {};
-    // This size check covers only the two reads below. It is not a rule about the client's body.
-    if (input.size() < kBodySize) {
+    // The native decoder refuses any svc-12 body that is not exactly this size.
+    if (input.size() != kBodySize) {
         return false;
     }
     subscription.familyType = std::to_integer<std::uint8_t>(input[kFamilyTypeOffset]);

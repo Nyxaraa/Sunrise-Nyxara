@@ -41,6 +41,8 @@ struct Row {
     std::uint32_t definitionHash{};
     std::uint16_t definitionIndex{};
     std::uint8_t bucketId{};
+    /** Native rarity ladder: 1 common through 5 exotic; 0 outside the ladder. */
+    std::uint8_t tier{};
     std::int32_t maxStackSize{};
     bool instanced{};
     std::optional<std::int8_t> equipmentSlot{};
@@ -53,6 +55,13 @@ struct Row {
     std::uint16_t socketTypes[kSocketCapacity]{};
     /** Plug category used by a few native sockets to expand a seed into its whole safe family. */
     std::uint32_t plugCategoryHash{};
+    /**
+     * Ordinal of the server roll set that grants this plug in place of a socket's action plug;
+     * 0 when the plug is socketed directly, 0xFFFF for a plug the service granted by other means.
+     */
+    std::uint16_t rollSetIndex{};
+    /** Item index of the plug this one stands for, or kUnavailablePlug when it stands alone. */
+    std::uint16_t linkedPlugIndex{kUnavailablePlug};
     /** Native material sets used when this definition is inserted or enabled as a plug. */
     std::uint16_t insertionMaterialRequirementSetIndex{kUnavailableMaterialRequirementSetIndex};
     std::uint16_t enabledMaterialRequirementSetIndex{kUnavailableMaterialRequirementSetIndex};
@@ -90,19 +99,14 @@ void read_appearance(std::span<const std::byte> definition, Row& row) noexcept;
 using AllowedPlugVisitor = bool (*)(void* context, std::uint32_t itemDefinitionIndex) noexcept;
 
 /**
- * Visits the embedded, reusable, and randomized plug-list members declared for one socket
- * lane.
+ * Visits the embedded, reusable, and randomized plug-list members declared for one socket lane.
  * The initial plug is a separate fixed field and is intentionally left to the caller.
- *
  * @param definition Whole base-item definition bytes.
- * @param plugSetTable Whole shared plug-set
- * definition table from investment-root slot 51.
+ * @param plugSetTable Whole shared plug-set definition table from investment-root slot 51.
  * @param lane Ordinary socket lane to inspect.
- *
  * @param visitor Required bounded consumer.
  * @param context Opaque consumer state.
- * @return
- * True when every referenced array is structurally valid and accepted by the visitor.
+ * @return True when every referenced array is structurally valid and accepted by the visitor.
  */
 [[nodiscard]] bool visit_allowed_plugs(std::span<const std::byte> definition,
                                        std::span<const std::byte> plugSetTable,

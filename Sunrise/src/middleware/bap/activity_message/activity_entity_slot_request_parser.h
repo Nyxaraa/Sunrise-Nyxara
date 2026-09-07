@@ -12,10 +12,10 @@ inline constexpr std::uint32_t kMessageType = 20;
 inline constexpr std::size_t kEncodedSize = sizeof(std::uint32_t);
 
 /**
- * Decodes the biased signed value from the entity-slot request prefix.
- * @param input Type-20 payload holding the whole value prefix.
+ * Decodes the biased signed value from the complete entity-slot request body.
+ * @param input Type-20 payload holding exactly one value.
  * @param value Cleared first. Receives the decoded value only on success.
- * @return True when the payload holds the whole fixed value.
+ * @return True only when the payload is exactly one fixed value.
  */
 [[nodiscard]] bool parse_entity_slot_request(std::span<const std::byte> input,
                                              std::int32_t& value) noexcept;

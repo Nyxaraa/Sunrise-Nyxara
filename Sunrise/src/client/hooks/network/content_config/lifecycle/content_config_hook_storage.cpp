@@ -12,7 +12,6 @@ std::array<hooking::detour::Handle, kHookCount> g_handles{};
 std::array<void*, kHookCount> g_originals{};
 std::array<void*, kHookCount> g_targetEntries{};
 std::array<bool, kHookCount> g_accepting{};
-void* g_contentFetch{};
 bool g_trackCalls{};
 volatile LONG g_activeCalls{};
 
@@ -59,7 +58,6 @@ void clear_runtime() noexcept {
     g_originals = {};
     g_targetEntries = {};
     g_accepting = {};
-    g_contentFetch = nullptr;
     g_trackCalls = false;
 }
 

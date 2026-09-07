@@ -26,6 +26,7 @@ namespace sunrise::server::bap::encrypted::activity_transaction {
                                        std::span<const std::byte, state::kAesKeySize> key,
                                        std::array<std::byte, state::kBapNonceSize>& nonce,
                                        std::span<std::byte> response,
-                                       std::size_t& written) noexcept;
+                                       std::size_t& written,
+                                       bool allowEntityRetirement = true) noexcept;
 
 } // namespace sunrise::server::bap::encrypted::activity_transaction

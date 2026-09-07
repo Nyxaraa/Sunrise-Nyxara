@@ -62,7 +62,9 @@ template <typename Record, typename Value>
 
 /** Computes one checksum across every array in its fixed file order. */
 bool payload_checksum(records::Domains domains, std::uint64_t& checksum) noexcept {
-    checksum = records::checksum_value(records::kChecksumOffsetBasis, domains.constants);
+    checksum = records::checksum_value(
+        records::checksum_value(records::kChecksumOffsetBasis, domains.constants),
+        domains.positionFingerprint);
     return checksum_domain<records::NamedRecord>(domains.named, checksum)
            && checksum_domain<records::ItemRecord>(domains.items, checksum)
            && checksum_domain<records::CollectibleRecord>(domains.collectibles, checksum)
@@ -72,21 +74,36 @@ bool payload_checksum(records::Domains domains, std::uint64_t& checksum) noexcep
            && checksum_domain<records::SocketPlugRuleRecord>(domains.socketPlugRules, checksum)
            && checksum_domain<records::SocketPlugPoolRecord>(domains.socketPlugPools, checksum)
            && checksum_domain<records::SocketPlugMemberRecord>(domains.socketPlugMembers, checksum)
+           && checksum_domain<records::ExoticCatalystRecord>(domains.exoticCatalysts, checksum)
            && checksum_domain<records::InventoryBucketRecord>(domains.inventoryBuckets, checksum)
            && checksum_domain<records::SocketEntryListRecord>(domains.socketEntryLists, checksum)
            && checksum_domain<records::SocketEntryTableRecord>(domains.socketEntryTables, checksum)
            && checksum_domain<records::AbilityBucketRecord>(domains.abilityBuckets, checksum)
            && checksum_domain<records::ProgressionRecord>(domains.progressions, checksum)
+           && checksum_domain<records::RecordDefinitionRecord>(domains.records, checksum)
+           && checksum_domain<records::NodeDefinitionRecord>(domains.nodes, checksum)
+           && checksum_domain<records::SObjectDefinitionRecord>(domains.sobjects, checksum)
            && checksum_domain<records::ScenarioRecord>(domains.scenarios, checksum)
            && checksum_domain<records::RosterGroupRecord>(domains.rosterGroups, checksum)
            && checksum_domain<records::SpawnStemRecord>(domains.spawnStems, checksum)
            && checksum_domain<records::SpawnNameHashRecord>(domains.spawnNameHashes, checksum)
+           && checksum_domain<records::SpawnPointRecord>(domains.spawnPoints, checksum)
            && checksum_domain<records::HashNameRecord>(domains.hashNames, checksum)
            && checksum_domain<records::VendorIndexRecord>(domains.vendorIndex, checksum)
            && checksum_domain<records::VendorDefinitionRecord>(domains.vendorDefinitions, checksum)
            && checksum_domain<records::VendorSaleRowRecord>(domains.vendorSaleRows, checksum)
            && checksum_domain<records::VendorInstalledRowRecord>(domains.vendorInstalledRows,
-                                                                 checksum);
+                                                                 checksum)
+           && checksum_domain<records::PositionProfileRecord>(domains.positionProfiles, checksum)
+           && checksum_domain<records::ObjectTypeRecord>(domains.objectTypes, checksum)
+           && checksum_domain<records::RecordObjectiveRecord>(domains.recordObjectives, checksum)
+           && checksum_domain<records::RecordIntervalRecord>(domains.recordIntervals, checksum)
+           && checksum_domain<records::RecordRewardRecord>(domains.recordRewards, checksum)
+           && checksum_domain<records::ProgressionStepRecord>(domains.progressionSteps, checksum)
+           && checksum_domain<records::SeasonPassRewardRecord>(domains.seasonPassRewards, checksum)
+           && checksum_domain<records::SeasonPassPackageRecord>(domains.seasonPassPackages,
+                                                                checksum)
+           && checksum_domain<records::BountyRecord>(domains.bounties, checksum);
 }
 
 /** Writes every array in the same order used by the payload checksum. */
@@ -100,20 +117,34 @@ bool write_payload(HANDLE file, records::Domains domains) noexcept {
            && write_domain<records::SocketPlugRuleRecord>(file, domains.socketPlugRules)
            && write_domain<records::SocketPlugPoolRecord>(file, domains.socketPlugPools)
            && write_domain<records::SocketPlugMemberRecord>(file, domains.socketPlugMembers)
+           && write_domain<records::ExoticCatalystRecord>(file, domains.exoticCatalysts)
            && write_domain<records::InventoryBucketRecord>(file, domains.inventoryBuckets)
            && write_domain<records::SocketEntryListRecord>(file, domains.socketEntryLists)
            && write_domain<records::SocketEntryTableRecord>(file, domains.socketEntryTables)
            && write_domain<records::AbilityBucketRecord>(file, domains.abilityBuckets)
            && write_domain<records::ProgressionRecord>(file, domains.progressions)
+           && write_domain<records::RecordDefinitionRecord>(file, domains.records)
+           && write_domain<records::NodeDefinitionRecord>(file, domains.nodes)
+           && write_domain<records::SObjectDefinitionRecord>(file, domains.sobjects)
            && write_domain<records::ScenarioRecord>(file, domains.scenarios)
            && write_domain<records::RosterGroupRecord>(file, domains.rosterGroups)
            && write_domain<records::SpawnStemRecord>(file, domains.spawnStems)
            && write_domain<records::SpawnNameHashRecord>(file, domains.spawnNameHashes)
+           && write_domain<records::SpawnPointRecord>(file, domains.spawnPoints)
            && write_domain<records::HashNameRecord>(file, domains.hashNames)
            && write_domain<records::VendorIndexRecord>(file, domains.vendorIndex)
            && write_domain<records::VendorDefinitionRecord>(file, domains.vendorDefinitions)
            && write_domain<records::VendorSaleRowRecord>(file, domains.vendorSaleRows)
-           && write_domain<records::VendorInstalledRowRecord>(file, domains.vendorInstalledRows);
+           && write_domain<records::VendorInstalledRowRecord>(file, domains.vendorInstalledRows)
+           && write_domain<records::PositionProfileRecord>(file, domains.positionProfiles)
+           && write_domain<records::ObjectTypeRecord>(file, domains.objectTypes)
+           && write_domain<records::RecordObjectiveRecord>(file, domains.recordObjectives)
+           && write_domain<records::RecordIntervalRecord>(file, domains.recordIntervals)
+           && write_domain<records::RecordRewardRecord>(file, domains.recordRewards)
+           && write_domain<records::ProgressionStepRecord>(file, domains.progressionSteps)
+           && write_domain<records::SeasonPassRewardRecord>(file, domains.seasonPassRewards)
+           && write_domain<records::SeasonPassPackageRecord>(file, domains.seasonPassPackages)
+           && write_domain<records::BountyRecord>(file, domains.bounties);
 }
 
 } // namespace sunrise::state::build_data::cache::writer

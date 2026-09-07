@@ -94,10 +94,8 @@ bool build(const packages::reader::Source& source, packages::reader::Scratch& sc
             return false;
         }
         compact_rows(storage);
-        // An empty result is never a finished pass. Every blob read needs the block keys, and
-        // those arrive during the boot, so a window that closes first reads nothing. Latching it
-        // would publish a domain with no destinations for the whole run. Only the first empty
-        // round reports, because the retry runs on every worker slice.
+        // An empty result is never a finished pass: a read before the block keys arrive returns
+        // nothing. Report only the first empty round, since the retry runs on every worker slice.
         if (storage.keptCount == 0) {
             if (storage.resolveRounds == 0) {
                 report(storage, 0, 0, "empty");

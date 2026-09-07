@@ -59,24 +59,27 @@ bool encode(const items::Definition& value, ItemRecord& record) noexcept {
         value.definitionHash,
         value.definitionIndex,
         value.bucketId,
-        kReservedFieldValue,
+        value.tier,
         value.insertionMaterialRequirementSetIndex,
         value.enabledMaterialRequirementSetIndex,
+        value.plugCategoryHash,
+        value.rollSetIndex,
+        value.linkedPlugIndex,
     };
     return true;
 }
 
-/** Decodes one installed-build item mapping after checking its padding. */
+/** Decodes one installed-build item mapping. */
 bool decode(const ItemRecord& record, items::Definition& value) noexcept {
-    value = {};
-    if (record.reserved != kReservedFieldValue) {
-        return false;
-    }
     value = {record.definitionHash,
              record.definitionIndex,
              record.bucketId,
              record.insertionMaterialRequirementSetIndex,
-             record.enabledMaterialRequirementSetIndex};
+             record.enabledMaterialRequirementSetIndex,
+             record.tier,
+             record.plugCategoryHash,
+             record.rollSetIndex,
+             record.linkedPlugIndex};
     return true;
 }
 
@@ -91,6 +94,8 @@ bool encode(const collectibles::Definition& value, CollectibleRecord& record) no
     record.collectibleIndex = value.collectibleIndex;
     record.itemDefinitionIndex = value.itemDefinitionIndex;
     record.materialRequirementSetIndex = value.materialRequirementSetIndex;
+    record.acquiredFlagSlot = value.acquiredFlagSlot;
+    record.acquiredFlagIndex = value.acquiredFlagIndex;
     record.materialRequirementCount = value.materialRequirementCount;
     for (std::size_t index = 0; index < value.materialRequirements.size(); ++index) {
         const collectibles::MaterialRequirement& requirement = value.materialRequirements[index];
@@ -117,6 +122,8 @@ bool decode(const CollectibleRecord& record, collectibles::Definition& value) no
     value.collectibleIndex = record.collectibleIndex;
     value.itemDefinitionIndex = record.itemDefinitionIndex;
     value.materialRequirementSetIndex = record.materialRequirementSetIndex;
+    value.acquiredFlagSlot = record.acquiredFlagSlot;
+    value.acquiredFlagIndex = record.acquiredFlagIndex;
     value.materialRequirementCount = record.materialRequirementCount;
     for (std::size_t index = 0; index < record.materialRequirements.size(); ++index) {
         const MaterialRequirementRecord& requirement = record.materialRequirements[index];

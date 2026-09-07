@@ -1,0 +1,95 @@
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+
+namespace sunrise::middleware::bap::activity_message::squad_auth {
+
+/** ClientRef slot type for the activity-local squad sensor body. */
+inline constexpr std::uint8_t kSlotType = 1;
+/** Runtime schema handle for the slot-type-1 auth body. */
+inline constexpr std::uint32_t kSchema = 0x80807EC9;
+/**
+ * The count lane is four bits wide, but the array it indexes holds eight elements.
+ * The client walker does not clamp, so a count of 9 to 15 runs past the array.
+ * The bound is the array, never the lane.
+ */
+inline constexpr std::size_t kMinimumRequestedCountLength = 1;
+inline constexpr std::size_t kMaximumRequestedCountLength = 8;
+/** Fixed fields and presence bits outside the requested-count values. */
+inline constexpr std::size_t kBaseBitCount = 59;
+/** Each requested member count is one signed 32-bit field. */
+inline constexpr std::size_t kRequestedCountBitCount = 32;
+/** The name hash is always sent: an absent field reads as zero, which is a real name. */
+inline constexpr std::size_t kNameHashBitCount = 32;
+/**
+ * Spawn references `.11` and `.12`, each one nested 0x80809C42 ClientRef.
+ * Both always carry the unset form, which is the sentinel that keeps the package's own
+ * authored spawn rule. 32-bit key, 7-bit type, 16-bit index, after one presence bit.
+ */
+inline constexpr std::size_t kSpawnReferenceBitCount = 55;
+inline constexpr std::size_t kSpawnReferenceCount = 2;
+/** Exact nested field-5 payload: lane selector plus four actor-definition profile values. */
+inline constexpr std::size_t kAuthoredProfileBitCount = 13;
+/**
+ * Exact meaningful bit count for one body carrying this many requested counts.
+ * It lives here so the sum has one home. A second copy in the roster encoder drifted from this
+ * one and refused every squad body Sunrise sent; that copy is gone.
+ */
+[[nodiscard]] constexpr std::size_t exact_body_bit_count(std::size_t counts) noexcept {
+    return kBaseBitCount + kAuthoredProfileBitCount + kSpawnReferenceBitCount * kSpawnReferenceCount
+           + kRequestedCountBitCount * counts + kNameHashBitCount;
+}
+
+/** Buffer one squad body needs at the full requested-count length. */
+inline constexpr std::size_t kMaximumBitCount = exact_body_bit_count(kMaximumRequestedCountLength);
+inline constexpr std::size_t kMaximumByteCount = (kMaximumBitCount + 7) / 8;
+/** A retained body may carry the objective fields too, up to 1,313 bits. */
+inline constexpr std::size_t kMaximumRetainedBitCount = 1'313;
+inline constexpr std::size_t kMaximumRetainedByteCount = (kMaximumRetainedBitCount + 7U) / 8U;
+/** Spawn generation is an unsigned logical value stored in a 31-bit field. */
+inline constexpr std::uint32_t kMaximumGeneration = 0x7FFFFFFF;
+
+/** Mode 3 skips ordinary placement and keeps the requests for a passenger delivery. */
+enum class Mode : std::uint8_t {
+    mode0 = 0,
+    mode2 = 2,
+    reserve = 3,
+};
+[[nodiscard]] constexpr bool valid_mode(Mode mode) noexcept {
+    return mode == Mode::mode0 || mode == Mode::mode2 || mode == Mode::reserve;
+}
+
+/** Last accepted positive spawn generation for one ClientRef. */
+struct GenerationGuard final {
+    std::uint32_t last{};
+    bool hasLast{};
+};
+
+/** One canonical activity-local squad request. Zero counts select native actor destruction. */
+struct Preset final {
+    std::span<const std::int32_t> requestedCounts{};
+    std::uint32_t generation{};
+    Mode mode{Mode::mode0};
+    std::optional<std::uint32_t> nameHash{};
+    /** Actor-definition bytes +56..+59; field 5.0 remains the exact candidate lane zero. */
+    std::array<std::int8_t, 4> authoredProfile{};
+};
+
+/** Finds the next positive 31-bit spawn generation without wrapping. */
+[[nodiscard]] bool next_generation(const GenerationGuard& guard, std::uint32_t& next) noexcept;
+
+/**
+ * Encodes one canonical slot-type-1 body without changing a refused output buffer.
+ * Counts must be nonnegative and the generation must be newer than the guard.
+ */
+[[nodiscard]] bool encode(const Preset& preset,
+                          const GenerationGuard& guard,
+                          std::span<std::byte> output,
+                          std::size_t& writtenBytes,
+                          std::size_t& writtenBits) noexcept;
+
+} // namespace sunrise::middleware::bap::activity_message::squad_auth

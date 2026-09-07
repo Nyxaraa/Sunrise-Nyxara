@@ -26,8 +26,11 @@ bool encode_response(const Message& message,
                            message.transactionId);
 
     encoding::bits::Writer writer(output.subspan(kEnvelopeHeaderSize));
+    // The reply names a character the roster already holds, so no revision publishes it.
+    StatusResponse status{};
+    status.value = kNoFamily4Publication;
     // The id carries no presence bit or bias.
-    bool encoded = status::write_fields(writer, ResponseShape::statusPair, StatusResponse{})
+    bool encoded = status::write_fields(writer, ResponseShape::statusPair, status)
                    && writer.write(characterSoid, kCharacterSoidWidth)
                    && writer.write(0, kAbsentTrailerWidth);
     std::size_t payloadSize = 0;

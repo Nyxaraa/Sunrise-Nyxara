@@ -3,7 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string_view>
+#include <type_traits>
 
 #include "../../middleware/datagen/family4/loadout/loadout_resolver.h"
 #include "../build_data/runtime.h"
@@ -11,6 +13,27 @@
 
 namespace sunrise::state::runtime::detail {
 
+/** Clears a consumed mutation on every commit exit without copying its full snapshot. */
+template <typename Pending> class PendingConsumption final {
+public:
+    static_assert(std::is_nothrow_default_constructible_v<Pending>);
+    static_assert(std::is_nothrow_destructible_v<Pending>);
+
+    explicit PendingConsumption(Pending& pending) noexcept : pending_(pending) {}
+    PendingConsumption(const PendingConsumption&) = delete;
+    PendingConsumption(PendingConsumption&&) = delete;
+    PendingConsumption& operator=(const PendingConsumption&) = delete;
+    PendingConsumption& operator=(PendingConsumption&&) = delete;
+    ~PendingConsumption() noexcept {
+        std::destroy_at(std::addressof(pending_));
+        std::construct_at(std::addressof(pending_));
+    }
+
+private:
+    Pending& pending_;
+};
+
+/** Where one resolved loadout places an instance, and the serial it published there. */
 struct ResolvedPosition {
     std::uint16_t inventoryRow{};
     std::uint8_t equipmentSlot{};
@@ -24,40 +47,6 @@ struct CharacterItemLocation {
     bool equipped{};
 };
 
-void report_equipment(std::string_view stage,
-                      std::string_view result,
-                      EquipmentMutationKind kind,
-                      std::uint64_t characterSoid,
-                      std::uint64_t previousSoid,
-                      std::uint64_t requestedSoid,
-                      std::size_t equipmentIndex,
-                      std::size_t inventoryIndex,
-                      std::uint8_t nativeSlot,
-                      std::size_t movedItemCount,
-                      std::uint32_t previousHash,
-                      std::uint32_t requestedHash) noexcept;
-void report_acquisition(std::string_view stage,
-                        std::string_view result,
-                        std::string_view reason,
-                        std::uint32_t definitionHash,
-                        std::uint64_t characterSoid,
-                        std::uint64_t instanceSoid,
-                        std::size_t inventoryIndex,
-                        std::uint16_t inventoryRow,
-                        std::uint8_t equipmentSlot,
-                        std::uint32_t nextInventorySerial) noexcept;
-void report_profile_acquisition(std::string_view stage,
-                                std::string_view result,
-                                std::string_view reason,
-                                std::uint32_t definitionHash,
-                                std::uint64_t accountSoid,
-                                std::uint64_t instanceSoid,
-                                std::uint8_t bucketId,
-                                std::size_t profileIndex,
-                                std::size_t itemCount,
-                                std::int32_t previousQuantity,
-                                std::int32_t acquiredQuantity,
-                                bool appended) noexcept;
 void report_dismantle(std::string_view stage,
                       std::string_view result,
                       std::string_view reason,
@@ -115,6 +104,57 @@ valid_profile_mutation_shape(const PendingProfileItemAcquisition& mutation) noex
 [[nodiscard]] bool materialize_profile_acquisition(const AccountState& current,
                                                    const PendingProfileItemAcquisition& mutation,
                                                    AccountState& after) noexcept;
+
+/** What paid for one grant: a Collections row with its material cost, or nothing. */
+struct GrantSource {
+    std::uint32_t materialRequirementSetHash{};
+    std::uint16_t collectibleIndex{};
+    std::uint8_t materialRequirementCount{};
+    bool direct{};
+};
+
+/** @return The selected character's index, or the character count when none is selected. */
+[[nodiscard]] std::size_t selected_character_index(const AccountState& account) noexcept;
+/**
+ * Stages the common selected-character insertion path.
+ * @param chargedAccount Account after any material cost, or account itself when nothing is charged.
+ * @return False when the character has no free row or the after-image does not resolve.
+ */
+[[nodiscard]] bool finalize_item_acquisition(const AccountState& account,
+                                             const AccountState& chargedAccount,
+                                             std::uint32_t definitionHash,
+                                             bool profileChanged,
+                                             const GrantSource& source,
+                                             PendingItemAcquisition& mutation) noexcept;
+/**
+ * Stages the common profile-stack insertion path.
+ * @param chargedAccount Account after any material cost, or account itself when nothing is charged.
+ * @param actionSource True when the stack carries a resident instance soid.
+ * @return False when the quantity does not fit the stack or the after-image is not canonical.
+ */
+[[nodiscard]] bool
+finalize_profile_item_acquisition(const AccountState& account,
+                                  const AccountState& chargedAccount,
+                                  std::uint32_t definitionHash,
+                                  const build_data::items::details::Definition& detail,
+                                  bool actionSource,
+                                  std::int32_t quantity,
+                                  const GrantSource& source,
+                                  PendingProfileItemAcquisition& mutation) noexcept;
+/**
+ * Applies one validated insertion over an exact current account without taking State locks.
+ * @return False when the account moved since the mutation was prepared.
+ */
+[[nodiscard]] bool materialize_item_acquisition(const AccountState& current,
+                                                const PendingItemAcquisition& mutation,
+                                                AccountState& after) noexcept;
+/**
+ * Rebuilds one package from installed policy and rejects any altered after-image.
+ * @return False when the account moved or the rebuilt character differs from the mutation.
+ */
+[[nodiscard]] bool materialize_direct_item_bundle(const AccountState& current,
+                                                  const PendingDirectItemBundle& mutation,
+                                                  AccountState& after) noexcept;
 [[nodiscard]] bool native_equipment_slot(const account::inventory::Item& item,
                                          std::uint8_t& slot) noexcept;
 [[nodiscard]] bool semantic_equipment_slot(std::uint8_t nativeSlot,
@@ -133,12 +173,17 @@ find_resolved_position(const middleware::datagen::family4::loadout::ResolvedLoad
     CharacterState& after,
     std::size_t& movedItemCount) noexcept;
 [[nodiscard]] bool same_character(const CharacterState& left, const CharacterState& right) noexcept;
+/**
+ * @param pinnedPlugHash For a rolled socket's apply or re-roll, the result plug an earlier
+ *        staging rolled, so a re-staging reproduces the same after-image; 0 rolls afresh.
+ */
 [[nodiscard]] bool stage_socket_plug(const AccountState& snapshot,
                                      std::size_t characterIndex,
                                      std::uint64_t targetInstanceSoid,
                                      std::uint8_t socketLane,
                                      std::uint16_t plugDefinitionIndex,
-                                     PendingSocketPlug& mutation) noexcept;
+                                     PendingSocketPlug& mutation,
+                                     std::uint32_t pinnedPlugHash = 0) noexcept;
 [[nodiscard]] bool stage_item_state(const AccountState& snapshot,
                                     std::size_t characterIndex,
                                     std::uint64_t targetInstanceSoid,
@@ -154,12 +199,8 @@ find_resolved_position(const middleware::datagen::family4::loadout::ResolvedLoad
                                            std::uint64_t& output) noexcept;
 [[nodiscard]] bool next_profile_item_instance_soid(const AccountState& account,
                                                    std::uint64_t& output) noexcept;
+[[nodiscard]] bool account_owns_soid(const AccountState& account, std::uint64_t soid) noexcept;
 [[nodiscard]] std::int32_t acquisition_level(const CharacterState& character) noexcept;
-[[nodiscard]] bool
-find_acquired_row(const middleware::datagen::family4::loadout::ResolvedLoadout& loadout,
-                  std::uint64_t instanceSoid,
-                  std::uint16_t& inventoryRow,
-                  std::uint8_t& equipmentSlot) noexcept;
 [[nodiscard]] bool stage_item_dismantle(const AccountState& account,
                                         std::size_t characterIndex,
                                         std::uint64_t instanceSoid,
@@ -191,8 +232,6 @@ apply_action_materials(const AccountState& before,
 character_item_at(const CharacterState& character, const CharacterItemLocation& location) noexcept;
 [[nodiscard]] account::inventory::Item*
 character_item_at(CharacterState& character, const CharacterItemLocation& location) noexcept;
-[[nodiscard]] std::uint32_t character_item_definition_hash(const CharacterState& character,
-                                                           std::uint64_t instanceSoid) noexcept;
 [[nodiscard]] bool
 find_unequipped_row(const middleware::datagen::family4::loadout::ResolvedLoadout& loadout,
                     std::uint64_t instanceSoid,

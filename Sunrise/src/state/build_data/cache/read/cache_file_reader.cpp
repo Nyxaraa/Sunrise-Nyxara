@@ -14,7 +14,8 @@ namespace {
     return counts.named != 0 && counts.items != 0 && counts.collectibles != 0
            && counts.materialRequirementSets != 0 && counts.socketPlugRules != 0
            && counts.socketPlugPools != 0 && counts.inventoryBuckets != 0
-           && counts.socketEntryLists != 0 && counts.progressions != 0 && counts.scenarios != 0;
+           && counts.socketEntryLists != 0 && counts.progressions != 0 && counts.scenarios != 0
+           && counts.rosterGroups != 0 && counts.positionProfiles != 0 && counts.objectTypes != 0;
 }
 
 /** @return True when every count fits the output storage. */
@@ -27,20 +28,33 @@ namespace {
            && counts.socketPlugRules <= output.socketPlugRules.size()
            && counts.socketPlugPools <= output.socketPlugPools.size()
            && counts.socketPlugMembers <= output.socketPlugMembers.size()
+           && counts.exoticCatalysts <= output.exoticCatalysts.size()
            && counts.inventoryBuckets <= output.inventoryBuckets.size()
            && counts.socketEntryLists <= output.socketEntryLists.size()
            && counts.socketEntryTables <= output.socketEntryTables.size()
            && counts.abilityBuckets <= output.abilityBuckets.size()
            && counts.progressions <= output.progressions.size()
+           && counts.records <= output.records.size() && counts.nodes <= output.nodes.size()
+           && counts.sobjects <= output.sobjects.size()
            && counts.scenarios <= output.scenarios.size()
            && counts.rosterGroups <= output.rosterGroups.size()
            && counts.spawnStems <= output.spawnStems.size()
            && counts.spawnNameHashes <= output.spawnNameHashes.size()
+           && counts.spawnPoints <= output.spawnPoints.size()
            && counts.hashNames <= output.hashNames.size()
            && counts.vendorIndex <= output.vendorIndex.size()
            && counts.vendorDefinitions <= output.vendorDefinitions.size()
            && counts.vendorSaleRows <= output.vendorSaleRows.size()
-           && counts.vendorInstalledRows <= output.vendorInstalledRows.size();
+           && counts.vendorInstalledRows <= output.vendorInstalledRows.size()
+           && counts.positionProfiles <= output.positionProfiles.size()
+           && counts.objectTypes <= output.objectTypes.size()
+           && counts.recordObjectives <= output.recordObjectives.size()
+           && counts.recordIntervals <= output.recordIntervals.size()
+           && counts.recordRewards <= output.recordRewards.size()
+           && counts.progressionSteps <= output.progressionSteps.size()
+           && counts.seasonPassRewards <= output.seasonPassRewards.size()
+           && counts.seasonPassPackages <= output.seasonPassPackages.size()
+           && counts.bounties <= output.bounties.size();
 }
 
 /** @return The header's row counts, as platform sizes. */
@@ -54,31 +68,44 @@ namespace {
         header.socketPlugRuleCount,
         header.socketPlugPoolCount,
         header.socketPlugMemberCount,
+        header.exoticCatalystCount,
         header.inventoryBucketCount,
         header.socketEntryListCount,
         header.socketEntryTableCount,
         header.abilityBucketCount,
         header.progressionCount,
+        header.recordCount,
+        header.nodeCount,
+        header.sobjectCount,
         header.scenarioCount,
         header.rosterGroupCount,
         header.spawnStemCount,
         header.spawnNameHashCount,
+        header.spawnPointCount,
         header.hashNameCount,
         header.vendorIndexCount,
         header.vendorDefinitionCount,
         header.vendorSaleRowCount,
         header.vendorInstalledRowCount,
+        header.positionProfileCount,
+        header.objectTypeCount,
+        header.recordObjectiveCount,
+        header.recordIntervalCount,
+        header.recordRewardCount,
+        header.progressionStepCount,
+        header.seasonPassRewardCount,
+        header.seasonPassPackageCount,
+        header.bountyCount,
     };
 }
 
 /**
- * Every format below the current one is out of date, so a version bump needs no edit here.
- * Listing them one by one left a bumped version unknown, and a valid old cache read as corrupt.
+ * Any other format is stale, higher or lower, so it rebuilds instead of failing the boot.
  * @param version Cache prefix version.
- * @return True when the cache is older than the current format.
+ * @return True when the cache was not written by the current format.
  */
 [[nodiscard]] bool stale_format(std::uint32_t version) noexcept {
-    return version < records::kCacheFormatVersion;
+    return version != records::kCacheFormatVersion;
 }
 
 /** @return The pending status, or invalid when the file fails to close. */
@@ -122,7 +149,8 @@ LoadStatus load(const wchar_t* path,
                 records::DomainCounts& counts) noexcept {
     counts = {};
     read::clear(output);
-    if (path == nullptr || expectedBuild.imageSize == 0 || output.constants == nullptr) {
+    if (path == nullptr || expectedBuild.imageSize == 0 || output.constants == nullptr
+        || output.positionFingerprint == nullptr) {
         return LoadStatus::invalid;
     }
     const HANDLE file = CreateFileW(path,
@@ -147,9 +175,6 @@ LoadStatus load(const wchar_t* path,
     if (stale_format(prefix.version)) {
         return close_with(file, LoadStatus::stale);
     }
-    if (prefix.version != records::kCacheFormatVersion) {
-        return close_with(file, LoadStatus::invalid);
-    }
 
     LARGE_INTEGER beginning{};
     records::Header header{};
@@ -173,7 +198,13 @@ LoadStatus load(const wchar_t* path,
     bool valid = required_domains_present(pendingCounts) && counts_fit(pendingCounts, output)
                  && read::expected_size(pendingCounts, expectedSize)
                  && static_cast<std::uint64_t>(actualSize.QuadPart) == expectedSize
-                 && read::read_payload(file, header.constants, pendingCounts, output, checksum)
+                 && read::read_payload(file,
+                                       expectedBuild,
+                                       header.constants,
+                                       header.positionFingerprint,
+                                       pendingCounts,
+                                       output,
+                                       checksum)
                  && checksum == header.payloadChecksum;
     const LoadStatus status = close_with(file, valid ? LoadStatus::loaded : LoadStatus::invalid);
     if (status != LoadStatus::loaded) {
@@ -184,6 +215,7 @@ LoadStatus load(const wchar_t* path,
     counts = pendingCounts;
     // Header scalars commit with the counts, on the same clean-close path as the record arrays.
     *output.constants = header.constants;
+    *output.positionFingerprint = header.positionFingerprint;
     return LoadStatus::loaded;
 }
 

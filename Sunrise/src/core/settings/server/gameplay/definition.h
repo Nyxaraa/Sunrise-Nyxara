@@ -20,18 +20,28 @@ enum class Topology : std::uint8_t {
 inline constexpr std::size_t kAddressOctets = 4;
 /** The join descriptor carries an even UDP port, so an odd port is refused at load. */
 inline constexpr std::uint16_t kPortAlignment = 2;
-/** Even, and clear of both discovery ports. */
+/**
+ * Host ports the embedded endpoint binds, stepping by the alignment from the configured
+ * port. The client keys each channel on the host port it dialled, one port per host row.
+ */
+inline constexpr std::size_t kHostPortCount = 16;
+/** Even, and clear of the discovery ports with the whole pool span. */
 inline constexpr std::uint16_t kDefaultPort = 30976;
-/** Discovery owns 3074 and 3075, so the gameplay endpoint may take neither. */
-inline constexpr std::uint16_t kDiscoveryPortLow = 3074;
-/** Upper discovery port. See kDiscoveryPortLow. */
-inline constexpr std::uint16_t kDiscoveryPortHigh = 3075;
+/** Discovery owns 3074 and 3075. Bound ports are even, so only 3074 can collide. */
+inline constexpr std::uint16_t kDiscoveryPort = 3074;
 /** One carrier, the live wave, and removal headroom fit in this many reserved slots. */
 inline constexpr std::uint16_t kDefaultServerReserve = 256;
 /** A smaller reserve cannot hold one carrier plus its removal and quarantine headroom. */
 inline constexpr std::uint16_t kMinimumServerReserve = 8;
 /** The client keeps at least this many lease bits after the reserve is subtracted. */
 inline constexpr std::uint16_t kClientLeaseMinimum = 4096;
+/**
+ * Entity slots the join hands the client before it asks for any.
+ * The whole slot space, capped at what the reserve leaves. That is what the client does.
+ */
+inline constexpr std::uint16_t kDefaultClientJoinGrant = 8'192;
+/** Below this a join cannot cover the client's own low water mark of 400. */
+inline constexpr std::uint16_t kMinimumClientJoinGrant = 400;
 
 /**
  * Gameplay endpoint topology and the entity-slot split it implies.
@@ -51,6 +61,14 @@ struct Settings {
     std::uint16_t port{kDefaultPort};
     /** Entity indices held back from the client lease for server-authored entities. */
     std::uint16_t serverReserveCount{kDefaultServerReserve};
+    /** Entity indices the join grants. The rest stay free for the client to request. */
+    std::uint16_t clientJoinGrantCount{kDefaultClientJoinGrant};
+    /**
+     * Holds the launch's queuez sync open through the load so the spaceflight legs skip.
+     * A family-0 update parks the account player-record mid-transaction, which the cinematic gate
+     * refuses; a family-4 completion at arrival frees it. Off by default.
+     */
+    bool holdLaunchCinematic{false};
 };
 
 /**
@@ -68,5 +86,13 @@ struct Settings {
  * @return Configured reserve, or zero while the channel is off.
  */
 [[nodiscard]] std::uint16_t effective_reserve(const Settings& settings) noexcept;
+
+/**
+ * Reports the entity slots one join grants.
+ * A disabled channel reserves nothing, so the grant is bounded by the whole slot space instead.
+ * @param settings Active gameplay settings.
+ * @return Configured grant, capped at what the reserve leaves free.
+ */
+[[nodiscard]] std::size_t join_grant(const Settings& settings) noexcept;
 
 } // namespace sunrise::core::settings::server::gameplay

@@ -86,7 +86,7 @@ void note_candidate(Walk& walk,
  * @param scratch Lock-owned block storage.
  * @param storage Working storage for this pass.
  * @param walk Accumulator for one destination.
- * @param sliceSetIndex Slice-set index the entry reported.
+ * @param sliceSetIndex Slice-set index of the current authored state.
  * @return True when the registry walked without running out of fixed storage.
  */
 [[nodiscard]] bool walk_registry(const reader::Source& source,
@@ -107,7 +107,7 @@ void note_candidate(Walk& walk,
                 return false;
             }
             std::uint16_t group = kNotARosterGroup;
-            if (!resolve_object(source, scratch, storage, objectTag, group)) {
+            if (!resolve_object(source, scratch, storage, objectTag, sliceSetIndex, group)) {
                 return false;
             }
             if (group == kNotARosterGroup) {
@@ -197,8 +197,10 @@ bool build_rosters(const reader::Source& source,
         }
         layouts::Definition& row = rows[storage.cursor];
         ++storage.cursor;
+        storage.destinationTag = row.tag;
         row.rosterGroupCount = 0;
         row.rosterGroups = {};
+        row.bubbleGroupCount = 0;
         ++storage.reads;
         if (!reader::read_tag(source, scratch, row.tag, storage.scenario)) {
             continue;
@@ -207,7 +209,7 @@ bool build_rosters(const reader::Source& source,
         if (!walk_destination(source, scratch, storage, walk)) {
             continue;
         }
-        publish_safe(walk, row);
+        publish_groups(walk, row);
     }
     return storage.cursor >= rows.size();
 }

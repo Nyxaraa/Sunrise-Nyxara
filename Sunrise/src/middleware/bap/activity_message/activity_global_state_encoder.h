@@ -43,10 +43,16 @@ inline constexpr std::size_t kNameBit = 734;
 /** The name is this many 8-bit elements, and every character is biased. */
 inline constexpr std::size_t kNameCapacity = 40;
 inline constexpr std::uint8_t kNameBias = 0x80;
-/** Fields after the descriptor stay at their schema defaults. */
+/** Fields after the descriptor: an empty switch list, a name hash, a flag and the time base. */
 inline constexpr std::size_t kTailBits = 103;
+inline constexpr std::uint8_t kSwitchCountWidth = 6;
+inline constexpr std::uint8_t kDescriptorNameHashWidth = 32;
+inline constexpr std::uint8_t kDescriptorFlagWidth = 1;
+inline constexpr std::uint8_t kTimeBaseWidth = 64;
 
 static_assert(kNameBit + kNameCapacity * 8 + 4 + kTailBits == kMeaningfulBitCount);
+static_assert(kSwitchCountWidth + kDescriptorNameHashWidth + kDescriptorFlagWidth + kTimeBaseWidth
+              == kTailBits);
 
 /** One destination's global activity state. */
 struct GlobalActivityState final {
@@ -62,23 +68,32 @@ struct GlobalActivityState final {
     std::uint32_t spawnSetHash{};
     /** Selection descriptor scalars. Each accepts -1, which is encoded as wire zero. */
     std::int32_t reason{-1};
-    std::int32_t fromActivityIndex{-1};
+    /** Selection field 1: the activity asked for, before it resolved to the index below. */
+    std::int32_t requestedActivityIndex{-1};
     std::int32_t activityIndex{-1};
     /**
-     * The client's own selection descriptor, left-aligned, replayed instead of the configured
-     * form. The descriptor carries fields with no known name, so re-encoding it from the scalars
-     * above would drop them without a word. An empty view means the configured minimal descriptor.
+     * Activity Host time origin in whole seconds, shared by every member of one session.
+     * The client adds its own elapsed seconds and reduces the sum to a 0..1 periodic phase, so
+     * members that hold different origins run that phase apart.
+     */
+    std::uint64_t timeBase{};
+    /**
+     * The client's own selection descriptor, left-aligned. It carries fields with no known name,
+     * so it is replayed rather than re-encoded. Replay also needs the name branch below to agree
+     * byte-for-byte with name; an empty or incoherent view uses the configured descriptor.
      */
     std::span<const std::byte> descriptorBits{};
-    /** Meaningful bits in descriptorBits, or zero to encode the configured descriptor. */
+    /** Meaningful bits in descriptorBits, or zero to force the configured descriptor. */
     std::size_t descriptorBitLength{};
+    /** First package-name byte's bit offset inside descriptorBits. */
+    std::size_t descriptorNameBit{};
+    /** True only when the captured descriptor carried its native package-name branch. */
+    bool hasDescriptorName{};
 };
 
 /**
- * Encodes one global activity state body with the configured selection descriptor.
- *
- * The descriptor is the minimal one used before the client has sent its own selection. Replaying
- * the client's earlier bits instead is a separate path, not this function.
+ * Encodes one global activity state body. A coherent captured descriptor is replayed exactly;
+ * otherwise the native minimal descriptor is written from the checked logical fields.
  *
  * @param state Destination name, bubble layout, slice set and spawn set.
  * @param output Caller storage, unchanged when a check fails or it is too small.

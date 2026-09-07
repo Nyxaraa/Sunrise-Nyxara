@@ -16,8 +16,11 @@ inline constexpr std::size_t kRecordPrefixSize = 18;
 inline constexpr std::size_t kRecordTagSize = 8;
 /** Largest plaintext one record carries. */
 inline constexpr std::size_t kRecordPayloadCapacity = 1400;
+/** Block padding the cipher may add past the plaintext. */
+inline constexpr std::size_t kRecordPaddingCapacity = 16;
 /** Largest record this layer builds. */
-inline constexpr std::size_t kRecordCapacity = kRecordPrefixSize + kRecordPayloadCapacity + 16;
+inline constexpr std::size_t kRecordCapacity =
+    kRecordPrefixSize + kRecordPayloadCapacity + kRecordPaddingCapacity;
 
 /** Everything one record needs from its association. */
 struct RecordContext {

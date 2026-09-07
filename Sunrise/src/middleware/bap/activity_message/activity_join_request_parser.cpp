@@ -14,9 +14,9 @@ struct JoinRequestLayout final {
     static constexpr std::size_t sessionId = correlation + encoding::kU32Size;
     /** 8 key bytes, low byte first, follow the activity session. */
     static constexpr std::size_t memberKey = sessionId + encoding::kU64Size;
-    /** Later join fields start after the required member key. */
-    static constexpr std::size_t prefixSize = memberKey + encoding::kU64Size;
 };
+
+static_assert(JoinRequestLayout::memberKey + encoding::kU64Size == kScalarPrefixSize);
 
 /**
  * Bit offset of the signed-in character inside the join request. Every field ahead of it is
@@ -27,11 +27,9 @@ constexpr std::size_t kCharacterSoidBit = 330;
 constexpr std::uint8_t kCharacterSoidWidth = 64;
 
 /**
- * Reads the signed-in character, leaving it zero when the payload stops short of the field. A
- * short payload is normal here: only the fixed prefix above is required, and the roster falls
- * back to the selected character when this is missing.
+ * Reads the signed-in character from its unconditional field inside the 570-bit minimum.
  * @param input Complete join-request activity payload.
- * @return The character id, or zero when it is not there.
+ * @return The character id. The caller proves the field is present before entering this helper.
  */
 [[nodiscard]] std::uint64_t read_character_soid(std::span<const std::byte> input) noexcept {
     encoding::bits::Reader reader(input);
@@ -47,7 +45,7 @@ constexpr std::uint8_t kCharacterSoidWidth = 64;
 /** Reads the correlation, nonzero session, and member key from an activity join request. */
 bool parse_join_request(std::span<const std::byte> input, JoinRequest& request) noexcept {
     request = {};
-    if (input.size() < JoinRequestLayout::prefixSize) {
+    if (input.size() < kMinimumEncodedSize) {
         return false;
     }
 

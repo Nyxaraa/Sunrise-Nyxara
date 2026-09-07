@@ -2,6 +2,8 @@
 
 #include "../../client/network/consumer.h"
 #include "../../core/logging/log.h"
+#include "../activity/host_runtime.h"
+#include "../activity/mission/mission_script_runtime.h"
 #include "../bap/runtime.h"
 #include "../gameplay/gameplay_runtime.h"
 #include "../http/server_http.h"
@@ -12,7 +14,10 @@ namespace sunrise::server {
 
 /** Registers Server consumers with the Client networking boundary. */
 bool initialize() noexcept {
+    activity::host::reset();
+    activity::mission::initialize();
     if (!client::network::register_http_consumer(&http::consume)) {
+        activity::mission::shutdown();
         return false;
     }
     if (client::network::register_bap_consumer(&bap::consume)) {
@@ -37,12 +42,15 @@ bool initialize() noexcept {
     }
     // BAP registration failure rolls back the earlier HTTP registration.
     client::network::unregister_http_consumer(&http::consume);
+    activity::mission::shutdown();
     return false;
 }
 
 /** Runs one bounded server service slice. @param now Monotonic tick count. */
 void service(std::uint64_t now) noexcept {
     transport::service(now);
+    activity::host::service(now);
+    activity::mission::service(now);
     gameplay::service(now);
 }
 
@@ -54,6 +62,8 @@ void shutdown() noexcept {
     client::network::unregister_bap_consumer(&bap::consume);
     client::network::unregister_http_consumer(&http::consume);
     bap::shutdown();
+    activity::mission::shutdown();
+    activity::host::reset();
 }
 
 } // namespace sunrise::server

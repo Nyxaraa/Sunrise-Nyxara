@@ -2,11 +2,13 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string_view>
 
 #include "../../logging/log.h"
 #include "busy.h"
@@ -57,6 +59,8 @@ struct EarlyState {
 
 SRWLOCK g_earlyLock{SRWLOCK_INIT};
 std::array<EarlyState, kTaskCount> g_early{};
+SRWLOCK g_progressLock{SRWLOCK_INIT};
+std::array<internal::Progress, kTaskCount> g_progress{};
 
 /** @return The task's single bit in the running mask. */
 [[nodiscard]] unsigned bit_of(Task task) noexcept {
@@ -150,6 +154,27 @@ void end(Task task) noexcept {
     g_running.fetch_and(~bit_of(task), std::memory_order_acq_rel);
     g_early[static_cast<std::size_t>(task)] = {};
     ReleaseSRWLockExclusive(&g_earlyLock);
+    AcquireSRWLockExclusive(&g_progressLock);
+    g_progress[static_cast<std::size_t>(task)] = {};
+    ReleaseSRWLockExclusive(&g_progressLock);
+}
+
+/** Publishes one task's latest real progress for the loading overlay. */
+void set_progress(Task task,
+                  std::uint32_t current,
+                  std::uint32_t total,
+                  std::string_view detail,
+                  bool determinate) noexcept {
+    internal::Progress next{};
+    const std::size_t length = (std::min)(detail.size(), next.detail.size() - 1U);
+    std::copy_n(detail.data(), length, next.detail.data());
+    next.current = current;
+    next.total = total;
+    next.available = true;
+    next.determinate = determinate && total != 0;
+    AcquireSRWLockExclusive(&g_progressLock);
+    g_progress[static_cast<std::size_t>(task)] = next;
+    ReleaseSRWLockExclusive(&g_progressLock);
 }
 
 /** Records one finished present. */
@@ -165,6 +190,13 @@ namespace internal {
 /** @return Mask of started tasks. */
 unsigned running() noexcept {
     return g_running.load(std::memory_order_acquire);
+}
+
+Progress progress(Task task) noexcept {
+    AcquireSRWLockShared(&g_progressLock);
+    const Progress copy = g_progress[static_cast<std::size_t>(task)];
+    ReleaseSRWLockShared(&g_progressLock);
+    return copy;
 }
 
 /** @param threadId Thread that draws frames. */

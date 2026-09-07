@@ -24,8 +24,8 @@ namespace {
 constexpr std::string_view kBundledPackageName = "city_tower_social_d2";
 /** -1 records that the fallback did not come from a selection reason. */
 constexpr std::int8_t kBundledReason = -1;
-/** -1 records that the fallback has no previous activity. */
-constexpr std::int16_t kBundledPreviousActivityIndex = -1;
+/** -1 records that the fallback names no source activity. */
+constexpr std::int16_t kBundledSourceActivityIndex = -1;
 /** Definition index 20 is paired with the bundled fallback package. */
 constexpr std::int16_t kBundledActivityIndex = 20;
 /** The bundled fallback package declares 8 bubble entries. */
@@ -71,7 +71,7 @@ ActivityDefaults authored() noexcept {
     }
     selection.packageNameLength = static_cast<std::uint8_t>(kBundledPackageName.size());
     selection.reason = kBundledReason;
-    selection.previousActivityIndex = kBundledPreviousActivityIndex;
+    selection.sourceActivityIndex = kBundledSourceActivityIndex;
     selection.activityIndex = kBundledActivityIndex;
     // Value initialization intentionally leaves the element and optional hashes absent.
 

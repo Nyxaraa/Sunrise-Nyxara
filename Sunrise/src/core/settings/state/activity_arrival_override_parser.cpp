@@ -9,6 +9,8 @@ namespace defaults = state::activity::defaults;
 
 /** A bubble number picks one of the fixed 64 wire slots. */
 constexpr std::uint64_t kMaximumBubble = 63;
+/** A slice set is one of 64 bubbles times eight authored states. */
+constexpr std::uint64_t kMaximumSliceSet = 511;
 
 /**
  * Copies one authored package name into its fixed row storage.
@@ -54,6 +56,12 @@ bool Parser::arrival_override(defaults::ArrivalOverride& output) noexcept {
             }
             candidate.bubble = static_cast<std::uint8_t>(value);
             candidate.hasBubble = true;
+        } else if (key == "slice_set") {
+            if (candidate.hasSliceSet || !unsigned_integer(value) || value > kMaximumSliceSet) {
+                return false;
+            }
+            candidate.sliceSet = static_cast<std::uint16_t>(value);
+            candidate.hasSliceSet = true;
         } else if (key == "spawn_set_hash") {
             if (candidate.hasSpawnSetHash || !unsigned_value(value)
                 || value > (std::numeric_limits<std::uint32_t>::max)()) {
@@ -61,6 +69,11 @@ bool Parser::arrival_override(defaults::ArrivalOverride& output) noexcept {
             }
             candidate.spawnSetHash = static_cast<std::uint32_t>(value);
             candidate.hasSpawnSetHash = true;
+        } else if (key == "current_activity_from_launch") {
+            if (candidate.currentActivityFromLaunch
+                || !boolean(candidate.currentActivityFromLaunch)) {
+                return false;
+            }
         } else if (!skip_value(0)) {
             return false;
         }
@@ -71,7 +84,9 @@ bool Parser::arrival_override(defaults::ArrivalOverride& output) noexcept {
             return false;
         }
     }
-    if (!hasName || (!candidate.hasBubble && !candidate.hasSpawnSetHash)) {
+    if (!hasName
+        || (!candidate.hasBubble && !candidate.hasSliceSet && !candidate.hasSpawnSetHash
+            && !candidate.currentActivityFromLaunch)) {
         return false;
     }
     output = candidate;

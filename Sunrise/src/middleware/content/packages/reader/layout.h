@@ -17,6 +17,14 @@ inline constexpr std::size_t kBlockSize = 0x40000;
 inline constexpr std::uint32_t kEntryTableAdjustment = 96;
 /** The block table follows the entry table after this gap. */
 inline constexpr std::size_t kBlockTableGap = 32;
+/** Typed array metadata immediately before each physical package table. */
+inline constexpr std::size_t kTableArrayPrefixSize = 20;
+/** Array marker stored at the start of one table prefix. */
+inline constexpr std::uint32_t kTableArrayMarker = 0x80809FBDU;
+/** Entry-record element class stored eight bytes before the entry data. */
+inline constexpr std::uint32_t kEntryTableElementClass = 0x80809EF3U;
+/** Block-record element class stored eight bytes before the block data. */
+inline constexpr std::uint32_t kBlockTableElementClass = 0x80809EEEU;
 /** Tag handles start at this base. */
 inline constexpr std::uint32_t kTagBase = 0x80800000;
 /** The package id sits in the bits above the entry index. */
@@ -32,9 +40,9 @@ struct HeaderOffsets {
     static constexpr std::size_t kPackageId = 0x04;
     /** Patch index, which picks the newest file of one package. */
     static constexpr std::size_t kPatchId = 0x20;
-    /** Entry-table row count. */
+    /** Logical tag-addressable entry count; the physical region owns a separate prefix count. */
     static constexpr std::size_t kEntryCount = 0xB4;
-    /** Block-table row count. */
+    /** Logical block count used to bound entry placement reads. */
     static constexpr std::size_t kBlockCount = 0xD0;
     /** File offset of the entry table, whose rows this reader indexes by tag. */
     static constexpr std::size_t kEntryTable = 0x110;

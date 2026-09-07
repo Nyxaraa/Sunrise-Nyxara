@@ -42,11 +42,9 @@ bool apply_ability_buckets(const state::CharacterState& character,
         }
         if (!state::build_data::find_ability_buckets(
                 detail.socketEntryListIndex, selection_of(*subclassItem), published)) {
-            // The domain has not caught up with this selection yet (a fresh pick invalidates it
-            // until the next investment refresh slice republishes). Publish empty buckets for
-            // this one encode, the same as a character with no subclass equipped, instead of
-            // failing the whole record: a hard failure here aborts the entire Family-0/3 snapshot
-            // and surfaces as a request error even though the underlying selection did commit.
+            // The domain has not caught up with this selection yet. Publish empty buckets for
+            // this encode, like a character with no subclass, instead of failing: a hard failure
+            // aborts the whole Family-0/3 snapshot even though the selection did commit.
             return true;
         }
         for (std::size_t bucket = 0; bucket < appearance.abilityBuckets.size(); ++bucket) {

@@ -289,6 +289,13 @@ consume(Storage& storage, const Entry& entry, std::span<const std::byte> blob) n
         if (!record_point(storage, entry.stemIndex, point.nameHash, entryIndex)) {
             return false;
         }
+        // A full point bank costs the closest-spawn query rows, nothing else. So it is counted.
+        if (storage.pointCount < storage.points.size()) {
+            storage.points[storage.pointCount] = {point.position, point.nameHash, entry.stemIndex};
+            ++storage.pointCount;
+        } else {
+            ++storage.pointsDropped;
+        }
         ++recorded;
     }
     storage.stems[entry.stemIndex].pointCount += recorded;
@@ -433,6 +440,9 @@ void reset(Storage& storage) noexcept {
     storage.accumulatedCount = 0;
     storage.nameHashes.fill(spawn_state::NameHash{});
     storage.nameHashCount = 0;
+    storage.points.fill(spawn_state::Point{});
+    storage.pointCount = 0;
+    storage.pointsDropped = 0;
     storage.cursor = 0;
     storage.skipped = 0;
     storage.collected = false;

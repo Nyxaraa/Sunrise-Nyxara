@@ -8,6 +8,8 @@ namespace sunrise::middleware::queuez {
 
 /** Object payload codec stored in the family-update object header. */
 enum class Encoding : std::uint32_t {
+    /** A delete carries no payload and names no codec. It is what a real server sends. */
+    none = 0,
     tagReflection = 1,
     binaryDiff = 2,
     raw = 3,

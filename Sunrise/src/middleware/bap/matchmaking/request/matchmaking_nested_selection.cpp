@@ -1,12 +1,22 @@
-#include "../../../protobuf/codec.h"
+#include <array>
+#include <limits>
+
 #include "field_selection.h"
+#include "internal.h"
 
 namespace sunrise::middleware::bap::matchmaking::request {
 namespace {
 
-using protobuf::Field;
-using protobuf::Reader;
 using protobuf::WireType;
+
+/** Fields inside the kind-4 activity message. Both are 32-bit hashes. */
+enum class ActivityField : std::uint32_t {
+    definitionHash = 1,
+    typeHash = 2,
+};
+
+/** A hash field is one 32-bit value carried as a varint. */
+constexpr std::uint64_t kMaximumHash = (std::numeric_limits<std::uint32_t>::max)();
 
 /** Fields inside the root advertisement message. */
 enum class AdvertisementField : std::uint32_t {
@@ -27,162 +37,90 @@ enum class RecordField : std::uint32_t {
 /** The descriptor wrapper carries its opaque bytes in field one. */
 constexpr std::uint32_t kDescriptorBytesField = 1;
 
-/** First-occurrence advertisement picks. */
-struct AdvertisementSelection final {
-    bool sawExistingId{};
-    bool hasExistingId{};
-    std::uint64_t existingId{};
-    bool sawRecord{};
-    bool hasRecordMessage{};
-    std::span<const std::byte> recordMessage{};
-};
-
-/** First-occurrence record picks. */
-struct RecordSelection final {
-    bool sawDescriptor{};
-    bool hasDescriptorMessage{};
-    std::span<const std::byte> descriptorMessage{};
-    bool sawVariantKey{};
-    bool hasVariantKey{};
-    std::uint64_t variantKey{};
-};
-
-/** First-occurrence descriptor pick. */
-struct DescriptorSelection final {
-    bool sawBytes{};
-    bool hasBytes{};
-    std::span<const std::byte> bytes{};
-};
-
-/**
- * Picks fields and checks the whole advertisement message.
- * @param input Advertisement submessage.
- * @param selected Receives borrowed first-occurrence fields.
- * @return True when every field has a whole, supported wire encoding.
- */
-[[nodiscard]] bool select_advertisement(std::span<const std::byte> input,
-                                        AdvertisementSelection& selected) noexcept {
-    Reader reader(input);
-    while (reader.remaining() != 0) {
-        Field field;
-        if (!reader.next(field)) {
-            return false;
-        }
-        // Mark a field before checking its wire type. A later duplicate then cannot replace
-        // the first occurrence.
-        if (field.fieldNumber == static_cast<std::uint32_t>(AdvertisementField::existingId)
-            && !selected.sawExistingId) {
-            selected.sawExistingId = true;
-            if (field.wireType == WireType::varint) {
-                selected.hasExistingId = true;
-                selected.existingId = field.value;
-            }
-        } else if (field.fieldNumber == static_cast<std::uint32_t>(AdvertisementField::record)
-                   && !selected.sawRecord) {
-            selected.sawRecord = true;
-            if (field.wireType == WireType::lengthDelimited) {
-                selected.hasRecordMessage = true;
-                selected.recordMessage = field.bytes;
-            }
-        }
-    }
-    return true;
-}
-
-/**
- * Picks fields and checks the whole advertisement record.
- * @param input Advertisement-record submessage.
- * @param selected Receives borrowed first-occurrence fields.
- * @return True when every field has a whole, supported wire encoding.
- */
-[[nodiscard]] bool select_record(std::span<const std::byte> input,
-                                 RecordSelection& selected) noexcept {
-    Reader reader(input);
-    while (reader.remaining() != 0) {
-        Field field;
-        if (!reader.next(field)) {
-            return false;
-        }
-        // The first occurrence wins even when its wire type is not usable here.
-        if (field.fieldNumber == static_cast<std::uint32_t>(RecordField::descriptor)
-            && !selected.sawDescriptor) {
-            selected.sawDescriptor = true;
-            if (field.wireType == WireType::lengthDelimited) {
-                selected.hasDescriptorMessage = true;
-                selected.descriptorMessage = field.bytes;
-            }
-        } else if (field.fieldNumber == static_cast<std::uint32_t>(RecordField::variantKey)
-                   && !selected.sawVariantKey) {
-            selected.sawVariantKey = true;
-            if (field.wireType == WireType::varint) {
-                selected.hasVariantKey = true;
-                selected.variantKey = field.value;
-            }
-        }
-    }
-    return true;
-}
-
-/**
- * Picks the bytes and checks the whole descriptor wrapper.
- * @param input Descriptor-wrapper submessage.
- * @param selected Receives the borrowed first bytes field.
- * @return True when every field is valid and any bytes found are the right size.
- */
-[[nodiscard]] bool select_descriptor(std::span<const std::byte> input,
-                                     DescriptorSelection& selected) noexcept {
-    Reader reader(input);
-    while (reader.remaining() != 0) {
-        Field field;
-        if (!reader.next(field)) {
-            return false;
-        }
-        // A wrong wire type on the first occurrence makes the bytes absent. Duplicates are
-        // still ignored.
-        if (field.fieldNumber == kDescriptorBytesField && !selected.sawBytes) {
-            selected.sawBytes = true;
-            if (field.wireType == WireType::lengthDelimited) {
-                selected.hasBytes = true;
-                selected.bytes = field.bytes;
-            }
-        }
-    }
-    return !selected.hasBytes || selected.bytes.size() == kJoinDescriptorSize;
-}
+/** Index of each pick in the advertisement selection array. */
+constexpr std::size_t kExistingIdPick = 0;
+constexpr std::size_t kRecordPick = 1;
+constexpr std::size_t kAdvertisementPickCount = 2;
+/** Index of each pick in the record selection array. */
+constexpr std::size_t kDescriptorPick = 0;
+constexpr std::size_t kVariantKeyPick = 1;
+constexpr std::size_t kRecordPickCount = 2;
+/** The descriptor wrapper has a single pick. */
+constexpr std::size_t kDescriptorBytesPick = 0;
+constexpr std::size_t kDescriptorPickCount = 1;
+/** Index of each pick in the activity selection array. */
+constexpr std::size_t kDefinitionHashPick = 0;
+constexpr std::size_t kTypeHashPick = 1;
+constexpr std::size_t kActivityPickCount = 2;
 
 } // namespace
 
 /** Parses the kind-2 path into borrowed request fields. */
 bool parse_update(std::span<const std::byte> input, AdvertisementUpdate& update) noexcept {
     update = {};
-    AdvertisementSelection advertisement;
-    if (!select_advertisement(input, advertisement)) {
+    std::array<FieldPick, kAdvertisementPickCount> advertisement{
+        FieldPick{static_cast<std::uint32_t>(AdvertisementField::existingId), WireType::varint},
+        FieldPick{static_cast<std::uint32_t>(AdvertisementField::record),
+                  WireType::lengthDelimited},
+    };
+    if (!select_first_fields(input, advertisement)) {
         return false;
     }
-    update.hasExistingId = advertisement.hasExistingId;
-    update.existingId = advertisement.existingId;
-    if (!advertisement.hasRecordMessage) {
+    update.hasExistingId = advertisement[kExistingIdPick].has;
+    update.existingId = advertisement[kExistingIdPick].value;
+    if (!advertisement[kRecordPick].has) {
         return true;
     }
 
     // Only the submessages we pick are read further. Other byte fields stay opaque.
-    RecordSelection record;
-    if (!select_record(advertisement.recordMessage, record)) {
+    std::array<FieldPick, kRecordPickCount> record{
+        FieldPick{static_cast<std::uint32_t>(RecordField::descriptor), WireType::lengthDelimited},
+        FieldPick{static_cast<std::uint32_t>(RecordField::variantKey), WireType::varint},
+    };
+    if (!select_first_fields(advertisement[kRecordPick].bytes, record)) {
         return false;
     }
-    if (record.hasVariantKey) {
-        update.variantKey = record.variantKey;
+    if (record[kVariantKeyPick].has) {
+        update.variantKey = record[kVariantKeyPick].value;
     }
-    if (!record.hasDescriptorMessage) {
+    if (!record[kDescriptorPick].has) {
         return true;
     }
 
-    DescriptorSelection descriptor;
-    if (!select_descriptor(record.descriptorMessage, descriptor)) {
+    std::array<FieldPick, kDescriptorPickCount> descriptor{
+        FieldPick{kDescriptorBytesField, WireType::lengthDelimited},
+    };
+    if (!select_first_fields(record[kDescriptorPick].bytes, descriptor)) {
         return false;
     }
-    update.hasDescriptor = descriptor.hasBytes;
-    update.descriptor = descriptor.bytes;
+    // A wrapper that carried bytes must carry the whole fixed-width descriptor.
+    if (descriptor[kDescriptorBytesPick].has
+        && descriptor[kDescriptorBytesPick].bytes.size() != kJoinDescriptorSize) {
+        return false;
+    }
+    update.hasDescriptor = descriptor[kDescriptorBytesPick].has;
+    update.descriptor = descriptor[kDescriptorBytesPick].bytes;
+    return true;
+}
+
+/** Parses the kind-4 activity submessage into its two hashes. */
+bool parse_activity(std::span<const std::byte> input, ConfigurationActivity& activity) noexcept {
+    activity = {};
+    std::array<FieldPick, kActivityPickCount> picks{
+        FieldPick{static_cast<std::uint32_t>(ActivityField::definitionHash), WireType::varint},
+        FieldPick{static_cast<std::uint32_t>(ActivityField::typeHash), WireType::varint},
+    };
+    if (!select_first_fields(input, picks)) {
+        return false;
+    }
+    if (picks[kDefinitionHashPick].has && picks[kDefinitionHashPick].value <= kMaximumHash) {
+        activity.hasDefinitionHash = true;
+        activity.definitionHash = static_cast<std::uint32_t>(picks[kDefinitionHashPick].value);
+    }
+    if (picks[kTypeHashPick].has && picks[kTypeHashPick].value <= kMaximumHash) {
+        activity.hasTypeHash = true;
+        activity.typeHash = static_cast<std::uint32_t>(picks[kTypeHashPick].value);
+    }
     return true;
 }
 

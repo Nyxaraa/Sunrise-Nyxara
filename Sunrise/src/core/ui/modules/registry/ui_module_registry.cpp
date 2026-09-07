@@ -163,7 +163,8 @@ bool PageRegistration::acquire(Owner owner,
                                std::string_view stableId,
                                std::string_view displayName,
                                FrameCallback callback,
-                               void (*prepare)() noexcept) noexcept {
+                               void (*prepare)() noexcept,
+                               FrameCallback companionCallback) noexcept {
     AcquireSRWLockExclusive(&g_slotLock);
     if (registered_) {
         ReleaseSRWLockExclusive(&g_slotLock);
@@ -173,7 +174,7 @@ bool PageRegistration::acquire(Owner owner,
         prepare();
     }
     Descriptor descriptor;
-    if (create_descriptor(owner, stableId, displayName, callback, descriptor)
+    if (create_descriptor(owner, stableId, displayName, callback, companionCallback, descriptor)
         && register_module(descriptor) == RegistrationResult::registered) {
         stableId_ = stableId;
         registered_ = true;

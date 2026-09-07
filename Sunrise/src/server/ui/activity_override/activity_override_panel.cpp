@@ -12,6 +12,7 @@
 #include <span>
 #include <string_view>
 
+#include "../../../core/ui/components/label/ui_label_component.h"
 #include "../../../core/ui/components/picker/ui_picker_component.h"
 #include "../../../core/ui/components/section/ui_section_component.h"
 #include "../../../core/ui/components/toggle/ui_toggle_component.h"
@@ -22,6 +23,7 @@ namespace sunrise::server::ui::activity_override {
 namespace {
 
 namespace forced = state::activity::forced;
+namespace label = core::ui::components::label;
 namespace picker = core::ui::components::picker;
 
 /** Preview shown by a picker with nothing chosen. */
@@ -38,6 +40,7 @@ constexpr std::size_t kItemCapacity =
 
 /** Row each picker is highlighting. These follow the published selection, not the other way. */
 std::size_t g_activityRow{kNoRow};
+std::size_t g_definitionRow{kNoRow};
 std::size_t g_bubbleRow{kNoRow};
 std::size_t g_sliceRow{kNoRow};
 std::size_t g_spawnRow{kNoRow};
@@ -61,6 +64,7 @@ std::size_t g_spawnRow{kNoRow};
                               std::size_t count,
                               const char* preview,
                               std::size_t& row) noexcept {
+    label::align();
     ImGui::TextUnformatted(caption);
     std::array<picker::Item, kItemCapacity> items{};
     const std::size_t shown = (std::min)(count, items.size());
@@ -74,9 +78,11 @@ std::size_t g_spawnRow{kNoRow};
 /** Rebuilds every derived list. @param value Published selection. */
 void follow_destination(const forced::ForcedDestination& value, Lists& rows) noexcept {
     refresh_destination(rows, name_of(value));
+    refresh_definitions(rows, name_of(value));
     g_bubbleRow = kNoRow;
     g_sliceRow = kNoRow;
     g_spawnRow = kNoRow;
+    g_definitionRow = kNoRow;
 }
 
 /**
@@ -111,7 +117,37 @@ void follow_destination(const forced::ForcedDestination& value, Lists& rows) noe
     value.sliceSet = 0;
     value.hasSpawnSetHash = false;
     value.spawnSetHash = 0;
+    value.hasActivityIndex = false;
+    value.activityIndex = 0;
     follow_destination(value, rows);
+    // One definition needs no choice, and leaving it unpicked is what stops the SDK binding.
+    if (rows.definitionCount == 1) {
+        g_definitionRow = 0;
+        value.activityIndex = rows.definitionIndices[0];
+        value.hasActivityIndex = true;
+    }
+    return true;
+}
+
+/**
+ * Draws the definition picker, which names which of the destination's activities to bind.
+ * @param value Published selection, updated on a pick.
+ * @return True when the selection changed.
+ */
+[[nodiscard]] bool draw_definition(forced::ForcedDestination& value, Lists& rows) noexcept {
+    const char* const preview = value.hasActivityIndex && g_definitionRow < rows.definitionCount
+                                    ? rows.definitions[g_definitionRow].data()
+                                    : kUnset;
+    if (!row_picker("definition",
+                    "Activity",
+                    rows.definitions.data(),
+                    rows.definitionCount,
+                    preview,
+                    g_definitionRow)) {
+        return false;
+    }
+    value.activityIndex = rows.definitionIndices[g_definitionRow];
+    value.hasActivityIndex = true;
     return true;
 }
 
@@ -206,6 +242,22 @@ void draw_status(const forced::ForcedDestination& value, const Lists& rows) noex
     }
     ImGui::TextUnformatted(value.hasSpawnSetHash ? "active, forcing the chosen spawn set"
                                                  : "active, the client picks its own spawn");
+    // Without an activity the load still works and the SDK cannot bind, so it is worth saying.
+    if (rows.definitionsUnavailable) {
+        ImGui::TextDisabled("no generated estate, so no activity can be named");
+    } else if (!value.hasActivityIndex) {
+        ImGui::TextDisabled("no activity named, so the SDK and scripts will not load");
+    }
+    if (rows.definitionsHidden != 0) {
+        std::array<char, kStatusCapacity> hidden{};
+        const int count = std::snprintf(hidden.data(),
+                                        hidden.size(),
+                                        "%zu more activities than the list holds",
+                                        rows.definitionsHidden);
+        if (count > 0) {
+            ImGui::TextDisabled("%s", hidden.data());
+        }
+    }
     if (rows.spawnUnavailable) {
         ImGui::TextDisabled("this destination's spawn sets could not be listed");
     }
@@ -261,9 +313,15 @@ void draw() noexcept {
         follow_destination(value, rows);
         changed = false;
     }
+    // The estate can finish generating after a pick, so an empty list is retried while it stands.
+    if (rows.definitionCount == 0 && !name_of(value).empty()) {
+        refresh_definitions(rows, name_of(value));
+    }
 
     ImGui::Spacing();
     changed = draw_activity(value, rows) || changed;
+    ImGui::Spacing();
+    changed = draw_definition(value, rows) || changed;
     ImGui::Spacing();
     changed = draw_bubble(value, rows) || changed;
     ImGui::Spacing();

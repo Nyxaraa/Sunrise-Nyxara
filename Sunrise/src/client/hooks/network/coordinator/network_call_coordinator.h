@@ -10,14 +10,12 @@ namespace sunrise::client::hooks::network::coordinator {
 enum class ConsumerKind {
     none,
     http,
-    bap,
 };
 
 /** State copied at ingress and kept until egress. */
 struct CallLease final {
     void* original{};
     sunrise::client::network::HttpConsumer httpConsumer{};
-    sunrise::client::network::BapConsumer bapConsumer{};
     bool accepting{};
 };
 

@@ -1,3 +1,5 @@
+#include <bit>
+
 #include "client_authoritative_data.h"
 
 namespace sunrise::middleware::bap::activity_message::client_authoritative_data {
@@ -38,35 +40,47 @@ constexpr std::size_t kArrayElementBitCount = 8;
            && reader.skip(64);
 }
 
-/** The leg's first scalar is a 10-bit region index at bias 1. */
-constexpr std::uint8_t kRegionIndexWidth = 10;
-/** The leg's second scalar is that region's 32-bit name hash. */
-constexpr std::uint8_t kRegionHashWidth = 32;
-/** Logical signed fields subtract 1 from their unsigned wire value. */
-constexpr std::int32_t kSignedFieldBias = 1;
+/** The leg's first scalar is a 10-bit slice-set index at bias 1. */
+constexpr std::uint8_t kSliceSetIndexWidth = 10;
+/** The leg's second scalar is that slice set's 32-bit name hash. */
+constexpr std::uint8_t kSliceSetHashWidth = 32;
+/** The leg's third scalar is the 32-bit region index consumed by the region table. */
+constexpr std::uint8_t kRegionIndexWidth = 32;
+/** The signed region index uses the unsigned midpoint as its wire bias. */
+constexpr std::uint32_t kRegionIndexBias = 0x80000000U;
+/** Fields 3 and 4 are 2-bit signed values at bias 1. */
+constexpr std::uint8_t kLegStateWidth = 2;
+constexpr std::int32_t kLegStateBias = 1;
 
 /**
- * Reads one complete D6 leg, keeping its region scalars only when asked. Both legs have the same
- * shape and only the second names the player's current region, so the first is walked and
- * nothing is kept.
+ * Reads one complete D6 leg. Both legs have the same shape. The first scalar names a slice set;
+ * the third names the region matched by the membership region table. The optional aux token and
+ * the session sub-block are walked and dropped.
  * @param reader Reader sitting at the first required D6 scalar.
- * @param region Receives the region when keepRegion is set.
- * @param keepRegion True for the leg that carries the player's region.
+ * @param region Receives the leg's scalars.
  * @return True when every required scalar and optional child fits.
  */
-[[nodiscard]] bool
-read_d6(encoding::bits::Reader& reader, RegionState& region, bool keepRegion) noexcept {
-    std::uint64_t indexWire = 0;
-    std::uint64_t hash = 0;
-    if (!reader.read(kRegionIndexWidth, indexWire) || !reader.read(kRegionHashWidth, hash)
-        || !reader.skip(32) || !reader.skip(2) || !reader.skip(2) || !skip_optional(reader, 8)) {
+[[nodiscard]] bool read_d6(encoding::bits::Reader& reader, RegionState& region) noexcept {
+    std::uint64_t sliceSetIndexWire = 0;
+    std::uint64_t sliceSetHash = 0;
+    std::uint64_t regionIndexWire = 0;
+    std::uint64_t publicWire = 0;
+    std::uint64_t auxWire = 0;
+    if (!reader.read(kSliceSetIndexWidth, sliceSetIndexWire)
+        || !reader.read(kSliceSetHashWidth, sliceSetHash)
+        || !reader.read(kRegionIndexWidth, regionIndexWire)
+        || !reader.read(kLegStateWidth, publicWire) || !reader.read(kLegStateWidth, auxWire)
+        || !skip_optional(reader, 8)) {
         return false;
     }
-    if (keepRegion) {
-        region.index = static_cast<std::int32_t>(indexWire) - kSignedFieldBias;
-        region.hash = static_cast<std::uint32_t>(hash);
-        region.hasHash = true;
-    }
+    const auto stored = static_cast<std::uint32_t>(regionIndexWire) - kRegionIndexBias;
+    region.index = std::bit_cast<std::int32_t>(stored);
+    region.hash = static_cast<std::uint32_t>(sliceSetHash);
+    region.sliceSetIndex = static_cast<std::int32_t>(sliceSetIndexWire) - kLegStateBias;
+    region.publicState =
+        static_cast<std::int8_t>(static_cast<std::int32_t>(publicWire) - kLegStateBias);
+    region.auxState = static_cast<std::int8_t>(static_cast<std::int32_t>(auxWire) - kLegStateBias);
+    region.hasHash = true;
     bool d9Present = false;
     return read_presence(reader, d9Present) && (!d9Present || skip_d9(reader));
 }
@@ -112,30 +126,22 @@ bool skip_opaque_root_branch(encoding::bits::Reader& reader) noexcept {
            && skip_large_array(reader) && reader.skip(1);
 }
 
-/** The second leg is the one whose first scalars name the player's current region. */
-constexpr std::size_t kRegionLegIndex = 1;
-
-/** Reads the D4 branch and keeps its optional transition token and the player's region. */
+/** Reads the D4 branch and keeps its optional transition token and both region legs. */
 bool read_transition_branch(encoding::bits::Reader& reader,
                             ClientAuthoritativeData& update) noexcept {
-    for (std::size_t leg = 0; leg < 2; ++leg) {
-        bool present = false;
-        if (!read_presence(reader, present)) {
-            return false;
-        }
-        if (!present) {
-            continue;
-        }
-        RegionState region{};
-        const bool keepRegion = leg == kRegionLegIndex;
-        if (!read_d6(reader, region, keepRegion)) {
-            return false;
-        }
-        if (keepRegion) {
-            update.region = region;
-            update.hasRegion = true;
-        }
+    // The first leg is the current region, the second the pending one.
+    bool currentPresent = false;
+    if (!read_presence(reader, currentPresent)
+        || (currentPresent && !read_d6(reader, update.currentRegion))) {
+        return false;
     }
+    update.hasCurrentRegion = currentPresent;
+    bool pendingPresent = false;
+    if (!read_presence(reader, pendingPresent)
+        || (pendingPresent && !read_d6(reader, update.region))) {
+        return false;
+    }
+    update.hasRegion = pendingPresent;
 
     bool tokenPresent = false;
     std::uint64_t token = 0;

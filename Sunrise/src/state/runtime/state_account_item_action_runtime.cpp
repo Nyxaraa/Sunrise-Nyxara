@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 
 #include "../../middleware/datagen/family4/loadout/loadout_resolver.h"
 #include "../../middleware/web_service/messages/opcode1901.h"
@@ -137,10 +136,8 @@ bool prepare_character_selector_socket_plug(std::uint64_t instanceIdentityToken,
         && targetDetail.bucketId == targetDefinition.bucketId
         && targetDetail.ordinarySocketState == item_details::OrdinarySocketState::present
         && targetDetail.ordinarySocketCount <= authored_inventory::kPlugCapacity) {
-        // Most action kinds are the physical ordinary-socket lane. Prefer that exact lane when
-        // its installed pool accepts the plug; this disambiguates armour items whose two mod
-        // sockets intentionally expose the same pool. Some action kinds are semantic categories
-        // instead (notably shaders), so retain the unique-compatible-lane fallback for those.
+        // Most action kinds name the physical lane, so prefer it when its pool accepts the plug.
+        // Shaders are semantic instead, so the unique-compatible-lane fallback stays.
         if (requestedSocketLane < targetDetail.ordinarySocketCount
             && build_data::is_socket_plug_allowed(
                 targetDefinition.definitionIndex, requestedSocketLane, plugDefinitionIndex)) {
@@ -223,8 +220,9 @@ bool preview_socket_plug(const PendingSocketPlug& mutation, AccountState& after)
                            mutation.characterIndex,
                            mutation.targetInstanceSoid,
                            mutation.socketLane,
-                           mutation.plugDefinitionIndex,
-                           canonical)
+                           mutation.requestedPlugDefinitionIndex,
+                           canonical,
+                           mutation.plugDefinitionHash)
         || canonical.accountSoid != mutation.accountSoid
         || canonical.characterSoid != mutation.characterSoid
         || canonical.targetDefinitionHash != mutation.targetDefinitionHash
@@ -236,6 +234,7 @@ bool preview_socket_plug(const PendingSocketPlug& mutation, AccountState& after)
         || canonical.itemIndex != mutation.itemIndex
         || canonical.targetDefinitionIndex != mutation.targetDefinitionIndex
         || canonical.plugDefinitionIndex != mutation.plugDefinitionIndex
+        || canonical.requestedPlugDefinitionIndex != mutation.requestedPlugDefinitionIndex
         || canonical.materialRequirementSetIndex != mutation.materialRequirementSetIndex
         || canonical.socketLane != mutation.socketLane
         || canonical.targetBucketId != mutation.targetBucketId
@@ -264,8 +263,8 @@ bool preview_socket_plug(const PendingSocketPlug& mutation, AccountState& after)
 
 /** Commits one prepared socket-and-material after-image behind exact staleness guards. */
 bool commit_socket_plug(PendingSocketPlug& mutation) noexcept {
-    const PendingSocketPlug prepared = mutation;
-    mutation = {};
+    const PendingSocketPlug& prepared = mutation;
+    const PendingConsumption consume{mutation};
     const auto fail = [&prepared](std::string_view reason) noexcept {
         report_socket_plug("commit",
                            "fail",
@@ -327,8 +326,9 @@ bool commit_socket_plug(PendingSocketPlug& mutation) noexcept {
                            prepared.characterIndex,
                            prepared.targetInstanceSoid,
                            prepared.socketLane,
-                           prepared.plugDefinitionIndex,
-                           canonical)
+                           prepared.requestedPlugDefinitionIndex,
+                           canonical,
+                           prepared.plugDefinitionHash)
         || canonical.characterSoid != prepared.characterSoid
         || canonical.accountSoid != prepared.accountSoid
         || canonical.targetDefinitionHash != prepared.targetDefinitionHash
@@ -340,6 +340,7 @@ bool commit_socket_plug(PendingSocketPlug& mutation) noexcept {
         || canonical.itemIndex != prepared.itemIndex
         || canonical.targetDefinitionIndex != prepared.targetDefinitionIndex
         || canonical.plugDefinitionIndex != prepared.plugDefinitionIndex
+        || canonical.requestedPlugDefinitionIndex != prepared.requestedPlugDefinitionIndex
         || canonical.materialRequirementSetIndex != prepared.materialRequirementSetIndex
         || canonical.socketLane != prepared.socketLane
         || canonical.targetBucketId != prepared.targetBucketId
@@ -433,8 +434,8 @@ bool prepare_item_state(std::uint64_t targetInstanceSoid,
 
 /** Commits one prepared item-state after-image behind an exact character staleness guard. */
 bool commit_item_state(PendingItemState& mutation) noexcept {
-    const PendingItemState prepared = mutation;
-    mutation = {};
+    const PendingItemState& prepared = mutation;
+    const PendingConsumption consume{mutation};
     const auto fail = [&prepared](std::string_view reason) noexcept {
         report_item_state("commit",
                           "fail",
@@ -567,8 +568,8 @@ bool preview_subclass_selection(const PendingSubclassSelection& mutation,
 
 /** Commits one prepared subclass selection behind exact account and character guards. */
 bool commit_subclass_selection(PendingSubclassSelection& mutation) noexcept {
-    const PendingSubclassSelection prepared = mutation;
-    mutation = {};
+    const PendingSubclassSelection& prepared = mutation;
+    const PendingConsumption consume{mutation};
     if (!prepared.prepared || prepared.accountSoid == 0 || prepared.characterSoid == 0
         || prepared.subclassInstanceSoid == 0 || prepared.characterIndex >= kCharacterCapacity
         || prepared.beforeCharacter.soid != prepared.characterSoid

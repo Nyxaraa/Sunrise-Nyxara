@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "internal.h"
 
 namespace sunrise::middleware::bap::activity_host_manager::request::selection {
@@ -13,7 +15,7 @@ constexpr std::uint8_t kActivityIndexWidth = 12;
 constexpr std::uint8_t kElementIndexWidth = 9;
 /** All reason, index and skull signed values use wire bias 1. */
 constexpr std::int16_t kScalarBias = 1;
-/** Identity-like and runtime-nonce fields each take 64 bits when present. */
+/** The opaque identity and selection nonce each take 64 bits when present. */
 constexpr std::size_t kSensitiveScalarWidth = 64;
 /** The skull count uses 5 bits, so it can declare more entries than storage holds. */
 constexpr std::uint8_t kSkullCountWidth = 5;
@@ -76,6 +78,25 @@ constexpr std::size_t kPairEntryWidth = 13;
     return true;
 }
 
+/** Reads the second optional 64-bit scalar; the first remains opaque. */
+[[nodiscard]] bool read_selection_nonce(Reader& reader,
+                                        ActivityManagerSelection& selection) noexcept {
+    bool present = false;
+    if (!read_presence(reader, present)) {
+        return false;
+    }
+    if (!present) {
+        return true;
+    }
+    std::uint64_t value = 0;
+    if (!reader.read(kSensitiveScalarWidth, value)) {
+        return false;
+    }
+    selection.hasSelectionNonce = true;
+    selection.selectionNonce = value;
+    return true;
+}
+
 /**
  * Reads the skull array, keeping what storage holds and walking past the rest. The 5-bit count
  * reaches 31 and storage holds 16, so a bigger count is still a real encoding. Every entry's
@@ -106,8 +127,8 @@ constexpr std::size_t kPairEntryWidth = 13;
 
 /**
  * Reads the optional fixed package name, ending it at the first byte the text rule rejects.
- * The field is always 40 elements and its tail is padding, so a byte that cannot appear in a
- * name ends the name instead of failing the descriptor and losing the destination choice.
+ * The field is always 40 elements and its tail is padding. A byte that cannot appear in a name
+ * ends the name, rather than failing the descriptor and losing the destination choice.
  * @param reader Bounded MSB-first descriptor reader.
  * @param descriptorStart Reader bits left at the descriptor's first bit.
  * @param selection Temporary scalar-only selection output.
@@ -146,18 +167,13 @@ constexpr std::size_t kPairEntryWidth = 13;
     return true;
 }
 
-/**
- * Reads the safe prefix fields and skips the identity-like scalar and the runtime nonce.
- * @param reader Bounded MSB-first descriptor reader.
- * @param selection Temporary scalar-only selection output.
- * @return True when every prefix field and skull entry is complete.
- */
+/** Reads the prefix, skipping only its first optional 64-bit scalar. */
 [[nodiscard]] bool read_prefix(Reader& reader, ActivityManagerSelection& selection) noexcept {
     return read_i8(reader, kReasonWidth, kScalarBias, selection.reason)
            && read_i16(reader, kActivityIndexWidth, kScalarBias, selection.sourceActivityIndex)
            && read_i16(reader, kActivityIndexWidth, kScalarBias, selection.activityIndex)
            && read_element_index(reader, selection) && skip_optional(reader, kSensitiveScalarWidth)
-           && skip_optional(reader, kSensitiveScalarWidth) && read_skulls(reader, selection);
+           && read_selection_nonce(reader, selection) && read_skulls(reader, selection);
 }
 
 /**
@@ -216,5 +232,4 @@ bool parse(Reader& reader, ActivityManagerSelection& selection) noexcept {
            && skip_tail(reader);
 }
 
-} // namespace
-  // sunrise::middleware::bap::activity_host_manager::request::selection
+} // namespace sunrise::middleware::bap::activity_host_manager::request::selection

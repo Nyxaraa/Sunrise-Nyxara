@@ -37,9 +37,11 @@ constexpr std::size_t kMemberMachineLengthOffset = 112;
 constexpr std::size_t kMemberMachineOffset = 120;
 /** Join id, member field 3. */
 constexpr std::size_t kMemberJoinIdOffset = 136;
+/** Player count, member field 9. */
+constexpr std::size_t kMemberPlayerCountOffset = 164;
 /** Element count of the repeated player-slot field, member field 10. */
-constexpr std::size_t kMemberPlayerCountOffset = 168;
-/** See kMemberPlayerCountOffset. */
+constexpr std::size_t kMemberPlayerSlotCountOffset = 168;
+/** See kMemberPlayerSlotCountOffset. */
 constexpr std::size_t kMemberPlayerSlotOffset = 176;
 
 // --- Peer table -------------------------------------------------------------------------------
@@ -79,12 +81,25 @@ constexpr std::size_t kPlayerOwnedIndexOffset = 16;
 constexpr std::size_t kPlayerSequenceOffset = 20;
 /** The one-bit field, stored as a byte. */
 constexpr std::size_t kPlayerFlagOffset = 24;
-/** First of the two words the apply sets to all ones. */
+/** First of the two words the apply sets to all ones, before any profile group. */
 constexpr std::size_t kPlayerClearedFirstOffset = 28;
 /** Second of the two words the apply sets to all ones. */
 constexpr std::size_t kPlayerClearedSecondOffset = 264;
 /** Value both cleared words take. */
 constexpr std::uint64_t kPlayerCleared = 0xFFFFFFFF;
+
+// --- Profile group ----------------------------------------------------------------------------
+// A published profile overwrites both all-ones words. The kind lands on the first, and the
+// 136-byte delta that always follows the profile writes zeros over the second.
+
+/** The 32-bit value the profile group leads with. */
+constexpr std::size_t kPlayerProfileValueOffset = 0;
+/** The player kind, stored as a word over the first cleared word. */
+constexpr std::size_t kPlayerProfileKindOffset = 28;
+/** Account soid. The 232-byte block starts at `+32`, so this is its `+192` field. */
+constexpr std::size_t kPlayerAccountSoidOffset = 224;
+/** Character soid, the same field's second half. */
+constexpr std::size_t kPlayerCharacterSoidOffset = 232;
 
 /** Length the consumer requires of a member NetAddr. */
 constexpr std::uint64_t kAddressLength = 86;
@@ -93,8 +108,7 @@ constexpr std::uint64_t kMachineIdLength = 8;
 /** Player slots one member may own. */
 constexpr std::uint64_t kOwnedPlayerCount = 1;
 
-/** Starting value the three lookup3 accumulators share. It is a fixed literal, not length-derived.
- */
+/** Starting value the three lookup3 accumulators share. A fixed literal, not length-derived. */
 constexpr std::uint32_t kHashInitial = 0xDEAE2F4E;
 
 /** Bits in one byte. */
@@ -149,8 +163,10 @@ void build_session_state(const MembershipUpdate& body, SessionState& output) noe
             output, entry + kMemberMachineOffset, member.machineId, sizeof(std::uint64_t));
         write_integer(output, entry + kMemberJoinIdOffset, member.joinId, sizeof(std::uint64_t));
         if (member.ownsPlayerSlot) {
+            write_integer(
+                output, entry + kMemberPlayerCountOffset, kOwnedPlayerCount, sizeof(std::uint32_t));
             write_integer(output,
-                          entry + kMemberPlayerCountOffset,
+                          entry + kMemberPlayerSlotCountOffset,
                           kOwnedPlayerCount,
                           sizeof(kOwnedPlayerCount));
             write_integer(
@@ -188,10 +204,25 @@ void build_session_state(const MembershipUpdate& body, SessionState& output) noe
             output, entry + kPlayerSequenceOffset, player.addSequence, sizeof(std::uint32_t));
         write_integer(
             output, entry + kPlayerFlagOffset, player.flag ? 1U : 0U, sizeof(std::uint8_t));
+        if (!player.hasProfile) {
+            write_integer(
+                output, entry + kPlayerClearedFirstOffset, kPlayerCleared, sizeof(std::uint32_t));
+            write_integer(
+                output, entry + kPlayerClearedSecondOffset, kPlayerCleared, sizeof(std::uint32_t));
+            continue;
+        }
+        // Only the fields the published block marks present. Every other profile, delta and tail
+        // byte stays zero, which is what the cleared row already holds.
         write_integer(
-            output, entry + kPlayerClearedFirstOffset, kPlayerCleared, sizeof(std::uint32_t));
+            output, entry + kPlayerProfileValueOffset, player.profileValue, sizeof(std::uint32_t));
         write_integer(
-            output, entry + kPlayerClearedSecondOffset, kPlayerCleared, sizeof(std::uint32_t));
+            output, entry + kPlayerProfileKindOffset, player.profileKind, sizeof(std::uint32_t));
+        write_integer(
+            output, entry + kPlayerAccountSoidOffset, player.accountSoid, sizeof(std::uint64_t));
+        write_integer(output,
+                      entry + kPlayerCharacterSoidOffset,
+                      player.characterSoid,
+                      sizeof(std::uint64_t));
     }
     write_integer(output, kPlayerCountOffset, body.players.size(), sizeof(std::uint32_t));
     write_integer(output, kPlayerMaskOffset, playerMask, sizeof(std::uint32_t));

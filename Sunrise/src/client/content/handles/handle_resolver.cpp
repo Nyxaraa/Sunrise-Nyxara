@@ -128,9 +128,8 @@ bool resolve(const Source& source, std::uint32_t handle, std::uintptr_t& address
     const std::uint64_t extendedMask =
         static_cast<std::uint64_t>(static_cast<std::int64_t>(table.correctionMask));
     const std::uint64_t correction = record.correctionSource & extendedMask;
-    if (correction > recordAddress) {
-        return false;
-    }
+    // Match the native `sub rax, rcx`. With a -1 mask the correction is two's complement, so a
+    // large unsigned value must wrap forward rather than be refused as an underflow.
     address = recordAddress - static_cast<std::uintptr_t>(correction);
     return address != 0;
 }

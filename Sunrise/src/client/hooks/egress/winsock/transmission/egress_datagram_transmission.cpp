@@ -2,6 +2,7 @@
 
 #include "../../../../../core/logging/log.h"
 #include "../../internal.h"
+#include "../../policy/egress_policy_logging.h"
 #include "../../policy/policy.h"
 #include "../discovery/egress_discovery_responder.h"
 #include "replacements.h"
@@ -112,6 +113,10 @@ int WSAAPI send_bytes_to(SOCKET socket,
         }
     }
 
+    policy::log_send_target(policy::SocketOperation::send,
+                            destination,
+                            destinationLength,
+                            static_cast<std::size_t>(length));
     sockaddr_in redirected{};
     sockaddr* forwardedDestination = nullptr;
     int forwardedLength = 0;
@@ -154,6 +159,9 @@ int WSAAPI send_buffers_to(SOCKET socket,
         return succeeded ? 0 : SOCKET_ERROR;
     }
 
+    const std::size_t vectoredBytes = buffers != nullptr && bufferCount == 1 ? buffers[0].len : 0;
+    policy::log_send_target(
+        policy::SocketOperation::send, destination, destinationLength, vectoredBytes);
     sockaddr_in redirected{};
     sockaddr* forwardedDestination = nullptr;
     int forwardedLength = 0;

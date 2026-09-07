@@ -62,25 +62,36 @@ constexpr std::uint64_t kMissingAccountSoid = 0;
 
 } // namespace
 
+/** Reads the one supported svc-23 identity request. */
+bool request_identity(std::span<const std::byte> requestBody, std::uint64_t& identity) noexcept {
+    identity = 0;
+    if (requestBody.size() < RequestLayout::size
+        || encoding::read_u16_be(
+               requestBody.subspan<RequestLayout::entryCount, encoding::kU16Size>())
+               < kAnsweredEntryCount
+        || requestBody[RequestLayout::typeA] != kIdentityTypeA) {
+        return false;
+    }
+    // A zero identity is a real request: a host peer has no platform handle, and the client asks
+    // about it by zero. The route pairs it to the live region's host row.
+    identity =
+        encoding::read_u64_be(requestBody.subspan<RequestLayout::identity, encoding::kU64Size>());
+    return true;
+}
+
 /** Encodes the svc-24 answer to one svc-23 identity request. */
 bool encode_response(std::span<const std::byte> requestBody,
                      std::uint64_t accountSoid,
                      std::span<std::byte> output,
                      std::size_t& written) noexcept {
     written = 0;
-    if (requestBody.size() < RequestLayout::size || accountSoid == kMissingAccountSoid
-        || output.size() < ResponseLayout::size) {
-        return encode_empty(output, written);
-    }
-    const std::uint16_t entryCount =
-        encoding::read_u16_be(requestBody.subspan<RequestLayout::entryCount, encoding::kU16Size>());
-    if (entryCount < kAnsweredEntryCount || requestBody[RequestLayout::typeA] != kIdentityTypeA) {
+    std::uint64_t identity = 0;
+    if (accountSoid == kMissingAccountSoid || output.size() < ResponseLayout::size
+        || !request_identity(requestBody, identity)) {
         return encode_empty(output, written);
     }
 
     // The identity is echoed as-is, so no re-encoding of it can disagree with the request.
-    const std::uint64_t identity =
-        encoding::read_u64_be(requestBody.subspan<RequestLayout::identity, encoding::kU64Size>());
     encoding::write_u16_be(output.subspan<RequestLayout::entryCount, encoding::kU16Size>(),
                            kAnsweredEntryCount);
     output[RequestLayout::typeA] = kIdentityTypeA;

@@ -22,10 +22,8 @@ struct Request {
 
 /**
  * Parses the exact reflected opcode-903 descriptor, including both alignment layers.
- *
- * The native item identity can name either an instance or an uninstanced definition. State decides
- * which identity shapes it supports after this codec has proved the wire representation.
- *
+ * The item identity names either an instance or an uninstanced definition. State decides which
+ * shapes it supports once this codec has proved the wire representation.
  * @param message Parsed Web Service envelope.
  * @param request Receives the decoded target, socket lane, and plug definition.
  * @return True only for the complete canonical 18-byte request.

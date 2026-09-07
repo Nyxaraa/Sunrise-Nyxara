@@ -7,14 +7,15 @@
 
 namespace sunrise::client::network {
 
-/** 256 KiB caps the fixed storage. The Client's one-way BAP frames are large. */
-inline constexpr std::size_t kBapFrameCapacity = 256 * 1024;
+/** The largest svc8 frame is a 0x7D800-byte activity payload plus 49 wire bytes. */
+inline constexpr std::size_t kBapFrameCapacity = 0x7D800 + 49;
 
 /**
  * Fixed BAP connection slots shared by the transport and the Server.
- * The activity route opens a second link beside the primary one, so one slot is never enough.
+ * A crossing holds the old and the new activity link at once, so a lobby plus three activity
+ * links is reachable. Below that the accept is refused and the connect stalls.
  */
-inline constexpr std::size_t kBapConnectionCount = 4;
+inline constexpr std::size_t kBapConnectionCount = 8;
 
 /** HTTP request view passed from Client hooks to Server. Every span carries its size. */
 struct HttpRequest {

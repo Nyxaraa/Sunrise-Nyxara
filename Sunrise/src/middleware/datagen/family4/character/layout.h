@@ -26,7 +26,7 @@ inline constexpr std::size_t kNewItemFlagByteCount = 44;
 inline constexpr std::size_t kInstanceProgressWatermarkCapacity = kInventoryCapacity;
 /** The character progression bank reserves 127 fixed native rows. */
 inline constexpr std::size_t kProgressionCapacity = 127;
-/** 3 mirrored bytes carry the same preview-availability policy. */
+/** 3 preview policy bytes. TODO: source each separately once its own reader is known. */
 inline constexpr std::size_t kPreviewMirrorCount = 3;
 /** Race, gender, and class form the 3 authored identity values. */
 inline constexpr std::size_t kIdentityValueCount = 3;
@@ -34,16 +34,18 @@ inline constexpr std::size_t kIdentityValueCount = 3;
 inline constexpr std::size_t kFlagCapacity = 4096;
 /** The per-character objective bank reserves 768 signed values. */
 inline constexpr std::size_t kObjectiveValueCapacity = 768;
-/** The compact creation header occupies 36 bytes and stays 0 for an existing character. */
-inline constexpr std::size_t kCreationHeaderSize = 36;
-/** The next inventory serial is followed by 4 reserved alignment bytes. */
-inline constexpr std::size_t kInventorySerialPaddingSize = 4;
+/** The customisation header occupies 36 bytes. Zero selects row 0, not absence, in every lane. */
+inline constexpr std::size_t kCustomisationHeaderSize = 36;
+/** The inventory row count is followed by 4 reserved alignment bytes. */
+inline constexpr std::size_t kInventoryRowCountPaddingSize = 4;
 /** 4 opaque bytes precede the character inventory-change list. */
 inline constexpr std::size_t kInventoryChangeUnknownSize = 4;
 /** The character object carries at most 16 transient inventory-change records. */
 inline constexpr std::size_t kInventoryChangeRecordCapacity = 16;
-/** 52 reserved bytes separate the equipment summary from its validity gate. */
-inline constexpr std::size_t kSummaryGatePaddingSize = 52;
+/** 36 reserved bytes separate the equipment summary from the equipped-title row. */
+inline constexpr std::size_t kSummaryTitlePaddingSize = 36;
+/** 14 reserved bytes separate the equipped-title row from the inventory validity gate. */
+inline constexpr std::size_t kTitleGatePaddingSize = 14;
 /** 14 reserved bytes separate the two inventory validity gate fields. */
 inline constexpr std::size_t kGateStatePaddingSize = 14;
 /** 16 reserved bytes separate the second gate from seen-message storage. */
@@ -56,12 +58,22 @@ inline constexpr std::size_t kRosterDestinationPaddingSize = 176;
 inline constexpr std::size_t kProgressPreviewPaddingSize = 792;
 /** 5 reserved bytes align progression rows after the 3 preview mirrors. */
 inline constexpr std::size_t kPreviewProgressionPaddingSize = 5;
-/** The periodic reset record occupies 56 native bytes and starts empty. */
+/** The periodic reset record occupies 56 native bytes and repeats the family-three block. */
 inline constexpr std::size_t kPeriodicResetRecordSize = 56;
-/** 18,224 reserved bytes come before the acquired-state flags. */
-inline constexpr std::size_t kResetFlagsPaddingSize = 18224;
-/** 1,464 reserved bytes follow objective values. */
-inline constexpr std::size_t kValuesContentPaddingSize = 1464;
+/** The character item-stack table reserves 64 fixed native rows. */
+inline constexpr std::size_t kItemStackCapacity = 64;
+/** One native item-stack row occupies 200 bytes. */
+inline constexpr std::size_t kItemStackRowSize = 200;
+/** The bytes after the row selector carry quantity, mode, and identity leaves. */
+inline constexpr std::size_t kItemStackRowReservedSize = kItemStackRowSize - sizeof(std::int16_t);
+/** 4 reserved bytes align the item-stack rows after the next-sequence value. */
+inline constexpr std::size_t kItemStackHeaderPaddingSize = 4;
+/** 5,416 reserved bytes separate the item-stack rows from the acquired-state flags. */
+inline constexpr std::size_t kItemStackTailPaddingSize = 5416;
+/** 1,020 reserved bytes separate objective values from the previous-activity index. */
+inline constexpr std::size_t kValuesActivityPaddingSize = 1020;
+/** 438 reserved bytes separate the travelling-activity index from the content-bypass byte. */
+inline constexpr std::size_t kActivityTailPaddingSize = 438;
 /** 591 reserved bytes follow the content-bypass policy byte. */
 inline constexpr std::size_t kContentTailPaddingSize = 591;
 /** The runtime Family-4 character schema owns exactly 46,928 bytes. */
@@ -76,6 +88,8 @@ inline constexpr std::size_t kSummaryDefinitionWordCount = 2;
 inline constexpr std::size_t kSummaryArrayCount = 2;
 /** Every set bit is the native absent definition index in an equipment-summary slot. */
 inline constexpr std::uint16_t kEmptySummaryDefinitionIndex = 0xFFFF;
+/** The Seals screen compares its record row against this field. */
+inline constexpr std::size_t kEquippedTitleRecordIndexOffset = 11'992;
 
 #pragma pack(push, 1)
 
@@ -124,6 +138,13 @@ struct InventoryChangeRecord {
     std::uint16_t flags{};
 };
 
+/** One fixed item-stack row. Only the leading selector carries a native empty sentinel. */
+struct ItemStackRow {
+    /** -1 marks the row unused. 0 is a real selector, so it cannot mean empty. */
+    std::int16_t selector{};
+    std::array<std::byte, kItemStackRowReservedSize> reserved{};
+};
+
 /** Header and fixed record bank occupying bytes 0x2BFC through 0x2CBF. */
 struct InventoryChangeList {
     /** Ring slot the native producer will write next. */
@@ -137,16 +158,23 @@ struct InventoryChangeList {
 struct Object {
     std::uint64_t characterSoid{};
     Identity identity{};
-    std::array<std::byte, kCreationHeaderSize> creationHeader{};
-    /** Next serial assigned to a newly mutated inventory row; this is not an occupancy count. */
-    std::uint32_t nextInventorySerial{};
-    std::array<std::byte, kInventorySerialPaddingSize> inventorySerialPadding{};
+    /** Same header and render consumer as the family-three character record. */
+    std::array<std::byte, kCustomisationHeaderSize> customisationHeader{};
+    /**
+     * Length of the inventory prefix the native render walk covers. Rows are placed inside
+     * per-bucket ranges, so this is the highest occupied row plus one, not the item count.
+     */
+    std::uint32_t inventoryRowCount{};
+    std::array<std::byte, kInventoryRowCountPaddingSize> inventoryRowCountPadding{};
     std::array<inventory::layout::Entry, kInventoryCapacity> inventoryItems{};
     std::array<std::byte, kInventoryChangeUnknownSize> inventoryChangeUnknown{};
     InventoryChangeList inventoryChanges{};
     std::array<std::uint64_t, kEquipmentCapacity> equippedInstanceSoids{};
     EquipmentSummary equipmentSummary{};
-    std::array<std::byte, kSummaryGatePaddingSize> summaryGatePadding{};
+    std::array<std::byte, kSummaryTitlePaddingSize> summaryTitlePadding{};
+    /** Native DestinyRecordDefinition row of the equipped title, or 0xFFFF. */
+    std::uint16_t equippedTitleRecordIndex{kEmptySummaryDefinitionIndex};
+    std::array<std::byte, kTitleGatePaddingSize> titleGatePadding{};
     /** 0 is a valid definition index and keeps the inventory-present gate open. */
     std::uint16_t inventoryGateDefinitionIndex{};
     std::array<std::byte, kGateStatePaddingSize> gateStatePadding{};
@@ -166,11 +194,33 @@ struct Object {
     std::array<std::uint8_t, kPreviewMirrorCount> previewMirrors{};
     std::array<std::byte, kPreviewProgressionPaddingSize> previewProgressionPadding{};
     std::array<progression::layout::Entry, kProgressionCapacity> progressions{};
+    /** Carries the daily and weekly reset stamps; the encoder writes it as a PeriodicReset. */
     std::array<std::byte, kPeriodicResetRecordSize> periodicResetRecord{};
-    std::array<std::byte, kResetFlagsPaddingSize> resetFlagsPadding{};
+    /** Sequence handed to the next created item stack; 0 is correct for a new character. */
+    std::int32_t nextItemStackSequence{};
+    std::array<std::byte, kItemStackHeaderPaddingSize> itemStackHeaderPadding{};
+    std::array<ItemStackRow, kItemStackCapacity> itemStacks{};
+    std::array<std::byte, kItemStackTailPaddingSize> itemStackTailPadding{};
     std::array<std::byte, kFlagCapacity> acquiredFlags{};
     std::array<std::int32_t, kObjectiveValueCapacity> objectiveValues{};
-    std::array<std::byte, kValuesContentPaddingSize> valuesContentPadding{};
+    std::array<std::byte, kValuesActivityPaddingSize> valuesActivityPadding{};
+    /**
+     * The activity the character was in before this session. The client seeds the session's
+     * previous-activity parameter from its destination. 0xFFFF means none; 0 is the orbit.
+     */
+    std::uint16_t previousActivityIndex{};
+    /**
+     * Overrides the previous activity as the transition's from side when not 0xFFFF.
+     * 0 is the orbit, not absent.
+     */
+    std::uint16_t activityOverrideIndex{};
+    /**
+     * The activity whose orbit bubble the character is in. The client resolves it to an orbit
+     * slice set and compares that against the launched activity's, and a match selects the
+     * arrival fly-in. It reads this once, before the launch, so it must already be published.
+     */
+    std::uint16_t currentActivityIndex{};
+    std::array<std::byte, kActivityTailPaddingSize> activityTailPadding{};
     /** This policy byte is effective only with the matching family-five gate arm. */
     std::uint8_t contentBypass{};
     std::array<std::byte, kContentTailPaddingSize> contentTailPadding{};
@@ -196,7 +246,9 @@ static_assert(sizeof(InventoryChangeList)
               == 2 * sizeof(std::uint16_t)
                      + kInventoryChangeRecordCapacity * sizeof(InventoryChangeRecord));
 static_assert(offsetof(InventoryChangeList, records) == 2 * sizeof(std::uint16_t));
+static_assert(sizeof(ItemStackRow) == kItemStackRowSize);
 static_assert(sizeof(Object) == kObjectSize);
+static_assert(offsetof(Object, equippedTitleRecordIndex) == kEquippedTitleRecordIndexOffset);
 static_assert(std::is_trivially_copyable_v<Object>);
 
 } // namespace sunrise::middleware::datagen::family4::character::layout

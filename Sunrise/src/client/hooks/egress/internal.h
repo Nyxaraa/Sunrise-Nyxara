@@ -47,7 +47,6 @@ enum class HookSlot : std::size_t {
 /** Fixed handle count covers every required and OS-optional egress entry point. */
 inline constexpr std::size_t kHookCount = static_cast<std::size_t>(HookSlot::count);
 
-extern SRWLOCK g_lock;
 extern std::array<hooking::detour::Handle, kHookCount> g_handles;
 
 /**

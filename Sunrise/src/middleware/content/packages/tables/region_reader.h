@@ -22,9 +22,11 @@ struct RegionName {
 };
 
 /**
- * Converts a bubble ordinal to its region index.
+ * Converts a bubble ordinal to its first region index.
+ * A bubble owns a contiguous run of slice sets starting here, one per authored state, so a later
+ * state of the same bubble is this value plus its ordinal.
  * @param bubbleIndex Bubble ordinal inside its scenario.
- * @return The region index the client uses for that bubble.
+ * @return The region index of that bubble's first state.
  */
 [[nodiscard]] constexpr std::uint32_t region_index(std::uint32_t bubbleIndex) noexcept {
     return bubbleIndex * kSliceSetIndexFactor;

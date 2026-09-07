@@ -6,6 +6,8 @@
 #include <d3d11.h>
 #include <dxgi.h>
 
+#include "../textures/graphics_texture_upload.h"
+
 namespace sunrise::client::hooks::graphics::renderer {
 
 /** The SDK objects we own and the started presentation layers, for one swap chain. */
@@ -14,6 +16,8 @@ struct Resources {
     ID3D11Device* device{};
     ID3D11DeviceContext* context{};
     ID3D11RenderTargetView* renderTarget{};
+    /** Bundled logo sheet, uploaded on this device for the interface to draw. */
+    textures::Uploaded logoSheet{};
     HWND window{};
     bool layoutInitialized{};
     bool win32BackendInitialized{};

@@ -18,10 +18,10 @@ struct PatchEpoch final {
 };
 
 /**
- * Parses the fixed 2-field big-endian patch-epoch prefix.
- * @param input Type-52 payload holding both fixed fields.
+ * Parses the complete fixed 2-field big-endian patch-epoch body.
+ * @param input Type-52 payload holding exactly both fixed fields.
  * @param epoch Cleared first. Filled in only on success.
- * @return True when the payload holds the whole 16-byte prefix.
+ * @return True only when the payload is exactly 16 bytes.
  */
 [[nodiscard]] bool parse_patch_epoch(std::span<const std::byte> input, PatchEpoch& epoch) noexcept;
 

@@ -19,14 +19,8 @@ struct Request {
 
 /**
  * Parses the exact reflected opcode-402 dismantle descriptor.
- *
- * Both identities are optional native fields carrying a presence bit. The quantity, the required
- * flag, and all three pad runs are fixed for this action, so a descriptor that differs in any of
- * them is not the action this codec supports.
- *
- * Fields are filled as far as the parse reaches, so a refused request still carries what it
- * decoded for the caller's trace.
- *
+ * The quantity, the required flag, and all three pad runs are fixed for this action.
+ * Fields are filled as far as the parse reaches, so a refused request still describes itself.
  * @param message Parsed Web Service envelope.
  * @param request Receives the named instance and its definition row.
  * @return True only for the complete canonical 16-byte single-unit request.

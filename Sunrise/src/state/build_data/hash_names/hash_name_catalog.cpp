@@ -1,13 +1,15 @@
 #include "hash_name_catalog.h"
 
 #include <algorithm>
+#include <shared_mutex>
 
 #include "../table.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::state::build_data::hash_names {
 namespace {
 
-Lock g_lock;
+core::threading::SrwLock g_lock;
 Table<Name, kNameCapacity> g_names;
 
 /** @return True when the name is a valid identifier and fits its storage. */
@@ -30,7 +32,7 @@ Table<Name, kNameCapacity> g_names;
 
 /** Clears every resolved bubble name under the catalog lock. */
 void clear() noexcept {
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_names.clear();
 }
 
@@ -53,14 +55,14 @@ bool replace(std::span<const Name> names) noexcept {
     if (!valid(names)) {
         return false;
     }
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     return g_names.replace(names);
 }
 
 /** Finds one bubble name by its hash. */
 bool find(std::uint32_t hash, Name& name) noexcept {
     name = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const Name> rows = g_names.rows();
     const auto found =
         std::lower_bound(rows.begin(), rows.end(), hash, [](const Name& row, std::uint32_t key) {
@@ -75,13 +77,13 @@ bool find(std::uint32_t hash, Name& name) noexcept {
 
 /** Copies every row in ascending hash order. */
 bool snapshot(std::span<Name> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_names.snapshot(output, count);
 }
 
 /** @return Number of resolved names, read under the lock. */
 std::size_t count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_names.count();
 }
 

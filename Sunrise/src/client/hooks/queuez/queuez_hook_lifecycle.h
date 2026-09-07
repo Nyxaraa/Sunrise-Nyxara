@@ -2,15 +2,10 @@
 
 namespace sunrise::client::hooks::queuez {
 
-/**
- * Attaches the family-zero source-list seed. The sweep declares one record per source key, so a
- * list the producer left empty leaves the client with no family-zero record, and no subscribe for
- * the object push to answer.
- * @return True when every fix attached.
- */
+/** Attaches the queuez null-payload guard. @return True when every fix attached. */
 [[nodiscard]] bool install() noexcept;
 
-/** Detaches the family-zero source-list seed. */
+/** Detaches the queuez null-payload guard. */
 void uninstall() noexcept;
 
 /** @return True while at least one fix is attached. */

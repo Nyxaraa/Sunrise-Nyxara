@@ -8,6 +8,7 @@
 #include "../activity/definition.h"
 #include "../investment/investment.h"
 #include "../matchmaking/definition.h"
+#include "../steam/definition.h"
 
 namespace sunrise::state {
 
@@ -50,6 +51,7 @@ struct State {
     activity::ActivityState activity;
     InvestmentState investment;
     matchmaking::MatchmakingState matchmaking;
+    steam::SteamState steam;
 };
 
 } // namespace sunrise::state

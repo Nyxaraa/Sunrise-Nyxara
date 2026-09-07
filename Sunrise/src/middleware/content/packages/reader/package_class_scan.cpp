@@ -110,7 +110,7 @@ using SeenSet = std::array<std::uint64_t, kSeenWords>;
             const std::uint32_t tag =
                 layout::kTagBase + (static_cast<std::uint32_t>(packageId) << layout::kTagEntryBits)
                 + entryIndex;
-            if (!visitor(context, ClassEntry{tag, packageFamily})) {
+            if (!visitor(context, ClassEntry{tag, packageFamily, patchIndex})) {
                 return false;
             }
         }
@@ -119,13 +119,13 @@ using SeenSet = std::array<std::uint64_t, kSeenWords>;
     return true;
 }
 
-/** Legacy tag-only visitor and its caller context. */
+/** Adapts a tag-only visitor to the detailed entry callback. */
 struct LegacyVisitor {
     ClassVisitor visitor{};
     void* context{};
 };
 
-/** @param context Legacy visitor. @param entry Detailed match. @return Visitor outcome. */
+/** @param context Tag-only visitor. @param entry Detailed match. @return Visitor outcome. */
 [[nodiscard]] bool visit_legacy(void* context, const ClassEntry& entry) noexcept {
     const auto& legacy = *static_cast<const LegacyVisitor*>(context);
     return legacy.visitor(legacy.context, entry.tag);

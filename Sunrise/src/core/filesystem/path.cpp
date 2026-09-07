@@ -63,6 +63,40 @@ bool artifact_directory(void* module, Buffer& output) noexcept {
     return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
+/** Resolves one Sunrise-owned file beside this DLL. */
+bool artifact_file(std::wstring_view relative, Buffer& output) noexcept {
+    HMODULE self{};
+    // From this function's own address, so it names the DLL rather than the host executable. The
+    // two differ: the game sits in the install root and this module in `bin\x64`.
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                               | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&artifact_file),
+                           &self)
+            == FALSE
+        || self == nullptr) {
+        return false;
+    }
+    if (!artifact_directory(self, output)) {
+        return false;
+    }
+    // Create each directory named before the file, so `exports\x.txt` works on a fresh install.
+    std::size_t start = 0;
+    for (std::size_t index = 0; index < relative.size(); ++index) {
+        if (relative[index] != L'\\') {
+            continue;
+        }
+        if (!append(output, L"\\") || !append(output, relative.substr(start, index - start))) {
+            return false;
+        }
+        if (CreateDirectoryW(output.chars.data(), nullptr) == FALSE
+            && GetLastError() != ERROR_ALREADY_EXISTS) {
+            return false;
+        }
+        start = index + 1;
+    }
+    return append(output, L"\\") && append(output, relative.substr(start));
+}
+
 /** Appends a path suffix without exceeding fixed storage. */
 bool append(Buffer& path, std::wstring_view suffix) noexcept {
     if (path.length + suffix.size() >= path.chars.size()) {

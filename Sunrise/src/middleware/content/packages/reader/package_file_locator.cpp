@@ -108,6 +108,46 @@ bool parse_leaf(std::wstring_view fileName,
     return true;
 }
 
+namespace {
+
+/**
+ * Reports the table row that holds or may hold one package id.
+ * The table is sized on first use and never erases a row, so a forward probe finds every held id.
+ * @param scratch Reader whose location table is used.
+ * @param packageId Package id being resolved.
+ * @return The row, or null when the table cannot be sized or holds no free row.
+ */
+[[nodiscard]] PackageLocationSlot* location_slot(Scratch& scratch,
+                                                 std::uint16_t packageId) noexcept {
+    if (scratch.packageLocations.empty()) {
+        try {
+            scratch.packageLocations.resize(kPackageLocationSlots);
+        } catch (...) {
+            scratch.packageLocations.clear();
+            return nullptr;
+        }
+    }
+    const std::size_t rows = scratch.packageLocations.size();
+    std::size_t probe = static_cast<std::size_t>(packageId) % rows;
+    for (std::size_t step = 0; step < rows; ++step) {
+        PackageLocationSlot& slot = scratch.packageLocations[probe];
+        if (!slot.held || slot.packageId == packageId) {
+            return &slot;
+        }
+        probe = probe + 1U == rows ? 0U : probe + 1U;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+/** @param scratch Reader whose held package locations are dropped. */
+void release_locations(Scratch& scratch) noexcept {
+    for (PackageLocationSlot& slot : scratch.packageLocations) {
+        slot.held = false;
+    }
+}
+
 /** Finds the highest-patch file for one package id. */
 bool find_latest(std::wstring_view directory,
                  std::uint16_t packageId,
@@ -151,6 +191,49 @@ bool find_latest(std::wstring_view directory,
     }
     locator_cache::mark_complete(directoryKey);
     return locator_cache::find(directoryKey, packageId, stem, patchIndex);
+}
+
+/** Resolves one package once per reader and source directory. */
+bool resolve_latest(Scratch& scratch,
+                    std::wstring_view directory,
+                    std::uint16_t packageId,
+                    const PackageLocation*& output) noexcept {
+    output = nullptr;
+    // The key is compared by content. A borrowed pointer identity could alias a freed and
+    // reallocated directory string and serve stale locations.
+    const bool sameDirectory =
+        directory.size() != 0 && directory.size() == scratch.packageDirectoryLength
+        && std::equal(directory.begin(), directory.end(), scratch.packageDirectory.chars.begin());
+    if (!sameDirectory) {
+        release_locations(scratch);
+        scratch.packageDirectory = {};
+        scratch.packageDirectoryLength = 0;
+        if (directory.size() < scratch.packageDirectory.chars.size()) {
+            std::copy(directory.begin(), directory.end(), scratch.packageDirectory.chars.begin());
+            scratch.packageDirectoryLength = directory.size();
+        }
+        scratch.packageLocationFallback = {};
+    }
+    PackageLocationSlot* const slot = location_slot(scratch, packageId);
+    if (slot != nullptr && slot->held) {
+        ++scratch.packageLocationHits;
+        output = slot->location.found ? &slot->location : nullptr;
+        return slot->location.found;
+    }
+
+    ++scratch.packageLocationMisses;
+    PackageLocation pending{};
+    pending.found = find_latest(directory, packageId, pending.stem, pending.patchIndex)
+                    && build_path(pending.stem, pending.patchIndex, pending.latestPath);
+    // A full or unallocated table keeps the result in the fallback, so the caller still gets it.
+    PackageLocation& kept = slot != nullptr ? slot->location : scratch.packageLocationFallback;
+    kept = pending;
+    if (slot != nullptr) {
+        slot->packageId = packageId;
+        slot->held = true;
+    }
+    output = kept.found ? &kept : nullptr;
+    return kept.found;
 }
 
 /** Builds the full path of one patch of a package stem. */

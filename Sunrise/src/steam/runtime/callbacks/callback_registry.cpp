@@ -32,9 +32,6 @@ std::size_t g_eventCount{};
 
 /** Updates the registered bit in Steam-owned callback storage. */
 void set_registration(void* callback, bool registered) noexcept {
-    if (callback == nullptr) {
-        return;
-    }
     auto* bytes = static_cast<std::byte*>(callback);
     std::uint8_t flags{};
     std::memcpy(&flags, bytes + kCallbackFlagsOffset, sizeof(flags));
@@ -62,26 +59,24 @@ void register_callback(void* callback, int callbackId) noexcept {
         return;
     }
     AcquireSRWLockExclusive(&g_lock);
-    CallbackEntry* freeEntry = nullptr;
+    // Re-registering the same object reuses its slot; otherwise the first free slot takes it.
+    CallbackEntry* target = nullptr;
     for (auto& entry : g_callbacks) {
         if (entry.callback == callback) {
-            entry.callbackId = callbackId;
-            set_callback_id(callback, callbackId);
-            set_registration(callback, true);
-            ReleaseSRWLockExclusive(&g_lock);
-            return;
+            target = &entry;
+            break;
         }
-        if (freeEntry == nullptr && entry.callback == nullptr) {
-            freeEntry = &entry;
+        if (target == nullptr && entry.callback == nullptr) {
+            target = &entry;
         }
     }
-    if (freeEntry != nullptr) {
-        *freeEntry = CallbackEntry{callback, callbackId};
+    if (target != nullptr) {
+        *target = CallbackEntry{callback, callbackId};
         set_callback_id(callback, callbackId);
         set_registration(callback, true);
     }
     ReleaseSRWLockExclusive(&g_lock);
-    if (freeEntry == nullptr) {
+    if (target == nullptr) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::error,
                          "ev=callback_register result=full");

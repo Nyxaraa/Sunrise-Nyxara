@@ -20,24 +20,11 @@ namespace {
 namespace wire = middleware::gameplay::association;
 namespace srp = middleware::gameplay::association::srp;
 
-/** Bit position of the outer marker inside the first byte. */
-constexpr unsigned kMarkerShift = 7;
-/** Shortest datagram that can hold a marker and its clear trailer. */
-constexpr std::size_t kMinimumDatagram = 3;
+/** Shortest datagram that can hold its association words and clear trailer. */
+constexpr std::size_t kMinimumDatagram = sizeof(std::uint32_t) * 2U + 1U + wire::kTrailerSize;
 
 SRWLOCK g_lock{SRWLOCK_INIT};
 state::gameplay::GameplayState g_state;
-
-/** @return True when the datagram's outer marker selects connection control. */
-[[nodiscard]] bool is_control(std::span<const std::byte> datagram) noexcept {
-    return (std::to_integer<unsigned>(datagram[0]) >> kMarkerShift) != 0;
-}
-
-/** @return True when both endpoints name the same address and port. */
-[[nodiscard]] bool same_endpoint(const state::gameplay::Endpoint& left,
-                                 const state::gameplay::Endpoint& right) noexcept {
-    return left.address == right.address && left.port == right.port;
-}
 
 /** Clears one association and wipes its key material. Callers already hold the lock. */
 void drop_locked(state::gameplay::Association& association) noexcept {
@@ -58,7 +45,7 @@ void drop_locked(state::gameplay::Association& association) noexcept {
 find_locked(const state::gameplay::Endpoint& from) noexcept {
     for (state::gameplay::Association& association : g_state.associations) {
         if (association.stage != state::gameplay::AssociationStage::absent
-            && same_endpoint(association.endpoint, from)) {
+            && association.endpoint == from) {
             return &association;
         }
     }
@@ -96,6 +83,7 @@ find_locked(const state::gameplay::Endpoint& from) noexcept {
     response.opcode = wire::Opcode::keyExchangeResponse;
     // The response echoes the offer's word B so the initiator can match it to its attempt.
     response.responseValue = offer.wordB;
+    response.trailer = offer.trailer;
     response.hasSignOnBlob = false;
     response.publicValue = exchange.serverPublic;
     if (!middleware::crypto::random::fill(response.networkId)
@@ -104,27 +92,18 @@ find_locked(const state::gameplay::Endpoint& from) noexcept {
         || !middleware::crypto::random::fill(response.seed)) {
         return false;
     }
-    std::array<std::byte, sizeof(std::uint32_t) * 2> words{};
-    if (!middleware::crypto::random::fill(words)) {
-        return false;
-    }
     context = {};
     for (std::size_t index = 0; index < context.key.size(); ++index) {
         context.key[index] = exchange.derivedKey[index];
     }
     context.outboundBase = response.seed;
     context.inboundBase = offer.seed;
-    for (std::size_t index = 0; index < sizeof(std::uint32_t); ++index) {
-        // The random bytes are assembled low byte first, matching the raw word encoding.
-        constexpr unsigned kByteBits = 8;
-        const unsigned shift = static_cast<unsigned>(index) * kByteBits;
-        context.outboundWordA |= std::to_integer<std::uint32_t>(words[index]) << shift;
-        context.outboundWordB |=
-            std::to_integer<std::uint32_t>(words[index + sizeof(std::uint32_t)]) << shift;
-    }
+    context.addressTrailer = offer.trailer;
+    context.outboundWordA = offer.wordA;
+    context.outboundWordB = offer.wordB;
     context.installed = true;
-    response.wordA = context.outboundWordA;
-    response.wordB = context.outboundWordB;
+    response.wordA = offer.wordA;
+    response.wordB = offer.wordB;
     return true;
 }
 
@@ -193,7 +172,7 @@ void accept_offer(const state::gameplay::Endpoint& from,
 
     std::array<std::byte, wire::kControlCapacity> datagram{};
     std::size_t size = 0;
-    if (!wire::encode(response, from.port, datagram, size)
+    if (!wire::encode(response, datagram, size)
         || !endpoint::send_to(from, {datagram.data(), size})) {
         report(core::log::Level::warn, "ev=gameplay stage=response result=fail reason=send");
         return;
@@ -216,14 +195,15 @@ void accept_protected(const state::gameplay::Endpoint& from,
     state::gameplay::ProtectedContext context{};
     AcquireSRWLockShared(&g_lock);
     const state::gameplay::Association* association = find_locked(from);
-    const bool established =
+    const bool active =
         association != nullptr
-        && association->stage == state::gameplay::AssociationStage::established;
-    if (established) {
+        && (association->stage == state::gameplay::AssociationStage::pending
+            || association->stage == state::gameplay::AssociationStage::established);
+    if (active) {
         context = association->protection;
     }
     ReleaseSRWLockShared(&g_lock);
-    if (!established) {
+    if (!active) {
         return;
     }
 
@@ -238,12 +218,15 @@ void accept_protected(const state::gameplay::Endpoint& from,
     bool fresh = false;
     AcquireSRWLockExclusive(&g_lock);
     state::gameplay::Association* target = find_locked(from);
-    if (target != nullptr && target->stage == state::gameplay::AssociationStage::established) {
+    if (target != nullptr
+        && (target->stage == state::gameplay::AssociationStage::pending
+            || target->stage == state::gameplay::AssociationStage::established)) {
         // Replay policy: word A must strictly increase.
         fresh = !target->acceptedAny || wordA > target->acceptedWordA;
         if (fresh) {
             target->acceptedWordA = wordA;
             target->acceptedAny = true;
+            target->stage = state::gameplay::AssociationStage::established;
             target->lastTick = now;
         }
     }
@@ -264,12 +247,23 @@ void route(const state::gameplay::Endpoint& from,
     if (datagram.size() < kMinimumDatagram) {
         return;
     }
-    if (!is_control(datagram)) {
+    AcquireSRWLockShared(&g_lock);
+    const state::gameplay::Association* current = find_locked(from);
+    const bool established =
+        current != nullptr && current->stage == state::gameplay::AssociationStage::established;
+    const bool pending =
+        current != nullptr && current->stage == state::gameplay::AssociationStage::pending;
+    ReleaseSRWLockShared(&g_lock);
+    if (established) {
         accept_protected(from, datagram, now);
         return;
     }
     wire::ControlPacket packet{};
     if (!wire::decode(datagram, packet)) {
+        if (pending) {
+            accept_protected(from, datagram, now);
+            return;
+        }
         report(core::log::Level::debug, "ev=gameplay stage=control result=drop reason=decode");
         return;
     }
@@ -292,7 +286,7 @@ bool send_payload(const state::gameplay::Endpoint& to,
     // Sealing runs under the lock because it advances the association's own send word.
     const bool sealed = association != nullptr
                         && association->stage == state::gameplay::AssociationStage::established
-                        && wire::seal(association->protection, payload, to.port, datagram, size);
+                        && wire::seal(association->protection, payload, datagram, size);
     ReleaseSRWLockExclusive(&g_lock);
     return sealed && endpoint::send_to(to, {datagram.data(), size});
 }

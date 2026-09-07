@@ -1,8 +1,10 @@
 #include "account_encoder.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <limits>
+#include <span>
 
 #include "../../../../state/build_data/runtime.h"
 #include "../../../../state/unlocks/unlocks_runtime.h"
@@ -23,20 +25,10 @@ constexpr std::byte kSeenMessageByte{0xFF};
 /** A native inventory bucket id is 1 byte, so this covers every bucket. */
 constexpr std::size_t kBucketIdentityCapacity = 256;
 
-/**
- * Places one authored profile item in the slot run its inventory bucket owns.
- * The slot is not authored: the bucket descriptor names the first slot of its run, and items
- * sharing a bucket take consecutive slots in configuration order.
- * @param item Authored account-wide item.
- * @param taken Slots already claimed inside each bucket, indexed by bucket id.
- * @param rows Profile inventory rows.
- * @return True when the item resolves to a free profile slot.
- */
+/** Places one profile item in the next free row of its inventory bucket. */
 [[nodiscard]] bool place_profile_item(const state::account::inventory::ProfileItem& item,
                                       std::array<std::uint16_t, kBucketIdentityCapacity>& taken,
                                       std::span<inventory::layout::Entry> rows) noexcept {
-    // The dense item table already carries the bucket, so a profile item needs no detail record.
-    // Only equipped items and their plugs have one.
     state::build_data::items::Definition definition{};
     state::build_data::items::details::Definition detail{};
     state::build_data::inventory::buckets::Descriptor bucket{};
@@ -75,7 +67,7 @@ constexpr std::size_t kBucketIdentityCapacity = 256;
 
 } // namespace
 
-/** Encodes a sentinel-correct account object from authored State. */
+/** Encodes a sentinel-correct account object from live State. */
 bool encode(const state::AccountState& state, std::span<std::byte> output) noexcept {
     if (state.primarySoid == 0 || !state::account::valid(state)
         || output.size() < layout::kMinimumSize) {
@@ -85,16 +77,17 @@ bool encode(const state::AccountState& state, std::span<std::byte> output) noexc
     layout::Object object{};
     object.accountSoid = state.primarySoid;
     object.selectedCharacterSoid = state::account::selected_character_soid(state);
+    object.profileSetupCompleted = state.profileSetupCompleted ? 1U : 0U;
     if (!roster::initialize(state, object.roster)
         || !preferences::encode(state.settings, object.preferences, object.bindings)) {
         return false;
     }
 
-    // Acquired flags and objective progress are authored policy, published once per process.
     const state::unlocks::Table& unlocks = state::unlocks::get();
     object.acquiredFlags = unlocks.accountFlags;
     object.profileUnlockFlags = unlocks.profileFlags;
     object.objectiveValues = unlocks.objectiveValues;
+
     for (layout::CharacterUnlockBlock& block : object.characterUnlocks) {
         block.flags = unlocks.characterFlags;
     }
@@ -119,8 +112,7 @@ bool encode(const state::AccountState& state, std::span<std::byte> output) noexc
     }
     object.profileItemCount = static_cast<std::uint32_t>(state.profileItemCount);
 
-    // Commit only after every fallible conversion succeeds so callers never receive a partial
-    // account object.
+    // Publish only after every fallible conversion succeeds.
     std::fill(output.begin(), output.end(), std::byte{});
     std::memcpy(output.data(), &object, sizeof object);
     return true;

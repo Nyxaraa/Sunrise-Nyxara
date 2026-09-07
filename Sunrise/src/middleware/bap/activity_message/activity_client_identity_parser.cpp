@@ -40,9 +40,7 @@ constexpr std::uint8_t kPaddingBitCount = 6;
 /** Parses the fixed client-identity prefix into logical signed and identity fields. */
 bool parse_client_identity(std::span<const std::byte> input, ClientIdentity& identity) noexcept {
     identity = {};
-    // The bound is only what the reads below need. An exact length is the client's
-    // business, not a rule to enforce here.
-    if (input.size() < kEncodedSize) {
+    if (input.size() != kEncodedSize) {
         return false;
     }
 
@@ -57,8 +55,9 @@ bool parse_client_identity(std::span<const std::byte> input, ClientIdentity& ide
         || !reader.read(64, parsed.field6) || !reader.read(kPaddingBitCount, padding)) {
         return false;
     }
-    // The padding value and any trailing bits are the client's business. Reading them is enough.
-    (void)padding;
+    if (padding != 0 || reader.remaining_bits() != 0) {
+        return false;
+    }
 
     const auto field1Stored = static_cast<std::uint32_t>(field1Wire) - kField1Bias;
     const auto field2Stored = static_cast<std::uint32_t>(field2Wire) - kField2Bias;

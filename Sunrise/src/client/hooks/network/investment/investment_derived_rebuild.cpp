@@ -48,21 +48,19 @@ std::array<hooking::detour::Handle, 2> g_handles{};
 std::atomic<Freshness> g_originalFreshness{nullptr};
 std::atomic<Family4Lookup> g_originalFamily4Lookup{nullptr};
 std::atomic_bool g_rebuildArmed{false};
-std::atomic_bool g_reportedRebuild{false};
-std::atomic_bool g_reportedFamily4{false};
+std::atomic<void*> g_committedFamily4{nullptr};
 
 /** @return True while either primary rebuild detour is attached. */
 [[nodiscard]] bool any_primary_attached() noexcept {
     return g_handles[kFreshnessHandle].attached || g_handles[kFamily4Handle].attached;
 }
 
-/** Clears call targets and the once-per-lifecycle log flags after full detach. */
+/** Clears call targets and the pending arm after full detach. */
 void clear_runtime() noexcept {
     g_originalFreshness.store(nullptr, std::memory_order_release);
     g_originalFamily4Lookup.store(nullptr, std::memory_order_release);
     g_rebuildArmed.store(false, std::memory_order_release);
-    g_reportedRebuild.store(false, std::memory_order_release);
-    g_reportedFamily4.store(false, std::memory_order_release);
+    g_committedFamily4.store(nullptr, std::memory_order_release);
 }
 
 /**
@@ -71,31 +69,36 @@ void clear_runtime() noexcept {
  * @return Stale once while armed, otherwise the native verdict.
  */
 __declspec(noinline) char __fastcall freshness(void* accessor) noexcept {
+    const Freshness original = g_originalFreshness.load(std::memory_order_acquire);
+    // The native verdict runs the Family-4 lookup that arms the first rebuild, so call it before
+    // consuming the arm.
+    const char nativeVerdict = original != nullptr ? original(accessor) : kStale;
     if (g_rebuildArmed.exchange(false, std::memory_order_acq_rel)) {
-        if (!g_reportedRebuild.exchange(true, std::memory_order_relaxed)) {
-            core::log::write(core::log::Channel::client,
-                             core::log::Level::info,
-                             "ev=investment stage=derived result=rebuilt");
-        }
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::debug,
+                         "ev=investment stage=derived result=rebuilt");
         return kStale;
     }
-    const Freshness original = g_originalFreshness.load(std::memory_order_acquire);
-    return original != nullptr ? original(accessor) : kStale;
+    return nativeVerdict;
 }
 
 /**
- * Arms a rebuild when the state-three lookup first returns a real family-four object.
+ * Arms a rebuild when the state-three lookup returns a different committed Family-4 object.
+ * Arm on identity change, never on nonnull: the freshness verdict runs this lookup itself.
  * @param key Borrowed account key.
  * @return The native lookup result, unchanged.
  */
 __declspec(noinline) void* __fastcall family4_lookup(std::uint64_t* key) noexcept {
     const Family4Lookup original = g_originalFamily4Lookup.load(std::memory_order_acquire);
     void* const resolved = original != nullptr ? original(key) : nullptr;
-    if (resolved != nullptr && !g_reportedFamily4.exchange(true, std::memory_order_relaxed)) {
+    void* previous = g_committedFamily4.load(std::memory_order_acquire);
+    if (resolved != nullptr && resolved != previous
+        && g_committedFamily4.compare_exchange_strong(
+            previous, resolved, std::memory_order_acq_rel, std::memory_order_acquire)) {
         arm_derived_rebuild();
         core::log::write(core::log::Channel::client,
-                         core::log::Level::info,
-                         "ev=investment stage=family4 result=resolved");
+                         core::log::Level::debug,
+                         "ev=investment stage=family4_commit result=armed");
     }
     return resolved;
 }
@@ -105,6 +108,14 @@ __declspec(noinline) void* __fastcall family4_lookup(std::uint64_t* key) noexcep
 /** Arms one derived-state rebuild, used up by the next freshness verdict. */
 void arm_derived_rebuild() noexcept {
     g_rebuildArmed.store(true, std::memory_order_release);
+}
+
+/** Arms the rebuild on a committed publication. Repeat publications reuse the one arm. */
+void notify_investment_publication() noexcept {
+    arm_derived_rebuild();
+    core::log::write(core::log::Channel::client,
+                     core::log::Level::debug,
+                     "ev=investment stage=publication result=armed");
 }
 
 /** @return True when freshness and both real-arrival rebuild arms are attached. */
@@ -175,6 +186,8 @@ bool install() noexcept {
 
 /** @return True when every investment rebuild detour is absent. */
 bool uninstall() noexcept {
+    restore_lore_visibility();
+    restore_socket_menu_routing();
     if (!uninstall_family5_rearm()) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,

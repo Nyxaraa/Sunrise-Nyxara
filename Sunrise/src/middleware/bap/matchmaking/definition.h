@@ -47,12 +47,26 @@ struct AdvertisementUpdate final {
     std::span<const std::byte> descriptor{};
 };
 
+/** The activity a kind-4 configuration request names, from root field 11. */
+struct ConfigurationActivity final {
+    /** True when field 11 carried a varint definition hash in its field one. */
+    bool hasDefinitionHash{};
+    /** Activity definition hash of the launch target. */
+    std::uint32_t definitionHash{};
+    /** True when field 11 carried a varint in its field two. */
+    bool hasTypeHash{};
+    /** Activity type hash of the launch target. Logged only. */
+    std::uint32_t typeHash{};
+};
+
 /** Checked service-42 request fields the solo responder needs. */
 struct Request final {
     /** Valid selector, or none when any read protobuf scope is malformed. */
     RequestKind kind{RequestKind::none};
     /** Kind-2 fields. All values stay neutral for other request kinds. */
     AdvertisementUpdate advertisement{};
+    /** Kind-4 fields. Absent for other request kinds. */
+    ConfigurationActivity activity{};
 };
 
 /** Inputs to encode one service-43 response body. */

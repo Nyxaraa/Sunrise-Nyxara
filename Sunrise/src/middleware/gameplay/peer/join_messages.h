@@ -1,10 +1,12 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
 #include "../../encoding/bit_reader.h"
 #include "../../encoding/bit_writer.h"
+#include "../descriptor/join_descriptor.h"
 
 namespace sunrise::middleware::gameplay::peer {
 
@@ -14,9 +16,8 @@ enum class JoinId : std::uint8_t {
     refuse = 14,
 };
 
-/** Declared decoded sizes the registry holds for those ids. */
+/** Declared decoded sizes the registry holds for those ids. Each header must carry its own. */
 inline constexpr std::uint32_t kJoinRequestSize = 6144;
-/** See kJoinRequestSize. */
 inline constexpr std::uint32_t kJoinRefuseSize = 24;
 
 /** Protocol version the host requires. A mismatch is dropped with no reply at all. */
@@ -34,9 +35,20 @@ enum class RefuseReason : std::uint8_t {
     executableTypeMismatch = 29,
 };
 
+/** Peer rows one join request can carry: the count is five bits. */
+inline constexpr std::size_t kJoiningPeerCapacity = 31;
+
+/** One row of the join request's peer table. */
+struct JoiningPeer {
+    /** NetAddr in memory order, the same form the connect request carries. */
+    std::array<std::byte, descriptor::kNetAddrSize> address{};
+    /** Stable machine identity, the value the membership's member row must carry. */
+    std::uint64_t machineId{};
+};
+
 /**
- * Leading fixed fields of a join request.
- * Everything after the join id is address and player tables. Admission does not read them.
+ * Fixed fields and peer table of a join request.
+ * The member table and the tail behind the peer table are not read.
  */
 struct JoinRequest {
     std::uint16_t protocolVersion{};
@@ -47,6 +59,8 @@ struct JoinRequest {
     /** Identifies this join attempt, not the machine. It changes on every retry, and the peer
      *  refuses a membership update that does not echo it. */
     std::uint64_t joinId{};
+    std::uint32_t peerCount{};
+    std::array<JoiningPeer, kJoiningPeerCapacity> peers{};
 };
 
 /** Body of a join refusal. The host echoes the request's join id. */
@@ -57,7 +71,7 @@ struct JoinRefuse {
 };
 
 /**
- * Reads the admission prefix of a join request.
+ * Reads the fixed fields and the peer table of a join request.
  * @param reader Reader positioned at the body.
  * @param output Receives the fields admission checks.
  * @return True when every admission field was present.

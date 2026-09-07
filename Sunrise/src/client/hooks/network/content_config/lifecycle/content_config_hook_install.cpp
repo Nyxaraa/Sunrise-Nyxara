@@ -23,8 +23,7 @@ void finish_failed_install() noexcept {
 bool install() noexcept {
     AcquireSRWLockExclusive(&g_lifecycleLock);
     if (!lifecycle::g_transitionActive && lifecycle::all_installed() && g_trackCalls
-        && lifecycle::all_accepting() && g_contentFetch != nullptr
-        && gate::is_disabled(lifecycle::g_gateOwnership)) {
+        && lifecycle::all_accepting() && gate::is_disabled(lifecycle::g_gateOwnership)) {
         ReleaseSRWLockExclusive(&g_lifecycleLock);
         return true;
     }
@@ -72,7 +71,6 @@ bool install() noexcept {
         g_targetEntries[offset] = specs[offset].target;
         g_accepting[offset] = true;
     }
-    g_contentFetch = resolved.contentConfigFetch;
     g_trackCalls = true;
     lifecycle::g_transitionActive = false;
     ReleaseSRWLockExclusive(&g_lifecycleLock);

@@ -13,6 +13,9 @@
 
 #include "../../../core/logging/log.h"
 #include "../../hooking/detour.h"
+#include "../../player/player_position.h"
+#include "../bootflow/bootflow_hook_lifecycle.h"
+#include "../fly/fly.h"
 #include "../polled_input/runtime.h"
 #include "../sword_skate/sword_skate.h"
 #include "internal.h"
@@ -75,9 +78,14 @@ template <typename T> [[nodiscard]] T original(std::size_t slot) noexcept {
 std::int64_t __fastcall camera_transform(std::uint32_t playerIndex) noexcept {
     const CameraTransform next = original<CameraTransform>(kCameraSlot);
     const std::int64_t result = next != nullptr ? next(playerIndex) : 0;
-    capture_forward(playerIndex);
+    capture_camera_pose(playerIndex);
     poll_request();
     force_pending();
+    // Read here, not on the physics tick: that tick stops for a player who is standing still.
+    hooks::fly::poll_toggle();
+    client::player::position::poll();
+    hooks::bootflow::poll_world_step();
+    hooks::bootflow::poll_current_slice_set();
     return result;
 }
 
@@ -93,6 +101,9 @@ std::int64_t __fastcall physics_sync(std::byte* component, std::byte* outFlags) 
     // Shares this detour rather than adding a second one to the same function. The flag it clears
     // is written and read inside this tick, so it has to run here and not on a frame poll.
     hooks::sword_skate::apply(component);
+    hooks::fly::apply(component);
+    // This tick is the only one that sees every component, so it is where the player's is found.
+    client::player::position::observe(component);
     const PhysicsSync next = original<PhysicsSync>(kPhysicsSlot);
     return next != nullptr ? next(component, outFlags) : 0;
 }
@@ -190,8 +201,19 @@ void uninstall() noexcept {
     }
     clear_targets();
     clear_action_keys();
+    hooks::fly::reset();
+    client::player::position::reset();
     polled_input::release_key();
-    (void)hooking::detour::uninstall(g_handles);
+    // A thread still inside a replacement keeps the detours; the cleared targets make them inert.
+    bool replacementActive = false;
+    if (!hooking::detour::uninstall(g_handles, replacementActive)) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::warn,
+                         replacementActive
+                             ? "ev=teleport stage=uninstall result=fail reason=active"
+                             : "ev=teleport stage=uninstall result=fail reason=detach");
+        return;
+    }
     g_handles = {};
 }
 

@@ -8,9 +8,7 @@ namespace sunrise::middleware::bap::activity_message::membership_acknowledgement
 bool parse_membership_acknowledgement(std::span<const std::byte> input,
                                       MembershipAcknowledgement& acknowledgement) noexcept {
     acknowledgement = {};
-    // The bound is only what the reads below need. An exact length is the client's
-    // business, not a rule to enforce here.
-    if (input.size() < kEncodedSize) {
+    if (input.size() != kEncodedSize) {
         return false;
     }
 
@@ -18,6 +16,4 @@ bool parse_membership_acknowledgement(std::span<const std::byte> input,
     return true;
 }
 
-} // namespace
-  // sunrise::middleware::bap::activity_message::membership_acknowledgement
-  // namespace membership_acknowledgement
+} // namespace sunrise::middleware::bap::activity_message::membership_acknowledgement

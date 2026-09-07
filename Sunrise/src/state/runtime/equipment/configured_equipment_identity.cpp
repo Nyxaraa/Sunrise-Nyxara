@@ -74,9 +74,8 @@ void mix_item(std::uint64_t& hash, const account::inventory::Item& item) noexcep
     mix_value(hash, item.definitionHash);
     mix_value(hash, static_cast<std::uint32_t>(item.level));
     mix_sockets(hash, item.sockets);
-    // Meaningful only for a subclass, but mixed for every item: the ability bucket rows are keyed
-    // by these, so a changed pick must rebuild, and they live on the item now (each owned
-    // subclass remembers its own picks independently rather than sharing one set).
+    // Mixed for every item because the ability bucket rows are keyed by these, so a changed pick
+    // must rebuild. They live on the item, so each owned subclass keeps its own picks.
     mix_byte(hash, item.movementAbilityEntry);
     mix_byte(hash, item.grenadeAbilityEntry);
     mix_byte(hash, item.superAbilityEntry);

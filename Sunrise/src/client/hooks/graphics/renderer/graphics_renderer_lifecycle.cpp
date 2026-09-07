@@ -7,10 +7,12 @@
 #include "../../../../core/ui/layout/layout.h"
 #include "../../../../core/ui/runtime/ui_visibility_runtime.h"
 #include "../../cursor/runtime.h"
+#include "../../inactivity/inactivity_override.h"
 #include "../../polled_input/runtime.h"
 #include "../input/input.h"
 #include "graphics_renderer_report.h"
 #include "state.h"
+#include "world_lines.h"
 
 namespace sunrise::client::hooks::graphics::renderer {
 namespace {
@@ -184,6 +186,8 @@ constexpr std::array<ViewFormat, 6> kTypelessViewFormats{
         return discard_staged(staged);
     }
     staged.dx11BackendInitialized = true;
+    // The interface draws its card without the logo when the sheet cannot be uploaded.
+    (void)textures::upload_logo_sheet(staged.device, staged.logoSheet);
     if (!input::install(staged.window)) {
         report::note(report::Stage::init, report::Reason::windowInput);
         return discard_staged(staged);
@@ -245,7 +249,9 @@ void release_render_target(Resources& resources) noexcept {
 
 /** @param resources SDK resources freed in an order that respects their dependencies. */
 void release_resources(Resources& resources) noexcept {
+    world_lines::release();
     release_render_target(resources);
+    textures::release_logo_sheet(resources.logoSheet);
     release_com(resources.context);
     release_com(resources.device);
     release_com(resources.swapChain);
@@ -312,11 +318,17 @@ void present(IDXGISwapChain* swapChain) noexcept {
     if (g_resources.swapChain == nullptr) {
         (void)initialize_locked(swapChain);
     }
+    bool framed = false;
     if (g_resources.swapChain == swapChain && fully_active_locked()) {
         render_frame_locked();
+        framed = true;
     }
     ReleaseSRWLockExclusive(&g_rendererLock);
 
+    if (framed) {
+        // The timeout hold enters game code, so it runs only after the renderer lock is gone.
+        inactivity::poll();
+    }
     // The cursor policy calls Win32, so it runs only after the renderer lock is gone.
     const bool visible = core::ui::runtime::snapshot().visible;
     cursor::apply_visibility(visible);

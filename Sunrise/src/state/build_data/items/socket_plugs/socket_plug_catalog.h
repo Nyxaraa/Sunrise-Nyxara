@@ -41,6 +41,15 @@ void clear() noexcept;
  */
 [[nodiscard]] bool contains(Member plugDefinitionIndex) noexcept;
 
+/**
+ * Walks every plug one exact ordinary socket lane accepts.
+ * @return True when the lane has a pool and the visitor saw every member.
+ */
+[[nodiscard]] bool visit_pool(std::uint16_t itemDefinitionIndex,
+                              std::uint8_t lane,
+                              MemberVisitor visitor,
+                              void* context) noexcept;
+
 /** Copies the complete relation while holding its single shared lock. */
 [[nodiscard]] bool snapshot(std::span<Rule> rules,
                             std::size_t& ruleCount,

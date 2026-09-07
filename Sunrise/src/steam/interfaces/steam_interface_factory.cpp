@@ -28,17 +28,19 @@ constexpr std::array kUserInterfaces{
 
 /** Creates one supported Steam client interface. */
 void* create(const char* version) noexcept {
-    if (version == nullptr || !tables::initialize()) {
+    if (version == nullptr) {
         return nullptr;
     }
+    tables::initialize();
     return std::strcmp(version, versions::kLegacyClient) == 0 ? tables::client() : nullptr;
 }
 
 /** Returns one supported interface for the active Steam user. */
 void* find_user(const char* version) noexcept {
-    if (version == nullptr || !tables::initialize()) {
+    if (version == nullptr) {
         return nullptr;
     }
+    tables::initialize();
     for (const auto& entry : kUserInterfaces) {
         if (std::strcmp(version, entry.version) == 0) {
             return entry.get();
@@ -49,9 +51,10 @@ void* find_user(const char* version) noexcept {
 
 /** Returns the process-global interface. It needs no local user handle. */
 void* find_global(const char* version) noexcept {
-    if (version == nullptr || !tables::initialize()) {
+    if (version == nullptr) {
         return nullptr;
     }
+    tables::initialize();
     return std::strcmp(version, versions::kUtils) == 0 ? tables::utils() : nullptr;
 }
 

@@ -39,18 +39,15 @@ public:
     /** @return The frame entry. It is called only while its owner panel is selected. */
     [[nodiscard]] FrameCallback frame_callback() const noexcept;
 
-    /**
-     * Builds one descriptor by value.
-     * @param stableId Lowercase id, used for registration and for saved state.
-     * @param frameCallback Static entry, valid until unregister or shutdown.
-     * @param output Receives the descriptor. Left alone when a field is rejected.
-     * @return True when every field is valid and fits the fixed storage.
-     */
+    /** @return The optional companion-window entry called on every visible UI frame. */
+    [[nodiscard]] FrameCallback companion_frame_callback() const noexcept;
+
 private:
     friend bool create_descriptor(Owner owner,
                                   std::string_view stableId,
                                   std::string_view displayName,
                                   FrameCallback frameCallback,
+                                  FrameCallback companionFrameCallback,
                                   Descriptor& output) noexcept;
     /** @return True when every field is complete. */
     friend bool is_valid(const Descriptor& descriptor) noexcept;
@@ -61,6 +58,7 @@ private:
     std::array<char, kDisplayNameCapacity> displayName_{};
     std::size_t displayNameLength_{};
     FrameCallback frameCallback_{};
+    FrameCallback companionFrameCallback_{};
 };
 
 /**
@@ -74,6 +72,14 @@ private:
                                      std::string_view stableId,
                                      std::string_view displayName,
                                      FrameCallback frameCallback,
+                                     Descriptor& output) noexcept;
+
+/** Builds one descriptor with an optional companion-window frame entry. */
+[[nodiscard]] bool create_descriptor(Owner owner,
+                                     std::string_view stableId,
+                                     std::string_view displayName,
+                                     FrameCallback frameCallback,
+                                     FrameCallback companionFrameCallback,
                                      Descriptor& output) noexcept;
 
 /** @return True when every field is complete. */

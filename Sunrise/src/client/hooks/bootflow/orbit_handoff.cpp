@@ -1,79 +1,102 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdio>
 #include <string_view>
 
 #include "../../../core/logging/log.h"
+#include "../../../core/settings/settings.h"
 #include "../../hooking/detour.h"
 #include "internal.h"
 
 namespace sunrise::client::hooks::bootflow {
 namespace {
 
+using core::log::kLineCapacity;
+
 /**
- * The destination-hold predicate of the orbit setup step. Its prologue repeats across the image,
- * so the pattern runs on through the call and the flag test that follow. Every displacement is
- * wildcarded.
+ * The destination-hold predicate of the orbit setup step, whose prologue repeats across the image.
+ * The pattern runs on through the call and flag test that follow; every displacement is wildcarded.
  */
 constexpr std::string_view kHoldSignatureText =
     "48 89 5C 24 ? 57 48 83 EC ? 48 8B D9 E8 ? ? ? ? 80 3D ? ? ? ? 00 48 8B F8 75 ?";
 /** Compiled pattern bytes of the signature text above. */
 constexpr auto kHoldSignature = signature<signature_length(kHoldSignatureText)>(kHoldSignatureText);
 
-/**
- * Answer that lets the handoff test pass. The native predicate holds for an armed pending
- * destination, or for a cinematic under a 5,000 ms timer. This answer skips that wait. It has one
- * call site, the step's own update, so nothing else sees the change.
- */
+/** Answer that lets the handoff test pass without waiting. */
 constexpr bool kReleased = false;
+
+/** The hold predicate this detour replaces. */
+using Hold = bool(__fastcall*)(void*);
 
 hooking::detour::Handle g_handle{};
 std::atomic_bool g_reported{false};
 
-/**
- * Releases the destination hold. The original is never called: blocking is the only answer it
- * gives here, so answering directly gives the same result with no call.
- * @param stepCtx Borrowed step context; the answer does not depend on it.
- * @return The released answer, always.
- */
-__declspec(noinline) bool __fastcall destination_hold(void* stepCtx) noexcept {
-    (void)stepCtx;
-    if (!g_reported.exchange(true, std::memory_order_relaxed)) {
+/** Writes the one line naming which answer this run uses. */
+void report(const char* result) noexcept {
+    if (g_reported.exchange(true, std::memory_order_relaxed)) {
+        return;
+    }
+    std::array<char, kLineCapacity> line{};
+    const int written = std::snprintf(
+        line.data(), line.size(), "ev=bootflow stage=orbit_handoff result=%s", result);
+    if (written > 0) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::info,
-                         "ev=bootflow stage=orbit_handoff result=released");
+                         {line.data(), static_cast<std::size_t>(written)});
     }
-    return kReleased;
+}
+
+/**
+ * Answers the destination hold. The game's predicate waits for an armed destination or a
+ * starting cinematic, so it owns the answer unless the settings ask to skip that wait.
+ * @param stepCtx Borrowed step context, passed through unchanged.
+ * @return The game's answer, or the released answer when the skip is on.
+ */
+__declspec(noinline) bool __fastcall destination_hold(void* stepCtx) noexcept {
+    const auto original = reinterpret_cast<Hold>(g_handle.original);
+    if (core::settings::get().client.skipOrbitCinematicWait || original == nullptr) {
+        report(original == nullptr ? "released_no_trampoline" : "released");
+        return kReleased;
+    }
+    report("native");
+    return original(stepCtx);
 }
 
 } // namespace
 
 /**
- * Attaches the orbit handoff release.
- * @return True when the target is found and the detour attaches.
+ * Stages the orbit handoff release.
+ * @param spec Receives the target and replacement.
+ * @return staged when the target is found, unavailable on a miss.
  */
-bool install_orbit_handoff() noexcept {
+StageResult stage_orbit_handoff(hooking::detour::Spec& spec) noexcept {
     if (g_handle.attached) {
-        return true;
+        return StageResult::attached;
     }
     std::byte* const target = scan_main_image_unique(kHoldSignature, "orbit_destination_hold");
     if (target == nullptr) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=orbit_handoff result=fail reason=target");
-        return false;
+        return StageResult::unavailable;
     }
-    const hooking::detour::Spec spec{target, reinterpret_cast<void*>(&destination_hold)};
-    if (!hooking::detour::install(spec, g_handle)) {
+    spec = hooking::detour::Spec{target, reinterpret_cast<void*>(&destination_hold)};
+    return StageResult::staged;
+}
+
+/** Takes the orbit handoff release's attached handle, or a detached one. */
+void publish_orbit_handoff(const hooking::detour::Handle& handle) noexcept {
+    if (!handle.attached) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
                          "ev=bootflow stage=orbit_handoff result=fail reason=attach");
-        return false;
+        return;
     }
+    g_handle = handle;
     core::log::write(core::log::Channel::client,
                      core::log::Level::info,
                      "ev=bootflow stage=orbit_handoff result=ok");
-    return true;
 }
 
 /** Detaches the orbit handoff release. */

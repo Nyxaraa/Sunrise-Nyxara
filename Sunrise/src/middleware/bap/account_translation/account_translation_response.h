@@ -7,6 +7,15 @@
 namespace sunrise::middleware::bap::account_translation {
 
 /**
+ * Reads the one supported svc-23 identity request.
+ * @param requestBody Complete request body.
+ * @param identity Cleared, then receives the identity; zero is a host peer with no handle.
+ * @return True when the request carries at least one type-12 identity.
+ */
+[[nodiscard]] bool request_identity(std::span<const std::byte> requestBody,
+                                    std::uint64_t& identity) noexcept;
+
+/**
  * Encodes the svc-24 answer to one svc-23 identity request. A request that cannot be paired
  * gets a zero-entry body, never a refusal.
  * @param requestBody Complete request body.

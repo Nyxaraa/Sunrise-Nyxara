@@ -5,13 +5,17 @@
 #include <string_view>
 
 #include "../../abilities/ability_bucket_catalog.h"
+#include "../../bounties/bounty_catalog.h"
 #include "../../hash_names/hash_name_catalog.h"
 #include "../../inventory/buckets/inventory_bucket_catalog.h"
-#include "../../items/details/item_detail_catalog.h"
 #include "../../items/socket_plugs/socket_plug_catalog.h"
 #include "../../material_requirements/material_requirement_catalog.h"
+#include "../../nodes/node_catalog.h"
 #include "../../progressions/progression_catalog.h"
+#include "../../records/record_catalog.h"
 #include "../../scenarios/scenario_catalog.h"
+#include "../../season_pass/season_pass_catalog.h"
+#include "../../sobjects/sobject_catalog.h"
 #include "../../socket_entry_lists/socket_entry_list_catalog.h"
 #include "../../spawn_sets/spawn_set_catalog.h"
 #include "../../vendors/vendor_catalog.h"
@@ -140,20 +144,33 @@ template <typename Value, typename Less>
            && counts.socketPlugRules <= domains.socketPlugRules.size()
            && counts.socketPlugPools <= domains.socketPlugPools.size()
            && counts.socketPlugMembers <= domains.socketPlugMembers.size()
+           && counts.exoticCatalysts <= domains.exoticCatalysts.size()
            && counts.inventoryBuckets <= domains.inventoryBuckets.size()
            && counts.socketEntryLists <= domains.socketEntryLists.size()
            && counts.socketEntryTables <= domains.socketEntryTables.size()
            && counts.abilityBuckets <= domains.abilityBuckets.size()
            && counts.progressions <= domains.progressions.size()
+           && counts.records <= domains.records.size() && counts.nodes <= domains.nodes.size()
+           && counts.sobjects <= domains.sobjects.size()
            && counts.scenarios <= domains.scenarios.size()
            && counts.rosterGroups <= domains.rosterGroups.size()
            && counts.spawnStems <= domains.spawnStems.size()
            && counts.spawnNameHashes <= domains.spawnNameHashes.size()
+           && counts.spawnPoints <= domains.spawnPoints.size()
            && counts.hashNames <= domains.hashNames.size()
            && counts.vendorIndex <= domains.vendorIndex.size()
            && counts.vendorDefinitions <= domains.vendorDefinitions.size()
            && counts.vendorSaleRows <= domains.vendorSaleRows.size()
-           && counts.vendorInstalledRows <= domains.vendorInstalledRows.size();
+           && counts.vendorInstalledRows <= domains.vendorInstalledRows.size()
+           && counts.positionProfiles <= domains.positionProfiles.size()
+           && counts.objectTypes <= domains.objectTypes.size()
+           && counts.recordObjectives <= domains.recordObjectives.size()
+           && counts.recordIntervals <= domains.recordIntervals.size()
+           && counts.recordRewards <= domains.recordRewards.size()
+           && counts.progressionSteps <= domains.progressionSteps.size()
+           && counts.seasonPassRewards <= domains.seasonPassRewards.size()
+           && counts.seasonPassPackages <= domains.seasonPassPackages.size()
+           && counts.bounties <= domains.bounties.size();
 }
 
 } // namespace
@@ -163,6 +180,14 @@ bool canonicalize(MutableDomains domains, const DomainCounts& counts) noexcept {
     if (!counts_fit(domains, counts)) {
         return false;
     }
+    const auto objectTypes = domains.objectTypes.first(counts.objectTypes);
+    std::sort(objectTypes.begin(), objectTypes.end(), [](const auto& a, const auto& b) {
+        return a.rsatTag < b.rsatTag;
+    });
+    const auto positions = domains.positionProfiles.first(counts.positionProfiles);
+    std::sort(positions.begin(), positions.end(), [](const auto& a, const auto& b) {
+        return a.activity < b.activity || (a.activity == b.activity && a.cell < b.cell);
+    });
     const auto named = domains.named.first(counts.named);
     const auto items = domains.items.first(counts.items);
     const auto collectibles = domains.collectibles.first(counts.collectibles);
@@ -170,6 +195,7 @@ bool canonicalize(MutableDomains domains, const DomainCounts& counts) noexcept {
         domains.materialRequirementSets.first(counts.materialRequirementSets);
     const auto itemDetails = domains.itemDetails.first(counts.itemDetails);
     const auto socketPlugRules = domains.socketPlugRules.first(counts.socketPlugRules);
+    const auto exoticCatalysts = domains.exoticCatalysts.first(counts.exoticCatalysts);
     const auto inventoryBuckets = domains.inventoryBuckets.first(counts.inventoryBuckets);
     const auto socketEntryLists = domains.socketEntryLists.first(counts.socketEntryLists);
     std::sort(named.begin(), named.end(), named_less);
@@ -183,6 +209,8 @@ bool canonicalize(MutableDomains domains, const DomainCounts& counts) noexcept {
     if (!std::is_sorted(socketPlugRules.begin(), socketPlugRules.end(), socket_plug_rule_less)) {
         return false;
     }
+    std::sort(
+        exoticCatalysts.begin(), exoticCatalysts.end(), items::catalysts::definition_index_less);
     std::sort(inventoryBuckets.begin(), inventoryBuckets.end(), bucket_less);
     const auto abilityBuckets = domains.abilityBuckets.first(counts.abilityBuckets);
     const auto socketEntryTables = domains.socketEntryTables.first(counts.socketEntryTables);
@@ -195,11 +223,15 @@ bool canonicalize(MutableDomains domains, const DomainCounts& counts) noexcept {
 }
 
 /** Checks the structure rules, the sort order, and every cross-domain item reference. */
-bool valid_domains(Domains domains) noexcept {
-    if (domains.constants.extracted != 1U || domains.named.empty() || domains.items.empty()
-        || domains.collectibles.empty() || domains.materialRequirementSets.empty()
-        || domains.socketPlugRules.empty() || domains.socketPlugPools.empty()
-        || domains.inventoryBuckets.empty() || domains.socketEntryLists.empty()
+bool valid_domains(const BuildIdentity& build, Domains domains) noexcept {
+    if (!gameplay::entity_object_types::validate(domains.objectTypes)
+        || !gameplay::entity_position_profiles::validate(domains.positionProfiles)
+        || domains.constants.extracted != 1U
+        || domains.constants.weaponPowerStatRow >= constants::kStatRowCount || domains.named.empty()
+        || domains.items.empty() || domains.collectibles.empty()
+        || domains.materialRequirementSets.empty() || domains.socketPlugRules.empty()
+        || domains.socketPlugPools.empty() || domains.inventoryBuckets.empty()
+        || domains.socketEntryLists.empty()
         || !std::all_of(domains.named.begin(), domains.named.end(), valid_name)
         || !strictly_ordered(domains.named, named_less) || !items::valid(domains.items)
         || !collectibles::valid(domains.collectibles)
@@ -215,13 +247,23 @@ bool valid_domains(Domains domains) noexcept {
             domains.socketPlugRules, domains.socketPlugPools, domains.socketPlugMembers)
         || !abilities::valid(domains.abilityBuckets)
         || !strictly_ordered(domains.abilityBuckets, ability_less)
-        || !progressions::valid(domains.progressions)
+        || !progressions::valid(domains.progressions, domains.progressionSteps)
+        // An empty catalog is complete: a build with no installed pass declares no reward.
+        || (!domains.seasonPassRewards.empty()
+            && !season_pass::valid(domains.seasonPassRewards, domains.seasonPassPackages))
+        || !bounties::valid(domains.bounties)
+        || !build_data::records::valid(domains.records,
+                                       domains.recordObjectives,
+                                       domains.recordIntervals,
+                                       domains.recordRewards)
+        || !nodes::valid(domains.nodes) || !sobjects::valid(domains.sobjects)
         || !scenarios::valid(domains.scenarios, domains.rosterGroups)
         // An empty catalog is complete. It is what a build with no installed spawn set means.
         // Both arrays must be empty together, because a stem names its hashes by range.
         || (domains.spawnStems.empty()
-                ? !domains.spawnNameHashes.empty()
+                ? !(domains.spawnNameHashes.empty() && domains.spawnPoints.empty())
                 : !spawn_sets::valid(domains.spawnStems, domains.spawnNameHashes))
+        || !spawn_sets::valid_points(domains.spawnPoints, domains.spawnStems)
         // An empty catalog is complete. With no index there is no vendor domain, so the
         // definitions and both row banks must be empty too.
         || (domains.vendorIndex.empty()
@@ -262,7 +304,8 @@ bool valid_domains(Domains domains) noexcept {
                                       domains.socketPlugPools,
                                       domains.socketPlugMembers,
                                       domains.items,
-                                      domains.itemDetails);
+                                      domains.itemDetails)
+           && valid_exotic_catalyst_links(build, domains);
 }
 
 } // namespace sunrise::state::build_data::cache::records

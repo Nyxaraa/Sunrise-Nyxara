@@ -71,6 +71,7 @@ bool append_notification_frame(Scratch& scratch,
                                std::span<std::byte> response,
                                std::size_t& written) noexcept {
     if (written > response.size()) {
+        report(sessionId, messageType, messageBody.size(), 0);
         return false;
     }
 

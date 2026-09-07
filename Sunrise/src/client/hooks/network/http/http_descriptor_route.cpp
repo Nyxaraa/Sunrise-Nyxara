@@ -19,8 +19,6 @@ using ExecuteRequest = std::int64_t(__fastcall*)(void*, std::byte*) noexcept;
 constexpr std::uint32_t kPostOperation = 2;
 /** Returning 5 makes the worker skip the native external operation. */
 constexpr std::int64_t kSkipNativeOperation = 5;
-/** HTTP 200 with no body finishes a route this server does not map. */
-constexpr std::uint32_t kHttpOk = 200;
 /** The executor takes a direct response size of at most a signed 32-bit value. */
 constexpr std::int64_t kMaximumResponseCapacity = INT_MAX;
 /** The descriptor owns a fixed 512-byte inline URL. */
@@ -114,15 +112,26 @@ void redirect_url(std::array<char, kUrlCapacity>& url) noexcept {
 }
 
 /**
- * Finishes an unmapped route here with an empty success.
+ * Refuses an unmapped route, because a transport success with no body is not an answer.
  * @param wrapper Game-owned HTTP wrapper.
+ * @param url Inline request URL, named in the refusal log.
  * @return The value that makes the worker skip the external HTTP operation.
  */
-[[nodiscard]] std::int64_t unmapped_route(void* wrapper) noexcept {
-    core::log::write(
-        core::log::Channel::client, core::log::Level::debug, "ev=http stage=route result=unmapped");
-    publish_completion(wrapper, 0, kHttpOk);
-    return kSkipNativeOperation;
+[[nodiscard]] std::int64_t unmapped_route(void* wrapper,
+                                          const std::array<char, kUrlCapacity>& url) noexcept {
+    const std::string_view route = bounded_string(url);
+    std::array<char, 2 * kUrlCapacity> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=http stage=route result=unmapped url=%.*s",
+                                      static_cast<int>(route.size()),
+                                      route.data());
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::warn,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+    return block_request(wrapper);
 }
 
 } // namespace
@@ -180,7 +189,7 @@ std::int64_t route_descriptor(const coordinator::CallLease& lease,
         return block_request(wrapperValue);
     }
     if (descriptor.operation != kPostOperation) {
-        return unmapped_route(wrapperValue);
+        return unmapped_route(wrapperValue, descriptor.url);
     }
 
     const auto responseCapacity = static_cast<std::size_t>(descriptor.responseCapacity);
@@ -192,7 +201,7 @@ std::int64_t route_descriptor(const coordinator::CallLease& lease,
     };
     sunrise::client::network::HttpResponse response;
     if (!lease.httpConsumer(request, response)) {
-        return unmapped_route(wrapperValue);
+        return unmapped_route(wrapperValue, descriptor.url);
     }
     // The consumer writes into the response span, so the size cannot pass the buffer size.
     publish_completion(

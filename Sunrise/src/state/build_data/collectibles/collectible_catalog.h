@@ -11,8 +11,21 @@ namespace sunrise::state::build_data::collectibles {
 inline constexpr std::size_t kDefinitionCapacity = 1U << 15U;
 /** Some collectible rows deliberately do not resolve to an inventory item. */
 inline constexpr std::uint16_t kUnavailableItemDefinitionIndex = 0xFFFFU;
+
+/**
+ * An acquisition carrying this index has no collectible and skips every collectible step.
+ * Prepare and commit must both carry it, or the acquisition's consistency guard refuses.
+ */
+inline constexpr std::uint16_t kNoCollectibleIndex = 0xFFFEU;
 /** A collectible with no acquisition charge carries this native requirement-set sentinel. */
 inline constexpr std::uint16_t kUnavailableMaterialRequirementSetIndex = 0xFFFFU;
+
+/** A collectible whose acquired state is not one plain flag test carries this instead of a slot. */
+inline constexpr std::uint16_t kUnavailableFlagSlot = 0xFFFFU;
+
+/** A collectible whose acquired flag no mapping table addresses carries this instead of a row. */
+inline constexpr std::uint16_t kUnavailableFlagIndex = 0xFFFFU;
+
 /** Installed requirement sets contain at most six material rows. */
 inline constexpr std::size_t kMaterialRequirementCapacity = 6;
 
@@ -31,6 +44,10 @@ struct Definition {
     std::uint16_t collectibleIndex{};
     std::uint16_t itemDefinitionIndex{kUnavailableItemDefinitionIndex};
     std::uint16_t materialRequirementSetIndex{kUnavailableMaterialRequirementSetIndex};
+    /** Unlock flag slot the acquired-state expression tests, when it tests exactly one. */
+    std::uint16_t acquiredFlagSlot{kUnavailableFlagSlot};
+    /** Bank row that slot feeds inside the object its kind names, or the unavailable row. */
+    std::uint16_t acquiredFlagIndex{kUnavailableFlagIndex};
     std::uint8_t materialRequirementCount{};
     std::array<MaterialRequirement, kMaterialRequirementCapacity> materialRequirements{};
 };
@@ -53,6 +70,16 @@ void clear() noexcept;
  * @return True when Collections can grant that item, so an account can come to own it.
  */
 [[nodiscard]] bool grants_item(std::uint16_t itemDefinitionIndex) noexcept;
+
+/**
+ * Finds the collectible that grants one installed item row, the reverse of `find`.
+ * @param itemDefinitionIndex Installed item-definition row.
+ * @param collectibleIndex Receives the first collectible naming that item, in native index order.
+ *        Left untouched when none does, so a caller's sentinel survives.
+ * @return True when a collectible grants that item.
+ */
+[[nodiscard]] bool find_granting(std::uint16_t itemDefinitionIndex,
+                                 std::uint16_t& collectibleIndex) noexcept;
 
 /** Copies every row in native collectible-index order. */
 [[nodiscard]] bool snapshot(std::span<Definition> output, std::size_t& count) noexcept;

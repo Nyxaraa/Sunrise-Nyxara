@@ -23,7 +23,7 @@ namespace sunrise::state::equipment::light::resolution {
  * Computes the equipment light one character displays, selected or not.
  * @param account Already-checked account configuration, read under the lock.
  * @param characterIndex Used character row.
- * @param light Receives the weighted integer average.
+ * @param light Receives the weighted integer average plus the seasonal artifact Power bonus.
  * @return True when every item on that character is found.
  */
 [[nodiscard]] bool character_light(const AccountState& account,

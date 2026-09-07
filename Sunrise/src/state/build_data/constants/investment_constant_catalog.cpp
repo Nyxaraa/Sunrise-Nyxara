@@ -1,35 +1,39 @@
 #include "investment_constant_catalog.h"
 
+#include <mutex>
+#include <shared_mutex>
+
 #include "../table.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::state::build_data::constants {
 namespace {
 
 // One row, not a table, so it holds the value directly under the shared Lock.
-Lock g_lock;
+core::threading::SrwLock g_lock;
 InvestmentConstants g_constants{};
 
 } // namespace
 
 /** Clears the published investment constants under the catalog lock. */
 void clear() noexcept {
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_constants = {};
 }
 
 /** Publishes one extracted constants row. */
 bool replace(const InvestmentConstants& value) noexcept {
-    if (!value.extracted) {
+    if (!valid(value)) {
         return false;
     }
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_constants = value;
     return true;
 }
 
 /** @param value Receives the published constants. @return True when a row is published. */
 bool find(InvestmentConstants& value) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     value = g_constants;
     return value.extracted;
 }

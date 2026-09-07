@@ -10,10 +10,6 @@ namespace {
 
 namespace bits = encoding::bits;
 
-/** The outer marker separates control packets from established protected packets. */
-constexpr std::uint8_t kMarkerWidth = 1;
-/** A control packet carries marker 1; an established packet carries 0. */
-constexpr std::uint64_t kControlMarker = 1;
 /** Both association words are 32-bit value fields. */
 constexpr std::uint8_t kWordWidth = 32;
 /** The opcode is a 3-bit value field. */
@@ -24,11 +20,6 @@ constexpr std::uint8_t kPresenceWidth = 1;
 constexpr std::uint8_t kResponseWidth = 32;
 /** Highest opcode the enum defines. The three-bit field also holds 6 and 7, which are refused. */
 constexpr std::uint64_t kMaximumOpcode = 5;
-/** Bits in one byte of the trailer. */
-constexpr unsigned kByteBits = 8;
-/** Mask of one trailer byte. */
-constexpr std::uint16_t kByteMask = 0xFF;
-
 /** @return True when the opcode carries the full key-exchange body. */
 [[nodiscard]] bool carries_body(Opcode opcode) noexcept {
     return opcode == Opcode::keyExchangeOffer || opcode == Opcode::keyExchangeResponse;
@@ -100,12 +91,10 @@ bool decode(std::span<const std::byte> datagram, ControlPacket& output) noexcept
     }
     // The address demux strips the clear trailer before any control field is read.
     bits::Reader reader(datagram.subspan(0, datagram.size() - kTrailerSize));
-    std::uint64_t marker = 0;
     std::uint64_t wordA = 0;
     std::uint64_t wordB = 0;
     std::uint64_t opcode = 0;
-    if (!reader.read(kMarkerWidth, marker) || marker != kControlMarker
-        || !reader.read(kWordWidth, wordA) || !reader.read(kWordWidth, wordB)
+    if (!reader.read(kWordWidth, wordA) || !reader.read(kWordWidth, wordB)
         || !reader.read(kOpcodeWidth, opcode) || opcode > kMaximumOpcode) {
         return false;
     }
@@ -116,13 +105,15 @@ bool decode(std::span<const std::byte> datagram, ControlPacket& output) noexcept
     if (carries_body(candidate.opcode) && !read_body(reader, candidate)) {
         return false;
     }
+    std::copy_n(datagram.end() - static_cast<std::ptrdiff_t>(kTrailerSize),
+                kTrailerSize,
+                candidate.trailer.begin());
     output = candidate;
     return true;
 }
 
 /** Encodes one control datagram. */
 bool encode(const ControlPacket& packet,
-            std::uint16_t destinationPort,
             std::span<std::byte> output,
             std::size_t& written) noexcept {
     written = 0;
@@ -130,8 +121,7 @@ bool encode(const ControlPacket& packet,
         return false;
     }
     bits::Writer writer(output.subspan(0, output.size() - kTrailerSize));
-    if (!writer.write(kControlMarker, kMarkerWidth) || !writer.write(packet.wordA, kWordWidth)
-        || !writer.write(packet.wordB, kWordWidth)
+    if (!writer.write(packet.wordA, kWordWidth) || !writer.write(packet.wordB, kWordWidth)
         || !writer.write(static_cast<std::uint64_t>(packet.opcode), kOpcodeWidth)) {
         return false;
     }
@@ -143,8 +133,9 @@ bool encode(const ControlPacket& packet,
         return false;
     }
     // The trailer names the destination. It sits outside the bit padding.
-    output[bodySize] = static_cast<std::byte>(destinationPort & kByteMask);
-    output[bodySize + 1] = static_cast<std::byte>((destinationPort >> kByteBits) & kByteMask);
+    std::copy(packet.trailer.begin(),
+              packet.trailer.end(),
+              output.begin() + static_cast<std::ptrdiff_t>(bodySize));
     written = bodySize + kTrailerSize;
     return true;
 }

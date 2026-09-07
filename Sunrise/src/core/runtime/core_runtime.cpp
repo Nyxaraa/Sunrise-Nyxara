@@ -2,16 +2,20 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <mutex>
 #include <string_view>
 
 #include "../../client/runtime/host/game_host_classification.h"
 #include "../../client/runtime/runtime.h"
 #include "../../middleware/runtime/middleware_runtime.h"
 #include "../../server/runtime/server_runtime.h"
+#include "../../state/activity_sdk/generated_world/catalog_manifest.h"
+#include "../../state/activity_sdk/runtime.h"
 #include "../../state/content_manifest/content_manifest_state_runtime.h"
 #include "../../state/entitlements/entitlement_runtime.h"
 #include "../../state/runtime/runtime.h"
@@ -19,18 +23,67 @@
 #include "../filesystem/path.h"
 #include "../logging/log.h"
 #include "../settings/settings.h"
+#include "../ui/modules/hud/hud.h"
 #include "../ui/modules/logs/logs.h"
 #include "../ui/modules/registry/ui_module_registry.h"
 #include "../ui/runtime/ui_visibility_runtime.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::core {
 namespace {
 
 std::atomic_bool g_initialized{false};
-SRWLOCK g_runtimeLock{SRWLOCK_INIT};
+threading::SrwLock g_runtimeLock{};
 
 /** The installed public package headers live beside the game executable. */
 constexpr std::wstring_view kInstalledPackagesDirectory = L"packages";
+
+/** Initializes the base State before content-authenticated generated artifacts are considered. */
+[[nodiscard]] bool initialize_state(void* module) noexcept {
+    return state::initialize(
+        module, settings::get().initialAccount, settings::get().initialActivityDefaults);
+}
+
+/** Copies the live public installed-content fingerprint without retaining State-owned memory. */
+[[nodiscard]] bool copy_content_fingerprint(void* opaque,
+                                            const state::content_manifest::View& view) noexcept {
+    if (opaque == nullptr) {
+        return false;
+    }
+    auto& output = *static_cast<state::activity_sdk::identity::Digest*>(opaque);
+    std::copy(view.buildFingerprint.begin(), view.buildFingerprint.end(), output.begin());
+    return state::activity_sdk::identity::valid(output);
+}
+
+/**
+ * Authenticates the catalog committed last for this source and derives its required pack identity.
+ */
+[[nodiscard]] bool activity_sdk_identity(void* module,
+                                         state::activity_sdk::ExpectedIdentity& output) noexcept {
+    namespace manifest = state::activity_sdk::generated_world::manifest;
+    output = {};
+    state::activity_sdk::identity::Digest source{};
+    path::Buffer catalogPath;
+    if (!state::content_manifest::visit_snapshot(&copy_content_fingerprint, &source)
+        || !path::module_directory(module, catalogPath)
+        || !path::append(catalogPath, L"Sunrise\\sdk\\catalog.bin")) {
+        return false;
+    }
+    manifest::Catalog catalog{};
+    manifest::LoadStatus status = manifest::LoadStatus::invalid;
+    return manifest::load(catalogPath.chars.data(), source, catalog, status)
+           && status == manifest::LoadStatus::loaded
+           && state::activity_sdk::identity::derive(source, catalog.sdk.payloadSha256, output)
+           && output.sdkBuildSha256 == catalog.sdk.buildSha256;
+}
+
+/** Publishes the optional pack only through the authenticated catalog committed beside it. */
+void initialize_activity_sdk(void* module) noexcept {
+    state::activity_sdk::ExpectedIdentity expected{};
+    (void)activity_sdk_identity(module, expected);
+    state::activity_sdk::initialize(module, expected);
+    // The wire catalog borrows the published catalog's strings, so it follows every publish.
+}
 
 /**
  * Builds the local content manifest only for the production game host.
@@ -40,6 +93,7 @@ constexpr std::wstring_view kInstalledPackagesDirectory = L"packages";
 [[nodiscard]] bool initialize_content_manifest(void* module) noexcept {
     if (client::runtime::host::current_requirement()
         == client::runtime::host::NetworkRequirement::notApplicable) {
+        initialize_activity_sdk(module);
         return true;
     }
     const HMODULE process = GetModuleHandleW(nullptr);
@@ -57,6 +111,8 @@ constexpr std::wstring_view kInstalledPackagesDirectory = L"packages";
         log::write(log::Channel::core,
                    log::Level::error,
                    "ev=initialize stage=content_manifest result=fail");
+    } else {
+        initialize_activity_sdk(module);
     }
     return initialized;
 }
@@ -82,9 +138,8 @@ void report_stage_failure(const char* stage) noexcept {
 
 /** Initializes every runtime layer in dependency order. */
 bool initialize(void* module) noexcept {
-    AcquireSRWLockExclusive(&g_runtimeLock);
+    const std::lock_guard lock(g_runtimeLock);
     if (g_initialized.load(std::memory_order_relaxed)) {
-        ReleaseSRWLockExclusive(&g_runtimeLock);
         return true;
     }
     // Taken before the first stage, so the reported duration covers settings and the sinks too.
@@ -92,7 +147,6 @@ bool initialize(void* module) noexcept {
 
     if (!settings::initialize(module)) {
         // Settings name their own failure; the sinks do not exist yet to carry a second line.
-        ReleaseSRWLockExclusive(&g_runtimeLock);
         return false;
     }
     state::unlocks::publish(settings::get().initialUnlocks);
@@ -106,13 +160,14 @@ bool initialize(void* module) noexcept {
         log::write(log::Channel::core, log::Level::debug, "ev=initialize phase=begin");
         if (!ui::runtime::initialize(settings::get().client.userInterface)) {
             stage = "ui";
+        } else if (!ui::modules::hud::initialize(module)) {
+            // Registered before logs, which is the order the menu lists the Core pages in.
+            stage = "ui_hud";
         } else if (!ui::modules::logs::initialize()) {
             stage = "ui_logs";
         } else if (!state::entitlements::publish(settings::get().server.entitlements)) {
             stage = "entitlements";
-        } else if (!state::initialize(module,
-                                      settings::get().initialAccount,
-                                      settings::get().initialActivityDefaults)) {
+        } else if (!initialize_state(module)) {
             stage = "state";
         } else if (!initialize_content_manifest(module)) {
             stage = "content_manifest";
@@ -135,50 +190,49 @@ bool initialize(void* module) noexcept {
         server::shutdown();
         middleware::shutdown();
         state::content_manifest::shutdown();
+        state::activity_sdk::shutdown();
         state::shutdown();
         state::entitlements::clear();
         ui::modules::logs::shutdown();
+        ui::modules::hud::shutdown();
         ui::modules::registry::shutdown();
         ui::runtime::shutdown();
         state::unlocks::clear();
         log::shutdown();
         settings::shutdown();
-        ReleaseSRWLockExclusive(&g_runtimeLock);
         return false;
     }
     g_initialized.store(true, std::memory_order_release);
     log::write(log::Channel::core, log::Level::info, "ev=initialize result=ok");
     log::write_elapsed(log::Channel::core, "ev=initialize phase=complete", startedTick, "ok");
-    ReleaseSRWLockExclusive(&g_runtimeLock);
     return true;
 }
 
 /** Stops every runtime layer in reverse dependency order. */
 bool shutdown() noexcept {
-    AcquireSRWLockExclusive(&g_runtimeLock);
+    const std::lock_guard lock(g_runtimeLock);
     if (!g_initialized.load(std::memory_order_acquire)) {
-        ReleaseSRWLockExclusive(&g_runtimeLock);
         return true;
     }
     if (!client::shutdown()) {
         // Server and State must remain valid while any Client hook is attached.
-        ReleaseSRWLockExclusive(&g_runtimeLock);
         return false;
     }
     g_initialized.store(false, std::memory_order_release);
     server::shutdown();
     middleware::shutdown();
     state::content_manifest::shutdown();
+    state::activity_sdk::shutdown();
     state::shutdown();
     state::entitlements::clear();
     ui::modules::logs::shutdown();
+    ui::modules::hud::shutdown();
     ui::modules::registry::shutdown();
     ui::runtime::shutdown();
     log::write(log::Channel::core, log::Level::info, "ev=shutdown result=ok");
     state::unlocks::clear();
     log::shutdown();
     settings::shutdown();
-    ReleaseSRWLockExclusive(&g_runtimeLock);
     return true;
 }
 

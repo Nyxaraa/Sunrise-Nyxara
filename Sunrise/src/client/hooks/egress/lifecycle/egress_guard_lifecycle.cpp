@@ -1,21 +1,24 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <shared_mutex>
 
 #include "../../../../core/logging/log.h"
 #include "../internal.h"
+// Included for its signature static_asserts; nothing here names a symbol from it.
 #include "../platform/abi.h"
 #include "../runtime.h"
+#include "core/threading/srw_lock.h"
 #include "internal.h"
 
 namespace sunrise::client::hooks::egress {
 
-SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<hooking::detour::Handle, kHookCount> g_handles{};
 
 namespace {
 
-namespace lifecycle = lifecycle;
+/** Guards the handle table and the one-shot install report. */
+core::threading::SrwLock g_lock{};
 
 /** Export names recorded at install so the outcome can be named once logging exists. */
 std::array<const char*, kHookCount> g_exportNames{};
@@ -64,13 +67,11 @@ std::size_t g_activeHookCount{};
 
 /** Installs every resolver and socket guard in one process-wide transaction. */
 bool install() noexcept {
-    AcquireSRWLockExclusive(&g_lock);
+    const std::lock_guard lock(g_lock);
     if (all_installed()) {
-        ReleaseSRWLockExclusive(&g_lock);
         return true;
     }
     if (any_installed() || !pin_owner_module() || !lifecycle::load_modules()) {
-        ReleaseSRWLockExclusive(&g_lock);
         return false;
     }
 
@@ -82,44 +83,44 @@ bool install() noexcept {
         g_activeHookCount = 0;
         g_batchAttached = false;
         lifecycle::release_modules();
-        ReleaseSRWLockExclusive(&g_lock);
         return false;
     }
     g_activeHookCount = count;
     g_batchAttached = true;
-    ReleaseSRWLockExclusive(&g_lock);
     return true;
 }
 
 /** Emits one line per guarded export, then the batch outcome. */
 void report_installation() noexcept {
-    AcquireSRWLockExclusive(&g_lock);
-    if (g_reported) {
-        ReleaseSRWLockExclusive(&g_lock);
-        return;
-    }
-    g_reported = true;
-    const std::size_t count = g_activeHookCount;
-    const bool attached = g_batchAttached;
-    for (std::size_t index = 0; index < kHookCount; ++index) {
-        if (g_exportNames[index] == nullptr) {
-            continue;
+    std::size_t count = 0;
+    bool attached = false;
+    {
+        const std::lock_guard lock(g_lock);
+        if (g_reported) {
+            return;
         }
-        const bool ready = g_exportResolved[index] && index < count && attached;
-        std::array<char, 128> line{};
-        const int written = std::snprintf(line.data(),
-                                          line.size(),
-                                          "ev=hook stage=attach group=egress name=%s result=%s",
-                                          g_exportNames[index],
-                                          ready ? "ok" : "fail");
-        if (written > 0) {
-            core::log::write(core::log::Channel::client,
-                             ready ? core::log::Level::debug : core::log::Level::warn,
-                             {line.data(), static_cast<std::size_t>(written)});
+        g_reported = true;
+        count = g_activeHookCount;
+        attached = g_batchAttached;
+        for (std::size_t index = 0; index < kHookCount; ++index) {
+            if (g_exportNames[index] == nullptr) {
+                continue;
+            }
+            const bool ready = g_exportResolved[index] && index < count && attached;
+            std::array<char, core::log::kLineCapacity> line{};
+            const int written = std::snprintf(line.data(),
+                                              line.size(),
+                                              "ev=hook stage=attach group=egress name=%s result=%s",
+                                              g_exportNames[index],
+                                              ready ? "ok" : "fail");
+            if (written > 0) {
+                core::log::write(core::log::Channel::client,
+                                 ready ? core::log::Level::debug : core::log::Level::warn,
+                                 {line.data(), static_cast<std::size_t>(written)});
+            }
         }
     }
-    ReleaseSRWLockExclusive(&g_lock);
-    std::array<char, 96> summary{};
+    std::array<char, core::log::kLineCapacity> summary{};
     const int written = std::snprintf(summary.data(),
                                       summary.size(),
                                       "ev=hook stage=install group=egress count=%zu result=%s",
@@ -134,9 +135,8 @@ void report_installation() noexcept {
 
 /** @return True only when every required guard detour is attached. */
 bool is_installed() noexcept {
-    AcquireSRWLockShared(&g_lock);
+    const std::shared_lock lock(g_lock);
     const bool installed = all_installed();
-    ReleaseSRWLockShared(&g_lock);
     return installed;
 }
 

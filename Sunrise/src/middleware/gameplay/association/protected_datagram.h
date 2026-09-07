@@ -29,14 +29,12 @@ using ProtectedContext = state::gameplay::ProtectedContext;
  * The clear header is not authenticated data: the tag covers the encrypted bits only.
  * @param context Installed crypto state. Its outgoing word A is advanced before the header.
  * @param payload Established transport payload bytes.
- * @param destinationPort Host-order UDP port written into the encrypted trailer.
  * @param output Caller storage of at least kProtectedCapacity bytes.
  * @param written Receives the datagram length on success.
  * @return True when the payload fit the length fields and the transform succeeded.
  */
 [[nodiscard]] bool seal(ProtectedContext& context,
                         std::span<const std::byte> payload,
-                        std::uint16_t destinationPort,
                         std::span<std::byte> output,
                         std::size_t& written) noexcept;
 

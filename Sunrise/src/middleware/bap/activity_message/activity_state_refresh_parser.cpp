@@ -15,9 +15,7 @@ constexpr std::uint32_t kBubbleIndexBias = 0x80000000U;
 /** Parses the fixed state-refresh request prefix. */
 bool parse_state_refresh(std::span<const std::byte> input, StateRefresh& refresh) noexcept {
     refresh = {};
-    // The bound is only what the reads below need. An exact length is the client's
-    // business, not a rule to enforce here.
-    if (input.size() < kEncodedSize) {
+    if (input.size() != kEncodedSize) {
         return false;
     }
 

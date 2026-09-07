@@ -51,8 +51,8 @@ constexpr std::size_t kFamilyCountSize = encoding::kU32Size;
 
 /** @return True for every object encoding understood by the Client. */
 [[nodiscard]] bool valid_encoding(Encoding value) noexcept {
-    return value == Encoding::tagReflection || value == Encoding::binaryDiff
-           || value == Encoding::raw || value == Encoding::oodle;
+    return value == Encoding::none || value == Encoding::tagReflection
+           || value == Encoding::binaryDiff || value == Encoding::raw || value == Encoding::oodle;
 }
 
 /**

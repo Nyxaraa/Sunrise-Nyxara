@@ -1,12 +1,11 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <cstdio>
 #include <limits>
 #include <optional>
 #include <span>
 
-#include "../../../../../core/logging/log.h"
+#include "../../../../../middleware/datagen/definitions.h"
 #include "../../../../../middleware/datagen/family4/account/account_encoder.h"
 #include "../../../../../middleware/datagen/family4/account/layout.h"
 #include "../../../../../middleware/datagen/family4/account/selection_patch/\
@@ -20,84 +19,90 @@ account_selection_patch_encoder.h"
 #include "snapshot_storage.h"
 
 namespace sunrise::server::bap::encrypted::push::snapshot {
-namespace {
 
 namespace family4_datagen = middleware::datagen::family4;
 namespace selection_patch = middleware::datagen::family4::account::selection_patch;
 
-/** Logs the exact resolved and encoded fields used by the opcode-403 character upsert. */
-void report_equipment_object(const queuez::EquipmentSwap& swap,
-                             const state::PendingEquipmentSwap& mutation,
-                             const Resolved& selected,
-                             const family4_datagen::character::layout::Object& object) noexcept {
-    // Row sentinel for the log line only. Zero is a real row, so it cannot stand for "not found".
-    constexpr std::size_t kMissing = (std::numeric_limits<std::size_t>::max)();
-    std::size_t requestedRow = kMissing;
-    std::size_t previousRow = kMissing;
-    std::size_t nativeSlot = kMissing;
-    bool requestedEquipped = false;
-    bool previousEquipped = false;
-    for (std::size_t index = 0; index < selected.loadout.itemCount; ++index) {
-        const auto& item = selected.loadout.items[index];
-        if (item.instance.instanceSoid == mutation.requestedInstanceSoid) {
-            requestedRow = item.inventoryRow;
-            nativeSlot = item.equipmentSlot;
-            requestedEquipped = item.equipped;
-        } else if (item.instance.instanceSoid == mutation.previousInstanceSoid) {
-            previousRow = item.inventoryRow;
-            previousEquipped = item.equipped;
+/**
+ * Moves each newly acquired item to the inventory row the acquisition presentation names.
+ * @param characterBytes Character object to edit in place; must hold a whole object.
+ * @param loadout Resolved items the presentation rows refer to by instance soid.
+ * @return False when a row is claimed twice, out of range, or names no resolved item.
+ */
+bool apply_acquisition_presentation(
+    std::span<std::byte> characterBytes,
+    const family4_datagen::loadout::ResolvedLoadout& loadout,
+    std::span<const queuez::AcquisitionPresentationRow> presentationRows) noexcept {
+    namespace character_layout = family4_datagen::character::layout;
+    // One new-item flag byte covers 8 consecutive inventory rows.
+    constexpr std::size_t kBitsPerFlagByte = 8;
+    // Every bit set is the native empty biased definition index.
+    constexpr std::uint16_t kEmptyDefinitionIndex = (std::numeric_limits<std::uint16_t>::max)();
+    if (presentationRows.empty()) {
+        return true;
+    }
+    if (characterBytes.size() < character_layout::kObjectSize
+        || presentationRows.size() > queuez::kAcquisitionPresentationRowCapacity) {
+        return false;
+    }
+
+    auto& characterObject = *reinterpret_cast<character_layout::Object*>(characterBytes.data());
+    std::array<const family4_datagen::loadout::ResolvedItem*,
+               queuez::kAcquisitionPresentationRowCapacity>
+        resolvedItems{};
+    std::array<bool, character_layout::kInventoryCapacity> occupiedRows{};
+    for (std::size_t presentationIndex = 0; presentationIndex < presentationRows.size();
+         ++presentationIndex) {
+        const auto& presentation = presentationRows[presentationIndex];
+        if (presentation.instanceSoid == 0
+            || presentation.inventoryRow >= characterObject.inventoryItems.size()
+            || occupiedRows[presentation.inventoryRow]) {
+            return false;
+        }
+        occupiedRows[presentation.inventoryRow] = true;
+        for (std::size_t itemIndex = 0; itemIndex < loadout.itemCount; ++itemIndex) {
+            const auto& item = loadout.items[itemIndex];
+            if (item.instance.instanceSoid != presentation.instanceSoid) {
+                continue;
+            }
+            if (resolvedItems[presentationIndex] != nullptr
+                || item.inventoryRow >= characterObject.inventoryItems.size()) {
+                return false;
+            }
+            resolvedItems[presentationIndex] = &item;
+        }
+        if (resolvedItems[presentationIndex] == nullptr) {
+            return false;
         }
     }
-    const std::uint64_t equippedSoid = nativeSlot < object.equippedInstanceSoids.size()
-                                           ? object.equippedInstanceSoids[nativeSlot]
-                                           : 0;
-    const std::uint64_t requestedRowSoid = requestedRow < object.inventoryItems.size()
-                                               ? object.inventoryItems[requestedRow].instanceSoid
-                                               : 0;
-    const std::uint64_t previousRowSoid = previousRow < object.inventoryItems.size()
-                                              ? object.inventoryItems[previousRow].instanceSoid
-                                              : 0;
-    const std::int32_t requestedSerial = requestedRow < object.inventoryItems.size()
-                                             ? object.inventoryItems[requestedRow].mutationSerial
-                                             : -1;
-    const std::int32_t previousSerial = previousRow < object.inventoryItems.size()
-                                            ? object.inventoryItems[previousRow].mutationSerial
-                                            : -1;
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=equip stage=character_object result=ok family_version=%d root=0x%llX definition=%u "
-        "character=0x%llX items=%zu next_serial=%u requested=0x%llX requested_row=%zu "
-        "requested_row_soid=0x%llX requested_equipped=%u native_slot=%zu equipped_soid=0x%llX "
-        "requested_serial=%d previous=0x%llX previous_row=%zu previous_row_soid=0x%llX "
-        "previous_equipped=%u previous_serial=%d",
-        swap.after.family4Version,
-        static_cast<unsigned long long>(swap.after.family4RootSoid),
-        swap.characterDefinitionId,
-        static_cast<unsigned long long>(mutation.characterSoid),
-        selected.loadout.itemCount,
-        object.nextInventorySerial,
-        static_cast<unsigned long long>(mutation.requestedInstanceSoid),
-        requestedRow,
-        static_cast<unsigned long long>(requestedRowSoid),
-        static_cast<unsigned>(requestedEquipped),
-        nativeSlot,
-        static_cast<unsigned long long>(equippedSoid),
-        requestedSerial,
-        static_cast<unsigned long long>(mutation.previousInstanceSoid),
-        previousRow,
-        static_cast<unsigned long long>(previousRowSoid),
-        static_cast<unsigned>(previousEquipped),
-        previousSerial);
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::debug,
-                         {line.data(), static_cast<std::size_t>(count)});
-    }
-}
 
-} // namespace
+    for (const auto* item : std::span(resolvedItems).first(presentationRows.size())) {
+        const std::size_t row = item->inventoryRow;
+        characterObject.inventoryItems[row] = {};
+        characterObject.inventoryItems[row].definitionIndex = kEmptyDefinitionIndex;
+        characterObject.newItemFlags[row / kBitsPerFlagByte] &=
+            ~(std::byte{1U} << (row % kBitsPerFlagByte));
+        characterObject.instanceProgressWatermarks[row] = 0;
+    }
+    for (std::size_t presentationIndex = 0; presentationIndex < presentationRows.size();
+         ++presentationIndex) {
+        const auto& presentation = presentationRows[presentationIndex];
+        const auto* item = resolvedItems[presentationIndex];
+        auto& row = characterObject.inventoryItems[presentation.inventoryRow];
+        if (row.definitionIndex != kEmptyDefinitionIndex) {
+            return false;
+        }
+        row.definitionIndex = item->instance.baseDefinitionIndex;
+        row.instanceSoid = item->instance.instanceSoid;
+        row.quantity = item->quantity;
+        row.mutationSerial = item->mutationSerial;
+        row.flags = item->flags;
+        characterObject.newItemFlags[presentation.inventoryRow / kBitsPerFlagByte] |=
+            std::byte{1U} << (presentation.inventoryRow % kBitsPerFlagByte);
+        characterObject.instanceProgressWatermarks[presentation.inventoryRow] = 1;
+    }
+    return true;
+}
 
 /** Builds the Family-4 increment that moves the character object to the picked character. */
 bool prepare_selection_move(Scratch& scratch,
@@ -123,16 +128,13 @@ bool prepare_selection_move(Scratch& scratch,
     const auto rawStorage = std::span(scratch.plaintext).subspan(reservation.rawWriteOffset);
     std::size_t compressedExtent = reservation.compressedWriteOffset;
     std::size_t objectCount = 0;
-    // The first select resends the character object even when the pick names the current one. With
-    // no pending change all three operations go out. Only a pending change may skip it, and only
-    // when the character did not move.
+    // A first select resends the character even when it names the current one. A pending change
+    // may skip the resend only when the character did not move.
     if (!select.patchAccount || select.previousCharacterSoid != select.selectedCharacterSoid) {
-        // A zero previous key means the snapshot published no character object. There is no slot
-        // to release, so the pick adds one. Releasing a key the Client never held raises queuez
-        // error 4.
+        // A zero previous key means there is no published character slot to release.
         if (select.previousCharacterSoid != 0) {
-            // The release carries no payload. The encoding field is never read for an empty
-            // object, so it just matches its neighbours.
+            // TODO: a release should name no codec. This one names oodle and the family-zero
+            // release names none; which form the client requires is not established.
             staged.objects[objectCount++] = middleware::queuez::Object{
                 select.characterDefinitionId,
                 select.previousCharacterSoid,
@@ -164,8 +166,7 @@ bool prepare_selection_move(Scratch& scratch,
                                              + family4_datagen::character::layout::kObjectSize);
     }
 
-    // The character object is already compressed into sealed storage, so the raw span is free
-    // for whichever account body this move carries.
+    // The compressed character no longer occupies the raw span needed for the account body.
     if (select.patchAccount) {
         std::size_t patchSize = 0;
         if (!selection_patch::encode(select.selectedCharacterSoid, rawStorage, patchSize)
@@ -215,11 +216,47 @@ bool prepare_selection_move(Scratch& scratch,
     return true;
 }
 
+/** Compresses and commits one selected-character-only Family-4 increment. */
+[[nodiscard]] bool finish_character_upsert(Scratch& scratch,
+                                           const Reservation& reservation,
+                                           std::span<std::byte> characterBytes,
+                                           const queuez::EquipmentSwap& update,
+                                           const char* objectFailure,
+                                           const char* commitFailure,
+                                           Prepared& prepared) noexcept {
+    Prepared staged{};
+    staged.rawClearSize =
+        (std::max)(reservation.rawClearSize,
+                   reservation.rawWriteOffset + family4_datagen::character::layout::kObjectSize);
+    std::size_t compressedExtent = reservation.compressedWriteOffset;
+    if (!append_object(scratch,
+                       characterBytes,
+                       update.characterDefinitionId,
+                       update.characterSoid,
+                       staged.objects.front(),
+                       compressedExtent)) {
+        return report_failure(objectFailure);
+    }
+    staged.compressedClearSize = (std::max)(reservation.compressedClearSize, compressedExtent);
+    staged.family = middleware::queuez::Family{kAccountFamilyType,
+                                               update.after.family4RootSoid,
+                                               update.after.family4Version,
+                                               0,
+                                               std::span(staged.objects).first(1)};
+    if (!commit(staged, prepared)) {
+        clear_after(scratch, reservation);
+        return report_failure(commitFailure);
+    }
+    return true;
+}
+
 /** Builds a single-character Family-4 upsert from an uncommitted equipment after-image. */
-bool prepare_equipment_swap(Scratch& scratch,
-                            const queuez::EquipmentSwap& swap,
-                            const state::PendingEquipmentSwap& mutation,
-                            Prepared& prepared) noexcept {
+bool prepare_equipment_swap(
+    Scratch& scratch,
+    const queuez::EquipmentSwap& swap,
+    const state::PendingEquipmentSwap& mutation,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    Prepared& prepared) noexcept {
     const Reservation reservation = reserve_prior(scratch, prepared);
     if (reservation.rawWriteOffset > scratch.plaintext.size()
         || reservation.compressedWriteOffset > scratch.sealed.size()) {
@@ -253,11 +290,84 @@ bool prepare_equipment_swap(Scratch& scratch,
                                             characterBytes)) {
         return report_failure("equip_character_object");
     }
-    report_equipment_object(swap,
-                            mutation,
-                            selected,
-                            *reinterpret_cast<const family4_datagen::character::layout::Object*>(
-                                characterBytes.data()));
+
+    // An equipment update must not present the displaced item as another acquisition.
+    constexpr std::size_t kBitsPerNewItemFlagByte = 8;
+    const std::uint64_t movedIntoInventory = mutation.kind == state::EquipmentMutationKind::equip
+                                                 ? mutation.previousInstanceSoid
+                                                 : mutation.requestedInstanceSoid;
+    auto& characterObject =
+        *reinterpret_cast<family4_datagen::character::layout::Object*>(characterBytes.data());
+
+    if (!apply_acquisition_presentation(
+            characterBytes, selected.loadout, acquisitionPresentationRows)) {
+        clear_after(scratch, reservation);
+        return report_failure("equip_presentation");
+    }
+
+    std::size_t movedRowMatches = 0;
+    if (movedIntoInventory != 0) {
+        for (std::size_t row = 0; row < characterObject.inventoryItems.size(); ++row) {
+            if (characterObject.inventoryItems[row].instanceSoid != movedIntoInventory) {
+                continue;
+            }
+            const std::size_t flagByte = row / kBitsPerNewItemFlagByte;
+            const std::byte flagMask = std::byte{1U} << (row % kBitsPerNewItemFlagByte);
+            characterObject.newItemFlags[flagByte] &= ~flagMask;
+            ++movedRowMatches;
+        }
+        if (movedRowMatches != 1) {
+            clear_after(scratch, reservation);
+            return report_failure("equip_moved_inventory_row");
+        }
+    }
+    return finish_character_upsert(scratch,
+                                   reservation,
+                                   characterBytes,
+                                   swap,
+                                   "equip_character_object",
+                                   "equip_commit",
+                                   prepared);
+}
+
+/** Builds a single-character Family-4 upsert from an uncommitted item-state after-image. */
+bool prepare_current_activity_character(Scratch& scratch,
+                                        const queuez::EquipmentSwap& update,
+                                        const state::PendingCurrentActivity& mutation,
+                                        Prepared& prepared) noexcept {
+    const Reservation reservation = reserve_prior(scratch, prepared);
+    if (reservation.rawWriteOffset > scratch.plaintext.size()
+        || reservation.compressedWriteOffset > scratch.sealed.size()) {
+        return report_failure("current_activity_reservation");
+    }
+    state::AccountState account = state::account_snapshot();
+    if (!mutation.prepared || mutation.characterSoid == 0
+        || mutation.characterSoid != update.characterSoid
+        || mutation.characterIndex >= account.characterCount
+        || account.characters[mutation.characterIndex].soid != mutation.characterSoid) {
+        return report_failure("current_activity_mutation");
+    }
+    account.characters[mutation.characterIndex] = mutation.afterCharacter;
+    Resolved selected{};
+    const std::optional<std::size_t> selectedIndex = find_character_index(account);
+    if (!state::account::valid(account) || !selectedIndex.has_value()
+        || *selectedIndex != mutation.characterIndex
+        || !resolve(account, mutation.characterIndex, selected)
+        || selected.characterObjectId != update.characterDefinitionId) {
+        return report_failure("current_activity_selection");
+    }
+
+    const auto rawStorage = std::span(scratch.plaintext).subspan(reservation.rawWriteOffset);
+    if (family4_datagen::character::layout::kObjectSize > rawStorage.size()) {
+        return report_failure("current_activity_character_storage");
+    }
+    const auto characterBytes = rawStorage.first(family4_datagen::character::layout::kObjectSize);
+    if (!family4_datagen::character::encode(account.characters[mutation.characterIndex],
+                                            selected.loadout,
+                                            selected.lightEvaluation,
+                                            characterBytes)) {
+        return report_failure("current_activity_character_object");
+    }
 
     Prepared staged{};
     staged.rawClearSize =
@@ -266,32 +376,34 @@ bool prepare_equipment_swap(Scratch& scratch,
     std::size_t compressedExtent = reservation.compressedWriteOffset;
     if (!append_object(scratch,
                        characterBytes,
-                       swap.characterDefinitionId,
-                       swap.characterSoid,
+                       update.characterDefinitionId,
+                       update.characterSoid,
                        staged.objects.front(),
                        compressedExtent)) {
-        return report_failure("equip_character_object");
+        return report_failure("current_activity_character_object");
     }
     staged.compressedClearSize = (std::max)(reservation.compressedClearSize, compressedExtent);
     staged.family = middleware::queuez::Family{
         kAccountFamilyType,
-        swap.after.family4RootSoid,
-        swap.after.family4Version,
+        update.after.family4RootSoid,
+        update.after.family4Version,
         0,
         std::span(staged.objects).first(1),
     };
     if (!commit(staged, prepared)) {
         clear_after(scratch, reservation);
-        return report_failure("equip_commit");
+        return report_failure("current_activity_commit");
     }
     return true;
 }
 
 /** Builds a single-character Family-4 upsert from an uncommitted item-state after-image. */
-bool prepare_item_state(Scratch& scratch,
-                        const queuez::EquipmentSwap& update,
-                        const state::PendingItemState& mutation,
-                        Prepared& prepared) noexcept {
+bool prepare_item_state(
+    Scratch& scratch,
+    const queuez::EquipmentSwap& update,
+    const state::PendingItemState& mutation,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    Prepared& prepared) noexcept {
     const Reservation reservation = reserve_prior(scratch, prepared);
     if (reservation.rawWriteOffset > scratch.plaintext.size()
         || reservation.compressedWriteOffset > scratch.sealed.size()) {
@@ -340,108 +452,185 @@ bool prepare_item_state(Scratch& scratch,
     if (matchingRows != 1) {
         return report_failure("item_state_character_shape");
     }
-
-    Prepared staged{};
-    staged.rawClearSize =
-        (std::max)(reservation.rawClearSize,
-                   reservation.rawWriteOffset + family4_datagen::character::layout::kObjectSize);
-    std::size_t compressedExtent = reservation.compressedWriteOffset;
-    if (!append_object(scratch,
-                       characterBytes,
-                       update.characterDefinitionId,
-                       update.characterSoid,
-                       staged.objects.front(),
-                       compressedExtent)) {
-        return report_failure("item_state_character_object");
-    }
-    staged.compressedClearSize = (std::max)(reservation.compressedClearSize, compressedExtent);
-    staged.family = middleware::queuez::Family{
-        kAccountFamilyType,
-        update.after.family4RootSoid,
-        update.after.family4Version,
-        0,
-        std::span(staged.objects).first(1),
-    };
-    if (!commit(staged, prepared)) {
+    if (!apply_acquisition_presentation(
+            characterBytes, selected.loadout, acquisitionPresentationRows)) {
         clear_after(scratch, reservation);
-        return report_failure("item_state_commit");
+        return report_failure("item_state_presentation");
     }
-    return true;
+
+    return finish_character_upsert(scratch,
+                                   reservation,
+                                   characterBytes,
+                                   update,
+                                   "item_state_character_object",
+                                   "item_state_commit",
+                                   prepared);
 }
 
-/** Builds a resident item upsert followed by charged account balances when the cost consumes. */
-bool prepare_socket_plug(Scratch& scratch,
-                         const queuez::SocketPlug& socketPlug,
-                         const state::PendingSocketPlug& mutation,
-                         Prepared& prepared) noexcept {
+/** Builds a single-character Family-4 upsert from an uncommitted artifact mask. */
+bool prepare_artifact_purchase(
+    Scratch& scratch,
+    const queuez::EquipmentSwap& update,
+    const state::PendingArtifactPurchase& mutation,
+    std::span<const queuez::AcquisitionPresentationRow> acquisitionPresentationRows,
+    Prepared& prepared) noexcept {
     const Reservation reservation = reserve_prior(scratch, prepared);
     if (reservation.rawWriteOffset > scratch.plaintext.size()
         || reservation.compressedWriteOffset > scratch.sealed.size()) {
-        return report_failure("socket_plug_reservation");
+        return report_failure("artifact_reservation");
     }
-
-    state::AccountState account{};
+    const state::AccountState account = state::account_snapshot();
     if (!mutation.prepared || mutation.accountSoid == 0 || mutation.characterSoid == 0
-        || mutation.targetInstanceSoid == 0 || mutation.accountSoid != socketPlug.accountSoid
-        || mutation.characterSoid != socketPlug.characterSoid
-        || mutation.targetInstanceSoid != socketPlug.targetInstanceSoid
-        || mutation.profileChanged != socketPlug.updatesAccount
-        || mutation.accountSoid != socketPlug.after.family4RootSoid
-        || socketPlug.accountDefinitionId == 0 || !state::preview_socket_plug(mutation, account)
+        || mutation.accountSoid != account.primarySoid
+        || mutation.characterSoid != update.characterSoid
         || mutation.characterIndex >= account.characterCount
-        || account.primarySoid != mutation.accountSoid
-        || account.characters[mutation.characterIndex].soid != mutation.characterSoid) {
-        return report_failure("socket_plug_mutation");
+        || account.characters[mutation.characterIndex].soid != mutation.characterSoid
+        || !account.characters[mutation.characterIndex].selected) {
+        return report_failure("artifact_mutation");
     }
-
     Resolved selected{};
     const std::optional<std::size_t> selectedIndex = find_character_index(account);
     if (!state::account::valid(account) || !selectedIndex.has_value()
         || *selectedIndex != mutation.characterIndex
         || !resolve(account, mutation.characterIndex, selected)
-        || selected.itemInstanceObjectId != socketPlug.itemInstanceDefinitionId) {
-        return report_failure("socket_plug_selection");
+        || selected.characterObjectId != update.characterDefinitionId) {
+        return report_failure("artifact_selection");
     }
-
-    family4_datagen::loadout::ResolvedInstances changed{};
-    for (std::size_t index = 0; index < selected.loadout.itemCount; ++index) {
-        const family4_datagen::loadout::ResolvedItem& item = selected.loadout.items[index];
-        if (item.instance.instanceSoid != mutation.targetInstanceSoid) {
-            continue;
-        }
-        if (changed.itemCount != 0
-            || item.instance.baseDefinitionIndex != mutation.targetDefinitionIndex
-            || mutation.socketLane >= item.instance.ordinarySockets.plugs.size()
-            || item.instance.ordinarySockets.state
-                   != family4_datagen::instance::OrdinarySocketBlockState::present
-            || !item.instance.ordinarySockets.plugs[mutation.socketLane].has_value()
-            || *item.instance.ordinarySockets.plugs[mutation.socketLane]
-                   != mutation.plugDefinitionIndex) {
-            return report_failure("socket_plug_item_shape");
-        }
-        changed.items[0] = {item.equipmentSlot, item.instance};
-        changed.itemCount = 1;
-    }
-    if (changed.itemCount != 1) {
-        return report_failure("socket_plug_item_missing");
-    }
-
     const auto rawStorage = std::span(scratch.plaintext).subspan(reservation.rawWriteOffset);
-    const std::size_t requiredRawSize = socketPlug.updatesAccount
-                                            ? family4_datagen::account::layout::kObjectSize
-                                            : family4_datagen::instance::layout::kObjectSize;
-    if (requiredRawSize > rawStorage.size()) {
-        return report_failure("socket_plug_item_storage");
+    if (family4_datagen::character::layout::kObjectSize > rawStorage.size()) {
+        return report_failure("artifact_character_storage");
     }
+    const auto characterBytes = rawStorage.first(family4_datagen::character::layout::kObjectSize);
+    if (!family4_datagen::character::encode(account.characters[mutation.characterIndex],
+                                            selected.loadout,
+                                            selected.lightEvaluation,
+                                            characterBytes)) {
+        return report_failure("artifact_character_object");
+    }
+    if (!apply_acquisition_presentation(
+            characterBytes, selected.loadout, acquisitionPresentationRows)) {
+        clear_after(scratch, reservation);
+        return report_failure("artifact_projection");
+    }
+
+    return finish_character_upsert(scratch,
+                                   reservation,
+                                   characterBytes,
+                                   update,
+                                   "artifact_character_object",
+                                   "artifact_commit",
+                                   prepared);
+}
+
+/** Builds an incremental reset image without re-announcing every resident item. */
+bool prepare_artifact_reset(Scratch& scratch,
+                            const queuez::EquipmentSwap& update,
+                            Prepared& prepared) noexcept {
+    const Reservation reservation = reserve_prior(scratch, prepared);
+    const state::AccountState account = state::account_snapshot();
+    const std::optional<std::size_t> selectedIndex = find_character_index(account);
+    Resolved selected{};
+    std::uint32_t accountDefinitionId = 0;
+    if (!state::account::valid(account) || !selectedIndex.has_value()
+        || !resolve(account, *selectedIndex, selected)
+        || !middleware::datagen::object_id(
+            kAccountFamilyType, middleware::datagen::kAccountSlot, accountDefinitionId)
+        || account.primarySoid != update.after.family4RootSoid
+        || account.characters[*selectedIndex].soid != update.characterSoid
+        || selected.characterObjectId != update.characterDefinitionId) {
+        return report_failure("artifact_reset_state");
+    }
+    bool accountResident = false;
+    for (std::size_t index = 0; index < update.after.family4ResidentCount; ++index) {
+        const auto& resident = update.after.family4Residents[index];
+        accountResident = accountResident
+                          || (resident.definitionId == accountDefinitionId
+                              && resident.objectSoid == account.primarySoid);
+    }
+    const auto rawStorage = std::span(scratch.plaintext).subspan(reservation.rawWriteOffset);
+    const std::size_t required = (std::max)(family4_datagen::account::layout::kObjectSize,
+                                            family4_datagen::character::layout::kObjectSize);
+    if (!accountResident || required > rawStorage.size()) {
+        return report_failure("artifact_reset_storage");
+    }
+
     Prepared staged{};
     staged.rawClearSize =
-        (std::max)(reservation.rawClearSize,
-                   reservation.rawWriteOffset + family4_datagen::instance::layout::kObjectSize);
+        (std::max)(reservation.rawClearSize, reservation.rawWriteOffset + required);
     std::size_t compressedExtent = reservation.compressedWriteOffset;
+    const auto accountBytes = rawStorage.first(family4_datagen::account::layout::kObjectSize);
+    if (!family4_datagen::account::encode(account, accountBytes)
+        || !append_object(scratch,
+                          accountBytes,
+                          accountDefinitionId,
+                          account.primarySoid,
+                          staged.objects[0],
+                          compressedExtent)) {
+        clear_after(scratch, reservation);
+        return report_failure("artifact_reset_account");
+    }
+    const auto characterBytes = rawStorage.first(family4_datagen::character::layout::kObjectSize);
+    if (!family4_datagen::character::encode(account.characters[*selectedIndex],
+                                            selected.loadout,
+                                            selected.lightEvaluation,
+                                            characterBytes)
+        || !append_object(scratch,
+                          characterBytes,
+                          update.characterDefinitionId,
+                          update.characterSoid,
+                          staged.objects[1],
+                          compressedExtent)) {
+        clear_after(scratch, reservation);
+        return report_failure("artifact_reset_character");
+    }
+    staged.compressedClearSize = (std::max)(reservation.compressedClearSize, compressedExtent);
+    staged.family = middleware::queuez::Family{kAccountFamilyType,
+                                               update.after.family4RootSoid,
+                                               update.after.family4Version,
+                                               0,
+                                               std::span(staged.objects).first(2)};
+    if (!commit(staged, prepared)) {
+        clear_after(scratch, reservation);
+        return report_failure("artifact_reset_commit");
+    }
+    return true;
+}
+
+/** Builds one exact current item-resident upsert after artifact reset. */
+bool prepare_artifact_item_refresh(Scratch& scratch,
+                                   const queuez::EquipmentSwap& update,
+                                   std::uint64_t instanceSoid,
+                                   Prepared& prepared) noexcept {
+    const Reservation reservation = reserve_prior(scratch, prepared);
+    const state::AccountState account = state::account_snapshot();
+    const std::optional<std::size_t> selectedIndex = find_character_index(account);
+    Resolved selected{};
+    if (instanceSoid == 0 || !state::account::valid(account) || !selectedIndex.has_value()
+        || !resolve(account, *selectedIndex, selected)
+        || selected.characterObjectId != update.characterDefinitionId
+        || update.characterSoid != account.characters[*selectedIndex].soid) {
+        return report_failure("artifact_item_refresh_selection");
+    }
+    family4_datagen::loadout::ResolvedInstances changed{};
+    for (const auto& item : selected.loadout.items) {
+        if (item.instance.instanceSoid != instanceSoid) {
+            continue;
+        }
+        if (changed.itemCount != 0) {
+            return report_failure("artifact_item_refresh_duplicate");
+        }
+        changed.items[changed.itemCount++] = {item.equipmentSlot, item.instance};
+    }
+    if (changed.itemCount != 1) {
+        return report_failure("artifact_item_refresh_missing");
+    }
+    const auto rawStorage = std::span(scratch.plaintext).subspan(reservation.rawWriteOffset);
+    Prepared staged{};
     std::size_t itemCursor = 0;
+    std::size_t compressedExtent = reservation.compressedWriteOffset;
     if (!append_items(scratch,
                       rawStorage,
-                      socketPlug.itemInstanceDefinitionId,
+                      selected.itemInstanceObjectId,
                       changed,
                       0,
                       staged,
@@ -449,184 +638,20 @@ bool prepare_socket_plug(Scratch& scratch,
                       compressedExtent)
         || itemCursor != 1) {
         clear_after(scratch, reservation);
-        return report_failure("socket_plug_item_object");
+        return report_failure("artifact_item_refresh_encode");
     }
-
-    std::size_t objectCount = 1;
-    if (socketPlug.updatesAccount) {
-        const auto accountBytes = rawStorage.first(family4_datagen::account::layout::kObjectSize);
-        if (!family4_datagen::account::encode(account, accountBytes)
-            || !append_object(scratch,
-                              accountBytes,
-                              socketPlug.accountDefinitionId,
-                              socketPlug.accountSoid,
-                              staged.objects[1],
-                              compressedExtent)) {
-            clear_after(scratch, reservation);
-            return report_failure("socket_plug_account_object");
-        }
-        staged.rawClearSize =
-            (std::max)(staged.rawClearSize,
-                       reservation.rawWriteOffset + family4_datagen::account::layout::kObjectSize);
-        objectCount = 2;
-    }
-
-    staged.compressedClearSize = (std::max)(reservation.compressedClearSize, compressedExtent);
-    staged.family = middleware::queuez::Family{
-        kAccountFamilyType,
-        socketPlug.after.family4RootSoid,
-        socketPlug.after.family4Version,
-        0,
-        std::span(staged.objects).first(objectCount),
-    };
-    if (!commit(staged, prepared)) {
-        clear_after(scratch, reservation);
-        return report_failure("socket_plug_commit");
-    }
-
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=socket_plug stage=family4_objects result=ok family_version=%d root=0x%llX "
-        "character=0x%llX instance=0x%llX item_definition=%u target_definition=%u "
-        "target_bucket=%u lane=%u plug_definition=%u plug_bucket=%u equipped=%u "
-        "material_set=%u material_set_hash=0x%08X material_rows=%u account_update=%u objects=%zu "
-        "order=%s",
-        socketPlug.after.family4Version,
-        static_cast<unsigned long long>(socketPlug.after.family4RootSoid),
-        static_cast<unsigned long long>(socketPlug.characterSoid),
-        static_cast<unsigned long long>(socketPlug.targetInstanceSoid),
-        socketPlug.itemInstanceDefinitionId,
-        static_cast<unsigned>(mutation.targetDefinitionIndex),
-        static_cast<unsigned>(mutation.targetBucketId),
-        static_cast<unsigned>(mutation.socketLane),
-        static_cast<unsigned>(mutation.plugDefinitionIndex),
-        static_cast<unsigned>(mutation.plugBucketId),
-        static_cast<unsigned>(mutation.targetEquipped),
-        static_cast<unsigned>(mutation.materialRequirementSetIndex),
-        mutation.materialRequirementSetHash,
-        static_cast<unsigned>(mutation.materialRequirementCount),
-        static_cast<unsigned>(socketPlug.updatesAccount),
-        objectCount,
-        socketPlug.updatesAccount ? "item_account" : "item");
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::debug,
-                         {line.data(), static_cast<std::size_t>(count)});
-    }
-    return true;
-}
-
-/** Builds the Family-4 subclass item-instance upsert for one prepared node selection. */
-bool prepare_subclass_selection(Scratch& scratch,
-                                const queuez::SubclassSelection& selection,
-                                const state::PendingSubclassSelection& mutation,
-                                Prepared& prepared) noexcept {
-    const Reservation reservation = reserve_prior(scratch, prepared);
-    if (reservation.rawWriteOffset > scratch.plaintext.size()
-        || reservation.compressedWriteOffset > scratch.sealed.size()) {
-        return report_failure("subclass_select_reservation");
-    }
-
-    state::AccountState account{};
-    if (!mutation.prepared || mutation.accountSoid == 0 || mutation.characterSoid == 0
-        || mutation.subclassInstanceSoid == 0 || mutation.accountSoid != selection.accountSoid
-        || mutation.characterSoid != selection.characterSoid
-        || mutation.subclassInstanceSoid != selection.subclassInstanceSoid
-        || mutation.accountSoid != selection.after.family4RootSoid
-        || selection.itemInstanceDefinitionId == 0
-        || !state::preview_subclass_selection(mutation, account)
-        || mutation.characterIndex >= account.characterCount
-        || account.primarySoid != mutation.accountSoid
-        || account.characters[mutation.characterIndex].soid != mutation.characterSoid) {
-        return report_failure("subclass_select_mutation");
-    }
-
-    Resolved selected{};
-    const std::optional<std::size_t> selectedIndex = find_character_index(account);
-    if (!state::account::valid(account) || !selectedIndex.has_value()
-        || *selectedIndex != mutation.characterIndex
-        || !resolve(account, mutation.characterIndex, selected)
-        || selected.itemInstanceObjectId != selection.itemInstanceDefinitionId) {
-        return report_failure("subclass_select_selection");
-    }
-
-    family4_datagen::loadout::ResolvedInstances changed{};
-    for (std::size_t index = 0; index < selected.loadout.itemCount; ++index) {
-        const family4_datagen::loadout::ResolvedItem& item = selected.loadout.items[index];
-        if (item.instance.instanceSoid != mutation.subclassInstanceSoid) {
-            continue;
-        }
-        if (changed.itemCount != 0 || !item.equipped
-            || item.instance.baseDefinitionIndex != mutation.subclassDefinitionIndex
-            || item.instance.socketEntryListIndex != mutation.socketEntryListIndex
-            || !item.instance.socketEntryContentsResolved
-            || mutation.requestedEntry >= item.instance.socketEntryCount) {
-            return report_failure("subclass_select_item_shape");
-        }
-        changed.items[0] = {item.equipmentSlot, item.instance};
-        changed.itemCount = 1;
-    }
-    if (changed.itemCount != 1) {
-        return report_failure("subclass_select_item_missing");
-    }
-
-    const auto rawStorage = std::span(scratch.plaintext).subspan(reservation.rawWriteOffset);
-    if (family4_datagen::instance::layout::kObjectSize > rawStorage.size()) {
-        return report_failure("subclass_select_item_storage");
-    }
-    Prepared staged{};
     staged.rawClearSize =
         (std::max)(reservation.rawClearSize,
                    reservation.rawWriteOffset + family4_datagen::instance::layout::kObjectSize);
-    std::size_t compressedExtent = reservation.compressedWriteOffset;
-    std::size_t itemCursor = 0;
-    if (!append_items(scratch,
-                      rawStorage,
-                      selection.itemInstanceDefinitionId,
-                      changed,
-                      0,
-                      staged,
-                      itemCursor,
-                      compressedExtent)
-        || itemCursor != 1) {
-        clear_after(scratch, reservation);
-        return report_failure("subclass_select_item_object");
-    }
-
     staged.compressedClearSize = (std::max)(reservation.compressedClearSize, compressedExtent);
-    staged.family = middleware::queuez::Family{
-        kAccountFamilyType,
-        selection.after.family4RootSoid,
-        selection.after.family4Version,
-        0,
-        std::span(staged.objects).first(1),
-    };
+    staged.family = middleware::queuez::Family{kAccountFamilyType,
+                                               update.after.family4RootSoid,
+                                               update.after.family4Version,
+                                               0,
+                                               std::span(staged.objects).first(1)};
     if (!commit(staged, prepared)) {
         clear_after(scratch, reservation);
-        return report_failure("subclass_select_commit");
-    }
-
-    std::array<char, core::log::kLineCapacity> line{};
-    const int count = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=subclass_select stage=family4_object result=ok family_version=%d root=0x%llX "
-        "character=0x%llX instance=0x%llX item_definition=%u target_definition=%u "
-        "socket_list=%u requested_entry=%u objects=1",
-        selection.after.family4Version,
-        static_cast<unsigned long long>(selection.after.family4RootSoid),
-        static_cast<unsigned long long>(selection.characterSoid),
-        static_cast<unsigned long long>(selection.subclassInstanceSoid),
-        selection.itemInstanceDefinitionId,
-        static_cast<unsigned>(mutation.subclassDefinitionIndex),
-        static_cast<unsigned>(mutation.socketEntryListIndex),
-        static_cast<unsigned>(mutation.requestedEntry));
-    if (count > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::debug,
-                         {line.data(), static_cast<std::size_t>(count)});
+        return report_failure("artifact_item_refresh_commit");
     }
     return true;
 }

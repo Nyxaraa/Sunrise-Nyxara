@@ -54,14 +54,20 @@ inline constexpr std::uint32_t kObjectClass = 0x80809462U;
 inline constexpr std::size_t kObjectKeyOffset = 12;
 /** An object holds its slot array descriptor at this offset. */
 inline constexpr std::size_t kObjectSlotDescriptor = 32;
+/** Element class of an object's slot array. */
+inline constexpr std::uint32_t kObjectSlotClass = 0x80809B3AU;
 /** One slot is a type and a name hash. */
 inline constexpr std::size_t kSlotStride = 8;
 /** An object holds its per-bubble sub-block array descriptor at this offset. */
 inline constexpr std::size_t kObjectBubbleDescriptor = 56;
+/** Element class of an object's per-bubble sub-block array. */
+inline constexpr std::uint32_t kObjectBubbleClass = 0x80809464U;
 /** One per-bubble sub-block is 24 bytes. */
 inline constexpr std::size_t kObjectBubbleStride = 24;
 /** A sub-block holds its placed-handle array descriptor at this offset. */
 inline constexpr std::size_t kObjectBubbleHandleDescriptor = 8;
+/** Element class of a sub-block's placed-handle array. */
+inline constexpr std::uint32_t kObjectPlacedHandleClass = 0x80809466U;
 /** One placed handle is a bare tag handle. */
 inline constexpr std::size_t kObjectPlacedHandleStride = 4;
 /** A sub-block that applies to every bubble records this index. */
@@ -78,6 +84,8 @@ struct ObjectBubble {
     std::int32_t bubbleIndex{};
     std::uint64_t handleCount{};
     std::size_t handleDataOffset{};
+    /** Exact byte offset of this 24-byte sub-block in the owning object payload. */
+    std::size_t sourceOffset{};
 };
 
 /** One bubble of a destination scenario. */
@@ -90,6 +98,8 @@ struct Bubble {
 /** One slice-set state of a bubble. */
 struct SliceState {
     std::uint32_t stateHash{};
+    /** Exact little-endian state word at record offset 12. */
+    std::uint32_t rawU32At12{};
     std::uint32_t bubbleNameHash{};
     std::uint32_t entryTag{};
     /** The bubble's map-global index, which container bubble masks are keyed by. */
@@ -185,7 +195,7 @@ struct SliceEntry {
  * Finds a placed object's slot array.
  * @param blob Whole object bytes.
  * @param output Receives the array that was found.
- * @return True when the object declares slots.
+ * @return True for a valid slot array, including a declared empty array.
  */
 [[nodiscard]] bool object_slots(std::span<const std::byte> blob, Array& output) noexcept;
 
@@ -206,7 +216,7 @@ struct SliceEntry {
  * Finds a placed object's per-bubble sub-block array.
  * @param blob Whole object bytes.
  * @param output Receives the array that was found.
- * @return True when the object declares sub-blocks.
+ * @return True for a valid sub-block array, including a declared empty array.
  */
 [[nodiscard]] bool object_bubbles(std::span<const std::byte> blob, Array& output) noexcept;
 

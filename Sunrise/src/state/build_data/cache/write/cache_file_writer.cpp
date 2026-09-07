@@ -24,17 +24,32 @@ namespace {
            && domains.socketPlugRules.size() <= kMaximumCount
            && domains.socketPlugPools.size() <= kMaximumCount
            && domains.socketPlugMembers.size() <= kMaximumCount
+           && domains.exoticCatalysts.size() <= kMaximumCount
            && domains.inventoryBuckets.size() <= kMaximumCount
            && domains.socketEntryLists.size() <= kMaximumCount
            && domains.socketEntryTables.size() <= kMaximumCount
            && domains.abilityBuckets.size() <= kMaximumCount
            && domains.progressions.size() <= kMaximumCount
-           && domains.scenarios.size() <= kMaximumCount
+           && domains.records.size() <= kMaximumCount && domains.nodes.size() <= kMaximumCount
+           && domains.sobjects.size() <= kMaximumCount && domains.scenarios.size() <= kMaximumCount
            && domains.rosterGroups.size() <= kMaximumCount
+           && domains.spawnStems.size() <= kMaximumCount
+           && domains.spawnNameHashes.size() <= kMaximumCount
+           && domains.spawnPoints.size() <= kMaximumCount
+           && domains.hashNames.size() <= kMaximumCount
            && domains.vendorIndex.size() <= kMaximumCount
            && domains.vendorDefinitions.size() <= kMaximumCount
            && domains.vendorSaleRows.size() <= kMaximumCount
-           && domains.vendorInstalledRows.size() <= kMaximumCount;
+           && domains.vendorInstalledRows.size() <= kMaximumCount
+           && domains.positionProfiles.size() <= kMaximumCount
+           && domains.objectTypes.size() <= kMaximumCount
+           && domains.recordObjectives.size() <= kMaximumCount
+           && domains.recordIntervals.size() <= kMaximumCount
+           && domains.recordRewards.size() <= kMaximumCount
+           && domains.progressionSteps.size() <= kMaximumCount
+           && domains.seasonPassRewards.size() <= kMaximumCount
+           && domains.seasonPassPackages.size() <= kMaximumCount
+           && domains.bounties.size() <= kMaximumCount;
 }
 
 /** @return True when the requested final-name rule is one of the declared values. */
@@ -61,7 +76,7 @@ bool write(const wchar_t* directory,
            WriteDisposition disposition) noexcept {
     if (directory == nullptr || path == nullptr || build.imageSize == 0
         || !valid_disposition(disposition) || !counts_fit_header(domains)
-        || !records::valid_domains(domains)) {
+        || !records::valid_domains(build, domains)) {
         return false;
     }
     if (CreateDirectoryW(directory, nullptr) == FALSE && GetLastError() != ERROR_ALREADY_EXISTS) {

@@ -3,7 +3,10 @@
 #include <Windows.h>
 
 #include <cstddef>
+#include <cstring>
+#include <limits>
 #include <string_view>
+#include <vector>
 
 #include "path.h"
 
@@ -169,7 +172,68 @@ parse_owner(std::wstring_view finalName, std::wstring_view candidate, DWORD& pro
            && append(candidatePath, candidateName);
 }
 
+/** Replaces an open delete-shared target without waiting for its readers to close. */
+[[nodiscard]] bool publish_with_posix_rename(const wchar_t* temporaryPath,
+                                             const wchar_t* finalPath) noexcept {
+    const std::wstring_view final(finalPath);
+    const std::size_t fileNameBytes = final.size() * sizeof(wchar_t);
+    // FILE_RENAME_INFO stores its name inline, after the header and before a terminator.
+    constexpr std::size_t kPrefixSize = offsetof(FILE_RENAME_INFO, FileName);
+    constexpr std::size_t kTerminatorSize = sizeof(wchar_t);
+    if (fileNameBytes > (std::numeric_limits<DWORD>::max)() - kPrefixSize - kTerminatorSize
+        || fileNameBytes
+               > (std::numeric_limits<std::size_t>::max)() - kPrefixSize - kTerminatorSize) {
+        return false;
+    }
+    try {
+        std::vector<std::byte> storage(kPrefixSize + fileNameBytes + kTerminatorSize);
+        auto* const rename = reinterpret_cast<FILE_RENAME_INFO*>(storage.data());
+        rename->Flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+        rename->RootDirectory = nullptr;
+        rename->FileNameLength = static_cast<DWORD>(fileNameBytes);
+        std::memcpy(rename->FileName, final.data(), fileNameBytes);
+
+        const HANDLE file = CreateFileW(temporaryPath,
+                                        DELETE | SYNCHRONIZE,
+                                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                        nullptr,
+                                        OPEN_EXISTING,
+                                        FILE_ATTRIBUTE_NORMAL,
+                                        nullptr);
+        if (file == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        const bool renamed = SetFileInformationByHandle(
+                                 file, FileRenameInfoEx, rename, static_cast<DWORD>(storage.size()))
+                             != FALSE;
+        const bool closed = CloseHandle(file) != FALSE;
+        return renamed && closed;
+    } catch (...) {
+        return false;
+    }
+}
+
 } // namespace
+
+/** Publishes one complete sibling while open delete-sharing readers keep the old file. */
+bool publish_sibling(const wchar_t* temporaryPath, const wchar_t* finalPath) noexcept {
+    if (temporaryPath == nullptr || temporaryPath[0] == L'\0' || finalPath == nullptr
+        || finalPath[0] == L'\0') {
+        return false;
+    }
+    if (publish_with_posix_rename(temporaryPath, finalPath)) {
+        return true;
+    }
+    if (ReplaceFileW(finalPath, temporaryPath, nullptr, 0, nullptr, nullptr) != FALSE) {
+        return true;
+    }
+    const DWORD replaceError = GetLastError();
+    if (replaceError != ERROR_FILE_NOT_FOUND && replaceError != ERROR_PATH_NOT_FOUND) {
+        return false;
+    }
+    return MoveFileExW(temporaryPath, finalPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
+           != FALSE;
+}
 
 /** Removes bounded, old writer-owned temporary siblings whose process has stopped. */
 void remove_stale_siblings(const wchar_t* finalPath) noexcept {

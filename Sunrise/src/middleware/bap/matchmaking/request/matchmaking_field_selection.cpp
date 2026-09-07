@@ -1,5 +1,7 @@
-#include "../../../protobuf/codec.h"
+#include <array>
+
 #include "field_selection.h"
+#include "internal.h"
 
 namespace sunrise::middleware::bap::matchmaking::request {
 namespace {
@@ -14,17 +16,15 @@ enum class RootField : std::uint32_t {
     kind = 2,
     /** Length-delimited advertisement request, used only by kind 2. */
     advertisement = 8,
+    /** Length-delimited launch target, used only by kind 4. */
+    activity = 11,
 };
 
-/** Raw first-occurrence root selections. */
-struct RawRoot final {
-    bool sawKind{};
-    bool hasKindValue{};
-    std::uint64_t kindValue{};
-    bool sawAdvertisement{};
-    bool hasAdvertisementMessage{};
-    std::span<const std::byte> advertisementMessage{};
-};
+/** Index of each root pick in the selection array. */
+constexpr std::size_t kKindPick = 0;
+constexpr std::size_t kAdvertisementPick = 1;
+constexpr std::size_t kActivityPick = 2;
+constexpr std::size_t kRootPickCount = 3;
 
 /**
  * Converts one raw selector. Values outside the supported set are rejected.
@@ -32,75 +32,62 @@ struct RawRoot final {
  * @return Request kind for a supported value, else none.
  */
 [[nodiscard]] RequestKind request_kind(std::uint64_t value) noexcept {
-    switch (value) {
-    case static_cast<std::uint64_t>(RequestKind::sessionSearch):
-        return RequestKind::sessionSearch;
-    case static_cast<std::uint64_t>(RequestKind::advertisementUpdate):
-        return RequestKind::advertisementUpdate;
-    case static_cast<std::uint64_t>(RequestKind::advertisementDelete):
-        return RequestKind::advertisementDelete;
-    case static_cast<std::uint64_t>(RequestKind::configuration):
-        return RequestKind::configuration;
-    case static_cast<std::uint64_t>(RequestKind::rejoinAdvertisementUpdate):
-        return RequestKind::rejoinAdvertisementUpdate;
-    case static_cast<std::uint64_t>(RequestKind::rejoinAdvertisementDelete):
-        return RequestKind::rejoinAdvertisementDelete;
-    case static_cast<std::uint64_t>(RequestKind::locateSession):
-        return RequestKind::locateSession;
-    case static_cast<std::uint64_t>(RequestKind::liveStats):
-        return RequestKind::liveStats;
-    default:
+    // Selectors 1 to 8 are contiguous, so an in-range value names its own kind.
+    if (value < static_cast<std::uint64_t>(RequestKind::sessionSearch)
+        || value > static_cast<std::uint64_t>(RequestKind::liveStats)) {
         return RequestKind::none;
     }
+    return static_cast<RequestKind>(value);
 }
 
-/**
- * Picks the first root occurrences and checks the message.
- * @param input Whole service-42 protobuf body.
- * @param selected Receives raw borrowed picks.
- * @return True when every root field has a whole, supported wire encoding.
- */
-[[nodiscard]] bool select_root(std::span<const std::byte> input, RawRoot& selected) noexcept {
+} // namespace
+
+/** Records the first occurrence of each wanted field in one whole protobuf message. */
+bool select_first_fields(std::span<const std::byte> input, std::span<FieldPick> picks) noexcept {
     Reader reader(input);
     while (reader.remaining() != 0) {
         Field field;
         if (!reader.next(field)) {
             return false;
         }
-        // Mark a field before checking its wire type. A later duplicate then cannot replace
-        // the first occurrence.
-        if (field.fieldNumber == static_cast<std::uint32_t>(RootField::kind) && !selected.sawKind) {
-            selected.sawKind = true;
-            if (field.wireType == WireType::varint) {
-                selected.hasKindValue = true;
-                selected.kindValue = field.value;
+        for (FieldPick& pick : picks) {
+            if (pick.fieldNumber != field.fieldNumber) {
+                continue;
             }
-        } else if (field.fieldNumber == static_cast<std::uint32_t>(RootField::advertisement)
-                   && !selected.sawAdvertisement) {
-            selected.sawAdvertisement = true;
-            if (field.wireType == WireType::lengthDelimited) {
-                selected.hasAdvertisementMessage = true;
-                selected.advertisementMessage = field.bytes;
+            // Mark a field before checking its wire type. A later duplicate then cannot replace
+            // the first occurrence.
+            if (!pick.seen) {
+                pick.seen = true;
+                if (field.wireType == pick.wireType) {
+                    pick.has = true;
+                    pick.value = field.value;
+                    pick.bytes = field.bytes;
+                }
             }
+            break;
         }
     }
     return true;
 }
 
-} // namespace
-
 /** Picks the fields we need and checks the whole service-42 root. */
 bool parse_root(std::span<const std::byte> input, Root& selected) noexcept {
     selected = {};
-    RawRoot raw;
-    if (!select_root(input, raw)) {
+    std::array<FieldPick, kRootPickCount> picks{
+        FieldPick{static_cast<std::uint32_t>(RootField::kind), WireType::varint},
+        FieldPick{static_cast<std::uint32_t>(RootField::advertisement), WireType::lengthDelimited},
+        FieldPick{static_cast<std::uint32_t>(RootField::activity), WireType::lengthDelimited},
+    };
+    if (!select_first_fields(input, picks)) {
         return false;
     }
-    if (raw.hasKindValue) {
-        selected.kind = request_kind(raw.kindValue);
+    if (picks[kKindPick].has) {
+        selected.kind = request_kind(picks[kKindPick].value);
     }
-    selected.hasAdvertisementMessage = raw.hasAdvertisementMessage;
-    selected.advertisementMessage = raw.advertisementMessage;
+    selected.hasAdvertisementMessage = picks[kAdvertisementPick].has;
+    selected.advertisementMessage = picks[kAdvertisementPick].bytes;
+    selected.hasActivityMessage = picks[kActivityPick].has;
+    selected.activityMessage = picks[kActivityPick].bytes;
     return true;
 }
 

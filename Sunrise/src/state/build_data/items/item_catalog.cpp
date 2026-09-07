@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <mutex>
+#include <shared_mutex>
 
 #include "../table.h"
+#include "core/threading/srw_lock.h"
 
 namespace sunrise::state::build_data::items {
 namespace {
@@ -20,7 +23,7 @@ constexpr std::uint64_t kHashPrime = 1099511628211ULL;
 /** Four definition-hash bytes precede the bucket byte in the lookup key. */
 constexpr std::size_t kDefinitionHashByteCount = sizeof(std::uint32_t);
 
-Lock g_lock;
+core::threading::SrwLock g_lock;
 Table<Definition, kDefinitionCapacity> g_definitions;
 // Open-addressed probes into the dense rows, rebuilt with them under the same exclusive hold.
 std::array<std::uint16_t, kLookupCapacity> g_lookup{};
@@ -87,7 +90,7 @@ void insert_hash_lookup(const Definition& definition) noexcept {
 
 /** Clears every generated item mapping under the catalog lock. */
 void clear() noexcept {
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     g_definitions.clear();
     std::fill(g_lookup.begin(), g_lookup.end(), kEmptyLookupRow);
     std::fill(g_hashLookup.begin(), g_hashLookup.end(), kEmptyLookupRow);
@@ -114,7 +117,7 @@ bool replace(std::span<const Definition> definitions) noexcept {
     if (!valid(definitions)) {
         return false;
     }
-    const Lock::Exclusive guard(g_lock);
+    const std::lock_guard guard(g_lock);
     std::fill(g_lookup.begin(), g_lookup.end(), kEmptyLookupRow);
     std::fill(g_hashLookup.begin(), g_hashLookup.end(), kEmptyLookupRow);
     // valid() proved each index appears once, so every row lands in its own slot.
@@ -139,7 +142,7 @@ bool find_hash(std::uint32_t definitionHash, Definition& definition) noexcept {
     const std::size_t start = start_hash_slot(definitionHash);
     std::uint16_t match = kEmptyLookupRow;
     bool ambiguous = false;
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const Definition> rows = g_definitions.rows();
     for (std::size_t probe = 0; probe < g_hashLookup.size(); ++probe) {
         const std::uint16_t row = g_hashLookup[(start + probe) & (g_hashLookup.size() - 1)];
@@ -167,7 +170,7 @@ bool find(std::uint32_t definitionHash, std::uint8_t bucketId, Definition& defin
     const std::size_t start = start_slot(key);
     std::uint16_t match = kEmptyLookupRow;
     bool ambiguous = false;
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const Definition> rows = g_definitions.rows();
     for (std::size_t probe = 0; probe < g_lookup.size(); ++probe) {
         const std::uint16_t row = g_lookup[(start + probe) & (g_lookup.size() - 1)];
@@ -189,7 +192,7 @@ bool find(std::uint32_t definitionHash, std::uint8_t bucketId, Definition& defin
 /** Finds one dense installed-build row by its native definition index. */
 bool find_index(std::uint16_t definitionIndex, Definition& definition) noexcept {
     definition = {};
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     const std::span<const Definition> rows = g_definitions.rows();
     const bool found = static_cast<std::size_t>(definitionIndex) < rows.size();
     if (found) {
@@ -200,13 +203,13 @@ bool find_index(std::uint16_t definitionIndex, Definition& definition) noexcept 
 
 /** Copies the dense rows in native-index order, without exposing the catalog storage. */
 bool snapshot(std::span<Definition> output, std::size_t& count) noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.snapshot(output, count);
 }
 
 /** @return Number of installed-build item mappings, read under the lock. */
 std::size_t count() noexcept {
-    const Lock::Shared guard(g_lock);
+    const std::shared_lock guard(g_lock);
     return g_definitions.count();
 }
 
