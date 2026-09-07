@@ -99,6 +99,17 @@
     <None Include="vendor\lua\UPSTREAM_README" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\client\hooks\actor_delivery\model_channels.cpp" />
+    <ClCompile Include="src\client\hooks\bootflow\effect_attachment.cpp" />
+    <ClCompile Include="src\client\hooks\bootflow\loading_cinematics.cpp" />
+    <ClCompile Include="src\client\hooks\bootflow\movie_hud.cpp" />
+    <ClCompile Include="src\client\hooks\bootflow\movie_tick.cpp" />
+    <ClCompile Include="src\client\hooks\bootflow\movie_ui.cpp" />
+    <ClCompile Include="src\client\hooks\scripted_presentation\config.cpp" />
+    <ClCompile Include="src\client\hooks\scripted_presentation\movies.cpp" />
+    <ClCompile Include="src\client\hooks\scripted_presentation\orbit_return.cpp" />
+    <ClCompile Include="src\client\hooks\scripted_presentation\resources.cpp" />
+    <ClCompile Include="src\server\activity\mission\mission_script_presentation.cpp" />
     <ClCompile Include="src\state\gameplay\external\entity_object_types.cpp" />
     <ClCompile Include="src\dllmain.cpp" />
     <ClCompile Include="src\core\logging\log.cpp" />
@@ -1234,6 +1245,17 @@
     <ClCompile Remove="vendor\lua\lzio.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\client\hooks\actor_delivery\model_channels.h" />
+    <ClInclude Include="src\client\hooks\scripted_presentation\config.h" />
+    <ClInclude Include="src\client\hooks\scripted_presentation\config_rules.h" />
+    <ClInclude Include="src\client\hooks\scripted_presentation\movies.h" />
+    <ClInclude Include="src\client\hooks\scripted_presentation\orbit_return.h" />
+    <ClInclude Include="src\client\hooks\scripted_presentation\orbit_rules.h" />
+    <ClInclude Include="src\client\hooks\scripted_presentation\playback_rules.h" />
+    <ClInclude Include="src\client\hooks\scripted_presentation\readiness_rules.h" />
+    <ClInclude Include="src\client\hooks\scripted_presentation\resources.h" />
+    <ClInclude Include="src\client\hooks\scripted_presentation\surface_rules.h" />
+    <ClInclude Include="src\server\activity\mission\mission_script_presentation.h" />
     <ClInclude Include="resources\resource.h" />
     <ClInclude Include="src\core\logging\log.h" />
     <ClInclude Include="src\core\logging\snapshot\snapshot.h" />

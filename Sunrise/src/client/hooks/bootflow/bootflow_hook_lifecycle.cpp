@@ -28,6 +28,11 @@ constexpr std::array kFixes{
     Fix{&stage_orbit_slice_set, &publish_orbit_slice_set},
     Fix{&stage_composition_check, &publish_composition_check},
     Fix{&stage_orbit_handoff, &publish_orbit_handoff},
+    Fix{&stage_loading_cinematics, &publish_loading_cinematics},
+    Fix{&stage_movie_tick, &publish_movie_tick},
+    Fix{&stage_movie_ui, &publish_movie_ui},
+    Fix{&stage_movie_hud, &publish_movie_hud},
+    Fix{&stage_effect_attachment, &publish_effect_attachment},
     Fix{&stage_owner_activity_slot, &publish_owner_activity_slot},
     Fix{&stage_region_private, &publish_region_private},
 };
@@ -107,6 +112,11 @@ void uninstall() noexcept {
     uninstall_world_step();
     uninstall_region_private();
     uninstall_owner_activity_slot();
+    uninstall_effect_attachment();
+    uninstall_movie_hud();
+    uninstall_movie_ui();
+    uninstall_movie_tick();
+    uninstall_loading_cinematics();
     uninstall_orbit_handoff();
     uninstall_composition_check();
     uninstall_orbit_slice_set();

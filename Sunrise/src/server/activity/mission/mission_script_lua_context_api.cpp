@@ -1,3 +1,4 @@
+#include "../../../client/hooks/scripted_presentation/movies.h"
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -202,6 +203,65 @@ resolve_message_name(lua_State* state, std::string_view name, ActivityMessageDef
     return queue_intent(state, frame, intent);
 }
 
+/** Playback uses the program's immutable presentation declarations. */
+int context_play_prerendered_movie(lua_State* state) {
+    static_cast<void>(luaL_checkudata(state, 1, kContextMetatable));
+    const auto* impl = impl_from_state(state);
+    if (impl->identity.publicTarget)
+        return luaL_error(state, "local movies require a private activity");
+    static constexpr std::array<std::string_view, 3> fields{"index", "stop", "continue_sequence"};
+    refuse_unknown_arguments(state, fields);
+    const auto index = optional_integer_argument(state, "index", 0);
+    if (index < 1 || static_cast<unsigned long long>(index) > impl->presentation.movieCount)
+        return luaL_error(state, "movie index is not declared by the program");
+    lua_getfield(state, 2, "stop");
+    if (!lua_isnil(state, -1) && !lua_isboolean(state, -1))
+        return luaL_error(state, "stop must be boolean");
+    const bool stop = lua_toboolean(state, -1);
+    lua_pop(state, 1);
+    Intent intent{};
+    intent.kind = IntentKind::playPrerenderedMovie;
+    intent.firstRow = static_cast<std::uint32_t>(index);
+    intent.active = !stop;
+    lua_getfield(state, 2, "continue_sequence");
+    if (!lua_isnil(state, -1) && !lua_isboolean(state, -1))
+        return luaL_error(state, "continue_sequence must be boolean");
+    intent.continueMovieSequence = lua_toboolean(state, -1);
+    lua_pop(state, 1);
+    if (intent.continueMovieSequence
+        && static_cast<unsigned>(index) == impl->presentation.movieCount)
+        return luaL_error(state, "continued playback requires another declared movie");
+    return queue_intent(state, active_frame(state), intent);
+}
+int context_prerendered_movie_status(lua_State* state) {
+    static_cast<void>(luaL_checkudata(state, 1, kContextMetatable));
+    const auto index = luaL_checkinteger(state, 2);
+    auto& frame = active_frame(state);
+    const auto* impl = impl_from_state(state);
+    if (impl->identity.publicTarget || !frame.event || index < 1
+        || static_cast<unsigned long long>(index) > impl->presentation.movieCount) {
+        lua_pushliteral(state, "absent");
+        return 1;
+    }
+    namespace movies = client::hooks::scripted_presentation;
+    const auto result =
+        movies::status({frame.event->binding.sessionId, frame.event->sourceGeneration},
+                       static_cast<unsigned>(index));
+    constexpr std::array<const char*, 6> names{
+        "absent", "queued", "preparing", "playing", "complete", "failed"};
+    lua_pushstring(state, names[static_cast<unsigned>(result)]);
+    return 1;
+}
+
+int context_return_to_orbit(lua_State* state) {
+    static_cast<void>(luaL_checkudata(state, 1, kContextMetatable));
+    if (impl_from_state(state)->identity.publicTarget)
+        return luaL_error(state, "local orbit return requires a private activity");
+    Intent intent{};
+    intent.kind = IntentKind::returnToOrbit;
+    return queue_intent(state, active_frame(state), intent);
+}
+
 /** Lua index for the mission context: its collections, phase, variables and timers. */
 [[nodiscard]] int context_index(lua_State* state) {
     static_cast<void>(luaL_checkudata(state, 1, kContextMetatable));
@@ -231,6 +291,14 @@ resolve_message_name(lua_State* state, std::string_view name, ActivityMessageDef
         lua_pushcfunction(state, &context_scene);
     } else if (key == "slot") {
         lua_pushcfunction(state, &context_slot);
+    } else if (key == "select_state") {
+        lua_pushcfunction(state, &context_select_state);
+    } else if (key == "return_to_orbit") {
+        lua_pushcfunction(state, &context_return_to_orbit);
+    } else if (key == "play_prerendered_movie") {
+        lua_pushcfunction(state, &context_play_prerendered_movie);
+    } else if (key == "prerendered_movie_status") {
+        lua_pushcfunction(state, &context_prerendered_movie_status);
     } else if (key == "select_state") {
         lua_pushcfunction(state, &context_select_state);
     } else if (key == "restart_checkpoint") {

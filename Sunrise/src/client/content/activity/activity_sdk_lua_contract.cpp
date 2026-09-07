@@ -310,6 +310,51 @@ local EventKind = {
 ---@field shape_index integer
 ---@field active integer
 
+---@class SunriseMovieResources
+---@field asset integer
+---@field header integer
+---@field subtitles integer
+---@field catalog integer
+---@field stream integer
+
+---@class SunriseMovieSurfaces
+---@field definitions integer[] Six native Y/U/V definitions, ordered by renderer slot.
+---@field buffers integer[] Six backing buffers in matching order.
+---@field containers integer[] Six registration containers in matching order.
+
+---@class SunriseEffectAttachment
+---@field region integer
+---@field source integer
+---@field source_offset integer Authored component offset within its source.
+---@field original integer Expected native attachment asset.
+---@field replacement integer Resident effect asset to attach instead.
+
+---@class SunriseDeliveryChannel
+---@field region integer
+---@field resource integer Native delivery resource.
+---@field channel integer Named model scalar; delivery stage 0 writes 0, stage 1 writes 1.
+
+---@class SunrisePresentation
+---@field suppress_loading_cinematics? boolean
+---@field movies? SunriseMovieResources[] Up to eight ordinary-tag movies.
+---@field surfaces? SunriseMovieSurfaces Required when movies are declared.
+---@field effect_attachments? SunriseEffectAttachment[] Up to eight exact source overrides.
+---@field delivery_channels? SunriseDeliveryChannel[] Up to eight delivery channel bindings.
+
+---@class SunriseMovieRequest
+---@field index integer One-based index in the program's movie declarations.
+---@field stop? boolean Request native stop; completion still needs a native receipt.
+---@field continue_sequence? boolean Retain presentation for the next declared movie, for up to 30 seconds.
+
+---@class SunriseScriptContext
+---@field play_prerendered_movie fun(self: SunriseScriptContext, args: SunriseMovieRequest): SunriseRequestKey
+---@field prerendered_movie_status fun(self: SunriseScriptContext, index: integer): 'absent'|'queued'|'preparing'|'playing'|'complete'|'failed'
+---@field return_to_orbit fun(self: SunriseScriptContext): SunriseRequestKey Waits for native lifetime completion before leaving.
+
+---@class SunriseProgram
+---@field initial_state? SunriseState
+---@field presentation? SunrisePresentation Immutable local presentation policy; private activities only.
+
 ---@class SunriseMission
 ---@field name string
 ---@field id string

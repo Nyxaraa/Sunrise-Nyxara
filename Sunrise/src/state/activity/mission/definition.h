@@ -76,6 +76,8 @@ enum class IntentKind : std::uint8_t {
     actorCommand,
     playPerformance,
     restartCheckpoint,
+    playPrerenderedMovie,
+    returnToOrbit,
 };
 
 /** One object a mission omits, named the way a roster group is: its tag and its registry key. */
@@ -125,6 +127,7 @@ struct TypedIntent final {
     std::uint16_t authByteCount{};
     std::uint8_t lifetimeState{};
     bool deviceSnap{};
+    bool continueMovieSequence{};
     bool active{};
 };
 
