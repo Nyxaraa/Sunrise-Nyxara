@@ -327,6 +327,15 @@ local EventKind = {
 ---@field effect_attachments? SunriseEffectAttachment[] Up to eight exact source overrides.
 ---@field delivery_channels? SunriseDeliveryChannel[] Up to eight delivery channel bindings.
 
+---@class SunrisePresentationSetup
+---@field suppress_loading_cinematics fun(suppress: boolean) Mission-load setup; scoped to this private activity before fly-in.
+---@field configure_movie_renderer fun(resources: SunrisePresentation) Mission-load setup; accepts movies and surfaces only. Playback owns renderer/HUD lifetime.
+---@field register_effect_attachment fun(effect: SunriseEffectAttachment) Mission-load setup; binds one exact authored attachment replacement.
+---@field bind_delivery_channel fun(binding: SunriseDeliveryChannel) Mission-load setup; binds a model channel to native delivery stages.
+
+---@type {presentation: SunrisePresentationSetup}
+sunrise = {}
+
 ---@class SunriseMovieRequest
 ---@field index integer One-based index in the program's movie declarations.
 ---@field stop? boolean Request native stop; completion still needs a native receipt.

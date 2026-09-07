@@ -2,7 +2,6 @@
 #include <string_view>
 
 #include "game.h"
-#include "game/retail_log/retail_log_signature_bytes.h"
 #include "game/signon/signon_readiness_signature_bytes.h"
 #include "signature_text.h"
 
@@ -122,8 +121,6 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},
     patterns::Pattern{"get_item_stat_value", kGetItemStatValue},
     patterns::Pattern{"light_value_to_scalar", kLightValueToScalar},
-    patterns::Pattern{"retail_log_enqueue", retail_log::kEnqueue},
-    patterns::Pattern{"retail_log_set_category_verbosity", retail_log::kSetCategoryVerbosity},
 };
 
 static_assert(kDefinitions.size() == static_cast<std::size_t>(Id::count));

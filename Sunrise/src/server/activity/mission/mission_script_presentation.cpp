@@ -5,11 +5,12 @@
 #include "lauxlib.h"
 #include "lua.h"
 #endif
+#include "mission_script_vm_internal.h"
 #include <limits>
 #include <string_view>
 
-#include "../../../client/hooks/scripted_presentation/config.h"
-#include "../../../client/hooks/scripted_presentation/config_rules.h"
+#include "../../../client/sdk/presentation/config.h"
+#include "../../../client/sdk/presentation/config_rules.h"
 
 namespace sunrise::server::activity::mission::lua_vm::detail {
 namespace {
@@ -93,11 +94,66 @@ void surface_array(lua_State* state,
     }
     lua_pop(state, 1);
 }
+Impl& setup_owner(lua_State* state) {
+    auto* impl = impl_from_state(state);
+    if (!impl || impl->active || impl->identity.publicTarget)
+        luaL_error(state, "presentation setup is only available while loading a private mission");
+    return *impl;
+}
+int suppress_loading(lua_State* state) {
+    auto& impl = setup_owner(state);
+    luaL_checktype(state, 1, LUA_TBOOLEAN);
+    impl.presentation.suppressLoadingCinematics = lua_toboolean(state, 1);
+    impl.presentationConfigured = true;
+    return 0;
+}
+// Reuse the declaration parser so both entry points enforce identical resource bounds.
+int configure(lua_State* state, const char* category) {
+    auto& impl = setup_owner(state);
+    luaL_checktype(state, 1, LUA_TTABLE);
+    lua_newtable(state);
+    const int program = lua_gettop(state);
+    if (category) {
+        lua_newtable(state);
+        lua_newtable(state);
+        lua_pushvalue(state, 1);
+        lua_rawseti(state, -2, 1);
+        lua_setfield(state, -2, category);
+    } else {
+        fields(state, 1, {"movies", "surfaces"});
+        lua_pushvalue(state, 1);
+    }
+    lua_setfield(state, program, "presentation");
+    client::sdk::presentation::Config parsed{};
+    capture_presentation(state, program, false, parsed);
+    auto next = impl.presentation;
+    if (!category) {
+        next.movies = parsed.movies;
+        next.movieCount = parsed.movieCount;
+        next.surfaces = parsed.surfaces;
+    } else if (std::string_view(category) == "effect_attachments") {
+        if (next.effectCount == next.effects.size())
+            return luaL_error(state, "effect attachment capacity exceeded");
+        next.effects[next.effectCount++] = parsed.effects[0];
+    } else {
+        if (next.deliveryCount == next.deliveries.size())
+            return luaL_error(state, "delivery channel capacity exceeded");
+        next.deliveries[next.deliveryCount++] = parsed.deliveries[0];
+    }
+    if (!client::sdk::presentation::valid_config(next))
+        return luaL_error(state, "conflicting presentation registration");
+    impl.presentation = next;
+    impl.presentationConfigured = true;
+    return 0;
+}
+int configure_renderer(lua_State* state) { return configure(state, nullptr); }
+int register_effect(lua_State* state) { return configure(state, "effect_attachments"); }
+int bind_delivery(lua_State* state) { return configure(state, "delivery_channels"); }
 } // namespace
 void capture_presentation(lua_State* state,
                           int program,
                           bool publicTarget,
-                          client::hooks::scripted_presentation::Config& config) {
+                          client::sdk::presentation::Config& config) {
     lua_getfield(state, program, "presentation");
     if (lua_isnil(state, -1)) {
         lua_pop(state, 1);
@@ -152,8 +208,25 @@ void capture_presentation(lua_State* state,
                         integer(state, row, "resource"),
                         integer(state, row, "channel")};
         });
-    if (!client::hooks::scripted_presentation::valid_config(config))
+    if (!client::sdk::presentation::valid_config(config))
         luaL_error(state, "invalid or conflicting presentation declarations");
     lua_pop(state, 1);
+}
+} // namespace sunrise::server::activity::mission::lua_vm::detail
+
+namespace sunrise::server::activity::mission::lua_vm::detail {
+void register_presentation_api(lua_State* state) {
+    lua_newtable(state);
+    lua_newtable(state);
+    constexpr luaL_Reg functions[]{
+        {"suppress_loading_cinematics", suppress_loading},
+        {"configure_movie_renderer", configure_renderer},
+        {"register_effect_attachment", register_effect},
+        {"bind_delivery_channel", bind_delivery},
+        {nullptr, nullptr},
+    };
+    luaL_setfuncs(state, functions, 0);
+    lua_setfield(state, -2, "presentation");
+    lua_setglobal(state, "sunrise");
 }
 } // namespace sunrise::server::activity::mission::lua_vm::detail

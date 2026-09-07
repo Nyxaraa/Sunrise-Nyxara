@@ -99,16 +99,16 @@
     <None Include="vendor\lua\UPSTREAM_README" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\client\hooks\actor_delivery\model_channels.cpp" />
-    <ClCompile Include="src\client\hooks\bootflow\effect_attachment.cpp" />
-    <ClCompile Include="src\client\hooks\bootflow\loading_cinematics.cpp" />
-    <ClCompile Include="src\client\hooks\bootflow\movie_hud.cpp" />
-    <ClCompile Include="src\client\hooks\bootflow\movie_tick.cpp" />
-    <ClCompile Include="src\client\hooks\bootflow\movie_ui.cpp" />
-    <ClCompile Include="src\client\hooks\scripted_presentation\config.cpp" />
-    <ClCompile Include="src\client\hooks\scripted_presentation\movies.cpp" />
-    <ClCompile Include="src\client\hooks\scripted_presentation\orbit_return.cpp" />
-    <ClCompile Include="src\client\hooks\scripted_presentation\resources.cpp" />
+    <ClCompile Include="src\client\sdk\presentation\model_channels.cpp" />
+    <ClCompile Include="src\client\sdk\presentation\effect_attachment.cpp" />
+    <ClCompile Include="src\client\sdk\presentation\loading_cinematics.cpp" />
+    <ClCompile Include="src\client\sdk\presentation\movie_hud.cpp" />
+    <ClCompile Include="src\client\sdk\presentation\movie_tick.cpp" />
+    <ClCompile Include="src\client\sdk\presentation\movie_ui.cpp" />
+    <ClCompile Include="src\client\sdk\presentation\config.cpp" />
+    <ClCompile Include="src\client\sdk\presentation\movies.cpp" />
+    <ClCompile Include="src\client\sdk\presentation\orbit_return.cpp" />
+    <ClCompile Include="src\client\sdk\presentation\resources.cpp" />
     <ClCompile Include="src\server\activity\mission\mission_script_presentation.cpp" />
     <ClCompile Include="src\state\gameplay\external\entity_object_types.cpp" />
     <ClCompile Include="src\dllmain.cpp" />
@@ -209,9 +209,7 @@
     <ClCompile Include="src\client\runtime\client_runtime_lifecycle.cpp" />
     <ClCompile Include="src\client\hooks\graphics\discovery\graphics_target_discovery.cpp" />
     <ClCompile Include="src\client\hooks\graphics\graphics_hook_lifecycle.cpp" />
-    <ClCompile Include="src\client\hooks\hitch_probe\hitch_probe.cpp" />
     <ClCompile Include="src\client\hooks\sense_chain_guard\sense_chain_guard.cpp" />
-    <ClCompile Include="src\client\hooks\stall_probe\stall_probe.cpp" />
     <ClCompile Include="src\client\hooks\graphics\graphics_hook_replacements.cpp" />
     <ClCompile Include="src\client\hooks\graphics\input\graphics_window_input.cpp" />
     <ClCompile Include="src\client\hooks\graphics\textures\graphics_texture_upload.cpp" />
@@ -263,8 +261,6 @@
     <ClCompile Include="src\client\hooks\teleport\teleport_action_key.cpp" />
     <ClCompile Include="src\client\hooks\world_objects\world_object_registry.cpp" />
     <ClCompile Include="src\client\hooks\world_objects\world_object_identity_report.cpp" />
-    <ClCompile Include="src\client\hooks\world_objects\world_object_purge_policy.cpp" />
-    <ClCompile Include="src\client\hooks\world_objects\world_object_rebind_observer.cpp" />
     <ClCompile Include="src\client\hooking\detour.cpp" />
     <ClCompile Include="src\client\hooking\detour\protected_detour_uninstall.cpp" />
     <ClCompile Include="src\client\hooking\detour\transaction\detour_thread_transaction.cpp" />
@@ -275,10 +271,6 @@
     <ClCompile Include="src\client\hooks\package_trust\package_trust_bypass.cpp" />
     <ClCompile Include="src\client\hooks\bitmap\bitmap_hook_lifecycle.cpp" />
     <ClCompile Include="src\client\hooks\feature_flags\feature_flags.cpp" />
-    <ClCompile Include="src\client\hooks\cine_auth_probe\cine_auth_probe.cpp" />
-    <ClCompile Include="src\client\hooks\cine_probe\cine_probe.cpp" />
-    <ClCompile Include="src\client\hooks\membership_probe\membership_probe.cpp" />
-    <ClCompile Include="src\client\hooks\net_tick_probe\net_tick_probe.cpp" />
     <ClCompile Include="src\client\hooks\bitmap\bitmap_ref_guard.cpp" />
     <ClCompile Include="src\client\hooks\external_server\external_server_route.cpp" />
     <ClCompile Include="src\client\hooks\external_server\external_server_setopt_guard.cpp" />
@@ -308,20 +300,12 @@
     <ClCompile Include="src\client\patterns\game\signon\signon_readiness_signature_bytes.cpp" />
     <ClCompile Include="src\client\graphics\wine_compat.cpp" />
     <ClCompile Include="src\core\settings\client\external\client_external_settings_parser.cpp" />
-    <ClCompile Include="src\client\targets\game\game_retail_log_targets.cpp" />
-    <ClCompile Include="src\client\patterns\game\retail_log\retail_log_signature_bytes.cpp" />
-    <ClCompile Include="src\client\hooks\retail_log\retail_log_enqueue_observer.cpp" />
-    <ClCompile Include="src\client\hooks\retail_log\retail_log_lifecycle.cpp" />
-    <ClCompile Include="src\client\hooks\assert_handler\assert_handler_lifecycle.cpp" />
-    <ClCompile Include="src\client\hooks\assert_handler\assert_handler_observer.cpp" />
-    <ClCompile Include="src\client\targets\game\assert_handler\game_assert_targets.cpp" />
     <ClCompile Include="src\client\targets\game\packages\game_package_targets.cpp" />
     <ClCompile Include="src\client\targets\game\config_getter\game_config_getter_targets.cpp" />
     <ClCompile Include="src\client\patterns\game\config_getter\config_getter_signature_bytes.cpp" />
     <ClCompile Include="src\client\hooks\config_getter\config_getter_lifecycle.cpp" />
     <ClCompile Include="src\client\hooks\config_getter\config_getter_answers.cpp" />
     <ClCompile Include="src\client\patterns\game\packages\package_key_signature_bytes.cpp" />
-    <ClCompile Include="src\client\patterns\game\assert_handler\assert_signature_bytes.cpp" />
     <ClCompile Include="src\client\hooks\network\coordinator\network_call_coordinator.cpp" />
     <ClCompile Include="src\client\hooks\network\network_call_quiescence.cpp" />
     <ClCompile Include="src\client\hooks\network\content_config\coordinator\content_config_call_coordinator.cpp" />
@@ -1252,16 +1236,16 @@
     <ClCompile Remove="vendor\lua\lzio.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\client\hooks\actor_delivery\model_channels.h" />
-    <ClInclude Include="src\client\hooks\scripted_presentation\config.h" />
-    <ClInclude Include="src\client\hooks\scripted_presentation\config_rules.h" />
-    <ClInclude Include="src\client\hooks\scripted_presentation\movies.h" />
-    <ClInclude Include="src\client\hooks\scripted_presentation\orbit_return.h" />
-    <ClInclude Include="src\client\hooks\scripted_presentation\orbit_rules.h" />
-    <ClInclude Include="src\client\hooks\scripted_presentation\playback_rules.h" />
-    <ClInclude Include="src\client\hooks\scripted_presentation\readiness_rules.h" />
-    <ClInclude Include="src\client\hooks\scripted_presentation\resources.h" />
-    <ClInclude Include="src\client\hooks\scripted_presentation\surface_rules.h" />
+    <ClInclude Include="src\client\sdk\presentation\model_channels.h" />
+    <ClInclude Include="src\client\sdk\presentation\config.h" />
+    <ClInclude Include="src\client\sdk\presentation\config_rules.h" />
+    <ClInclude Include="src\client\sdk\presentation\movies.h" />
+    <ClInclude Include="src\client\sdk\presentation\orbit_return.h" />
+    <ClInclude Include="src\client\sdk\presentation\orbit_rules.h" />
+    <ClInclude Include="src\client\sdk\presentation\playback_rules.h" />
+    <ClInclude Include="src\client\sdk\presentation\readiness_rules.h" />
+    <ClInclude Include="src\client\sdk\presentation\resources.h" />
+    <ClInclude Include="src\client\sdk\presentation\surface_rules.h" />
     <ClInclude Include="src\server\activity\mission\mission_script_presentation.h" />
     <ClInclude Include="resources\resource.h" />
     <ClInclude Include="src\core\logging\log.h" />
@@ -1352,15 +1336,12 @@
     <ClInclude Include="src\client\hooks\teleport\internal.h" />
     <ClInclude Include="src\client\hooks\teleport\runtime.h" />
     <ClInclude Include="src\client\hooks\world_objects\world_object_registry.h" />
-    <ClInclude Include="src\client\hooks\world_objects\world_object_rebind_trace.h" />
     <ClInclude Include="src\client\hooks\world_objects\internal.h" />
     <ClInclude Include="src\client\ui\movement\movement_panel.h" />
     <ClInclude Include="src\client\runtime\internal.h" />
     <ClInclude Include="src\client\runtime\host\game_host_classification.h" />
     <ClInclude Include="src\client\hooks\graphics\graphics_hook_lifecycle.h" />
-    <ClInclude Include="src\client\hooks\hitch_probe\hitch_probe.h" />
     <ClInclude Include="src\client\hooks\sense_chain_guard\sense_chain_guard.h" />
-    <ClInclude Include="src\client\hooks\stall_probe\stall_probe.h" />
     <ClInclude Include="src\client\hooks\graphics\graphics_hook_replacements.h" />
     <ClInclude Include="src\client\hooks\graphics\input\input.h" />
     <ClInclude Include="src\client\hooks\graphics\textures\graphics_texture_upload.h" />
@@ -1822,10 +1803,6 @@
     <ClInclude Include="vendor\lua\lundump.h" />
     <ClInclude Include="vendor\lua\lvm.h" />
     <ClInclude Include="vendor\lua\lzio.h" />
-    <ClInclude Include="src\client\targets\game\retail_log.h" />
-    <ClInclude Include="src\client\patterns\game\retail_log\retail_log_signature_bytes.h" />
-    <ClInclude Include="src\client\hooks\retail_log\retail_log_enqueue_observer.h" />
-    <ClInclude Include="src\client\hooks\retail_log\retail_log_lifecycle.h" />
     <ClInclude Include="src\client\hooks\egress\resolver\redirect.h" />
     <ClInclude Include="src\core\settings\client\external\definition.h" />
     <ClInclude Include="src\client\hooks\external_server\internal.h" />
@@ -1836,15 +1813,9 @@
     <ClInclude Include="src\client\content\investment\runtime.h" />
     <ClInclude Include="src\client\content\items\packages\build.h" />
     <ClInclude Include="src\client\content\items\packages\internal.h" />
-    <ClInclude Include="src\client\hooks\assert_handler\assert_handler_observer.h" />
-    <ClInclude Include="src\client\hooks\assert_handler\assert_handler_lifecycle.h" />
     <ClInclude Include="src\client\hooks\bitmap\bitmap_ref_guard.h" />
     <ClInclude Include="src\client\hooks\bitmap\bitmap_hook_lifecycle.h" />
     <ClInclude Include="src\client\hooks\feature_flags\feature_flags.h" />
-    <ClInclude Include="src\client\hooks\cine_auth_probe\cine_auth_probe.h" />
-    <ClInclude Include="src\client\hooks\cine_probe\cine_probe.h" />
-    <ClInclude Include="src\client\hooks\membership_probe\membership_probe.h" />
-    <ClInclude Include="src\client\hooks\net_tick_probe\net_tick_probe.h" />
     <ClInclude Include="src\client\hooks\bootflow\internal.h" />
     <ClInclude Include="src\client\hooks\bootflow\bootflow_hook_lifecycle.h" />
     <ClInclude Include="src\client\hooks\bootflow\bootflow_texture_override.h" />
@@ -1857,7 +1828,6 @@
     <ClInclude Include="src\client\hooks\queuez\internal.h" />
     <ClInclude Include="src\client\hooks\queuez\queuez_hook_lifecycle.h" />
     <ClInclude Include="src\client\hooks\package_trust\package_trust_bypass.h" />
-    <ClInclude Include="src\client\patterns\game\assert_handler\assert_signature_bytes.h" />
     <ClInclude Include="src\client\patterns\game\config_getter\config_getter_signature_bytes.h" />
     <ClInclude Include="src\client\patterns\game\packages\package_key_signature_bytes.h" />
     <ClInclude Include="src\client\patterns\game\signon\signon_readiness_signature_bytes.h" />
@@ -1871,8 +1841,6 @@
     <ClInclude Include="src\middleware\content\packages\tables\trigger_volume_reader.h" />
     <ClInclude Include="src\middleware\content\packages\tables\type23_placement_identifier_reader.h" />
     <ClInclude Include="src\client\patterns\image_scan.h" />
-    <ClInclude Include="src\client\targets\game\assert_handler\game_assert_targets.h" />
-    <ClInclude Include="src\client\targets\game\assert_handler.h" />
     <ClInclude Include="src\client\targets\game\config_getter\game_config_getter_targets.h" />
     <ClInclude Include="src\client\targets\game\config_getter.h" />
     <ClInclude Include="src\client\targets\game\packages\game_package_targets.h" />
@@ -2134,4 +2102,7 @@
     <ClCompile Include="src\client\hooks\network\investment\investment_lore_visibility.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ItemGroup><ClInclude Include="src\client\sdk\presentation\internal.h" /></ItemGroup>
+  <ItemGroup><ClInclude Include="src\client\sdk\presentation\runtime.h" /></ItemGroup>
+  <ItemGroup><ClCompile Include="src\client\sdk\presentation\runtime.cpp" /></ItemGroup>
 </Project>

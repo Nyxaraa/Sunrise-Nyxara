@@ -104,7 +104,7 @@ reload_authorization(const state::activity::SessionBinding& binding) noexcept {
 }
 
 bool bind_presentation(RuntimeInstance& instance) noexcept {
-    namespace presentation = client::hooks::scripted_presentation;
+    namespace presentation = client::sdk::presentation;
     presentation::Config config{};
     if (instance.publicTarget || !lua_vm::presentation_config(instance.vm, config)) return true;
     if (!config.movieCount && !config.effectCount && !config.deliveryCount
@@ -146,7 +146,7 @@ bool bind_presentation(RuntimeInstance& instance) noexcept {
     if (generated::resolve(view, worldView) != generated::BindStatus::ready) {
         return false;
     }
-    client::hooks::scripted_presentation::remove(
+    client::sdk::presentation::remove(
         {instance.view.binding.sessionId,instance.view.activityClientGeneration});
     instance.view = std::move(view);
     instance.worldView = std::move(worldView);
@@ -663,7 +663,7 @@ void attach_instance(const host::InstanceSnapshot& hostInstance,
     instance->occupied = true;
     const AttachResult opened = open_program(*instance, now);
     if (opened != AttachResult::ready)
-        client::hooks::scripted_presentation::remove(
+        client::sdk::presentation::remove(
             {instance->view.binding.sessionId,instance->view.activityClientGeneration});
     report_attach_result(
         hostInstance.binding, opened, attach_result_name(opened), instance->view.activityRow);

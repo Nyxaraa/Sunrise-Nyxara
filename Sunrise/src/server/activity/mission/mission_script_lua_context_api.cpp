@@ -1,4 +1,4 @@
-#include "../../../client/hooks/scripted_presentation/movies.h"
+#include "../../../client/sdk/presentation/movies.h"
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -244,7 +244,7 @@ int context_prerendered_movie_status(lua_State* state) {
         lua_pushliteral(state, "absent");
         return 1;
     }
-    namespace movies = client::hooks::scripted_presentation;
+    namespace movies = client::sdk::presentation;
     const auto result =
         movies::status({frame.event->binding.sessionId, frame.event->sourceGeneration},
                        static_cast<unsigned>(index));

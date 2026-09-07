@@ -1,5 +1,5 @@
-#include "../../../client/hooks/scripted_presentation/movies.h"
-#include "../../../client/hooks/scripted_presentation/orbit_return.h"
+#include "../../../client/sdk/presentation/movies.h"
+#include "../../../client/sdk/presentation/orbit_return.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -283,7 +283,7 @@ void dispatch_intent(RuntimeInstance& instance, std::uint64_t now) noexcept {
     switch (intent.kind) {
     case lua_vm::IntentKind::playPrerenderedMovie: {
         if (instance.publicTarget
-            || !client::hooks::scripted_presentation::request(
+            || !client::sdk::presentation::request(
                 {instance.view.binding.sessionId, instance.view.activityClientGeneration},
                 intent.requestKey,
                 intent.firstRow,
@@ -300,7 +300,7 @@ void dispatch_intent(RuntimeInstance& instance, std::uint64_t now) noexcept {
     }
     case lua_vm::IntentKind::returnToOrbit: {
         if (instance.publicTarget || instance.activeRegion < 0
-            || !client::hooks::scripted_presentation::orbit_return::request(
+            || !client::sdk::presentation::orbit_return::request(
                 {instance.view.binding.sessionId, instance.view.activityClientGeneration},
                 instance.activeRegion)) {
             refuse_delivery(instance,

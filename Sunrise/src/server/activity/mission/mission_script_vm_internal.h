@@ -99,7 +99,8 @@ struct CallFrame final {
 struct Impl final {
     Arena arena{};
     ProgramIdentity identity{};
-    client::hooks::scripted_presentation::Config presentation{};
+    client::sdk::presentation::Config presentation{};
+    bool presentationConfigured{};
     DefinitionApi definitions{};
     /** The peer set the host last published. Read by context.peers, never by an event. */
     std::array<PeerSession, kPeerCapacity> peers{};

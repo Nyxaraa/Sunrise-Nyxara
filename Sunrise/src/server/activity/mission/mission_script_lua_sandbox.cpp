@@ -1,3 +1,4 @@
+#include "mission_script_presentation.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -145,6 +146,7 @@ void configure_generated_require(lua_State* state, const ProgramIdentity& identi
     luaL_requiref(state, LUA_MATHLIBNAME, luaopen_math, 1);
     lua_pop(state, 1);
     configure_generated_require(state, impl->identity);
+    register_presentation_api(state);
 
     // Globals a sandboxed program may not reach: host IO, collection control, and any
     // iteration or protected call whose cost the instruction budget cannot charge.
@@ -288,6 +290,8 @@ void destroy_state(Impl& impl) noexcept {
         lua_close(impl.state);
         impl.arenaBytesAfterClose = impl.arena.used;
     }
+    impl.presentation = {};
+    impl.presentationConfigured = false;
     impl.identity = {};
     impl.definitions = {};
     std::vector<Intent>{}.swap(impl.outbox);

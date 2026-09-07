@@ -29,18 +29,13 @@ namespace {
 using patterns::signature;
 using patterns::signature_length;
 
-// Identity-bearing placements per registry clear that get an observed line. This is the positive
-// control for the duplicate count, so it matches the registry's own capacity. A smaller budget is
-// spent before the object lists load, and a missing duplicate then says nothing.
-constexpr std::size_t kIdentityReportBudget = 16384;
-
 /** Placement ledger is a power-of-two ring, so the mask indexes it without a division. */
 constexpr std::size_t kRegistryCapacity = 16384;
 constexpr std::size_t kRegistryMask = kRegistryCapacity - 1;
 static_assert((kRegistryCapacity & kRegistryMask) == 0);
 
-/** Placement, entity and trace signatures resolved together in one image pass. */
-constexpr std::size_t kTargetCount = 21;
+/** Placement signatures resolved together in one image pass. */
+constexpr std::size_t kTargetCount = 5;
 
 /** Native entry that instantiates a placed world object. */
 constexpr std::string_view kInstantiateSignatureText =
@@ -55,23 +50,6 @@ constexpr std::string_view kDestroySignatureText =
 /** Compiled form of that pattern; the scan requires one match. */
 constexpr auto kDestroySignature =
     signature<signature_length(kDestroySignatureText)>(kDestroySignatureText);
-
-// The datum allocator every creation path shares. The instantiate hook above is one of its
-// three callers, so a build reported here and not there was made by one of the other two.
-constexpr std::string_view kAllocateSignatureText =
-    "48 89 5C 24 ? 48 89 6C 24 ? 56 57 41 56 48 81 EC 40 01 00 00 48 8B 05 ? ? ? ? 48 33 "
-    "C4 48 89 84 24 ? ? ? ? C7 01 FF FF FF FF";
-/** Compiled form of that pattern; the scan requires one match. */
-constexpr auto kAllocateSignature =
-    signature<signature_length(kAllocateSignatureText)>(kAllocateSignatureText);
-
-// The logical destroy. It is the only path that releases an object's simulation entity, so a
-// teardown that frees the object without passing here leaves the entity to rebuild it.
-constexpr std::string_view kLogicalDestroySignatureText =
-    "48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 40 48 8B 3D ? ? ? ? 8B D9";
-/** Compiled form of that pattern; the scan requires one match. */
-constexpr auto kLogicalDestroySignature =
-    signature<signature_length(kLogicalDestroySignatureText)>(kLogicalDestroySignatureText);
 
 /** Native entry that resolves a handle pair to its datum. */
 constexpr std::string_view kResolvePairSignatureText =
@@ -96,12 +74,10 @@ constexpr std::string_view kDatumLayoutSignatureText =
 constexpr auto kDatumLayoutSignature =
     signature<signature_length(kDatumLayoutSignatureText)>(kDatumLayoutSignatureText);
 
-/** The seven placement signatures, in the order the target list expects them. */
+/** The five placement signatures, in the order the target list expects them. */
 constexpr std::array kPlacementSignatures{
     patterns::Pattern{"placed_object_instantiate", kInstantiateSignature},
     patterns::Pattern{"placed_object_destroy", kDestroySignature},
-    patterns::Pattern{"object_datum_allocate", kAllocateSignature},
-    patterns::Pattern{"object_logical_destroy", kLogicalDestroySignature},
     patterns::Pattern{"object_handle_pair", kResolvePairSignature},
     patterns::Pattern{"object_handle_validate", kValidatePairSignature},
     patterns::Pattern{"object_datum_layout", kDatumLayoutSignature},
@@ -132,7 +108,7 @@ constexpr std::uint32_t kDatumIdentityBytes = sizeof(DatumIdentity);
 std::array<RegistryEntry, kRegistryCapacity> g_entries{};
 std::array<IdentityEntry, kRegistryCapacity> g_identities{};
 std::uint64_t g_overflowCount{};
-std::array<hooking::detour::Handle, 15> g_handles{};
+std::array<hooking::detour::Handle, 2> g_handles{};
 
 /** @return A stable open-address bucket for a native handle. */
 [[nodiscard]] constexpr std::size_t bucket(std::uint32_t handle) noexcept {
@@ -144,11 +120,6 @@ void clear_registry() noexcept {
     g_entries = {};
     g_identities = {};
     g_liveCount = 0;
-    g_identityReportBudget = kIdentityReportBudget;
-    g_dynamicReportBudget = kIdentityReportBudget;
-    g_allocateReportBudget = kIdentityReportBudget;
-    g_logicalDestroyReportBudget = kIdentityReportBudget;
-    g_dynamicCount = 0;
 }
 
 /**
@@ -269,36 +240,15 @@ void reclaim_tombstones(std::size_t index) noexcept {
 struct Targets final {
     std::byte* instantiate{};
     std::byte* destroy{};
-    std::byte* allocate{};
-    std::byte* logicalDestroy{};
     std::byte* resolvePair{};
     std::byte* validatePair{};
     std::byte* datumLayout{};
-    std::byte* createEntity{};
-    std::byte* purgeEntities{};
-    std::byte* glueMapping{};
-    std::byte* entityPool{};
-    std::byte* entityPolicy{};
-    std::byte* observer{};
-    std::byte* rebind{};
-    std::byte* iterator{};
-    std::byte* source{};
-    std::byte* resolveSource{};
-    std::byte* predicate{};
-    std::byte* bind{};
-    std::byte* teardown{};
-    std::byte* actorOwner{};
 };
-
-/** @return The main module's base, or zero when it cannot be read. */
-[[nodiscard]] std::uintptr_t main_module_base() noexcept {
-    return reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
-}
 
 /**
  * Resolves every target in one image pass.
- * @param output Receives one address per target, in placement, entity and trace order.
- * @return False unless all three signature groups fill the list and every one matched once.
+ * @param output Receives one address per target, in placement order.
+ * @return False unless every signature matched once.
  */
 [[nodiscard]] bool resolve_targets(Targets& output) noexcept {
     output = {};
@@ -310,8 +260,7 @@ struct Targets final {
     for (std::size_t index = 0; index < main.count; ++index) {
         ranges[index] = patterns::ImageRange{main.sections[index]};
     }
-    const std::array<std::span<const patterns::Pattern>, 3> groups{
-        kPlacementSignatures, entity_patterns(), trace_patterns()};
+    const std::array<std::span<const patterns::Pattern>, 1> groups{kPlacementSignatures};
     std::array<patterns::Pattern, kTargetCount> definitions{};
     std::size_t next = 0;
     for (const std::span<const patterns::Pattern>& group : groups) {
@@ -335,12 +284,8 @@ struct Targets final {
             return false;
         }
     }
-    output = {matches[0].address,  matches[1].address,  matches[2].address,  matches[3].address,
-              matches[4].address,  matches[5].address,  matches[6].address,  matches[7].address,
-              matches[8].address,  matches[9].address,  matches[10].address, matches[11].address,
-              matches[12].address, matches[13].address, matches[14].address, matches[15].address,
-              matches[16].address, matches[17].address, matches[18].address, matches[19].address,
-              matches[20].address};
+    output = {matches[0].address, matches[1].address, matches[2].address,
+              matches[3].address, matches[4].address};
     return true;
 }
 
@@ -361,20 +306,7 @@ struct Targets final {
 SRWLOCK g_lock{SRWLOCK_INIT};
 std::atomic_uint32_t g_activeCalls{};
 std::atomic_bool g_accepting{};
-std::uintptr_t g_moduleBase{};
 std::size_t g_liveCount{};
-std::size_t g_identityReportBudget{kIdentityReportBudget};
-std::size_t g_dynamicReportBudget{kIdentityReportBudget};
-std::size_t g_allocateReportBudget{kIdentityReportBudget};
-std::size_t g_logicalDestroyReportBudget{kIdentityReportBudget};
-std::uint64_t g_dynamicCount{};
-/**
- * Handles the dynamic path built, so the destroy detour can say which of them the client tears
- * down. A dynamic build names no placed entry, so the identity registry never holds one, and
- * whether a bubble crossing removes it is not known.
- */
-std::array<std::uint32_t, kDynamicHandleCapacity> g_dynamicHandles{};
-std::array<std::uint64_t, kDynamicHandleCapacity> g_dynamicOrdinals{};
 ResolvePair g_resolvePair{};
 ValidatePair g_validatePair{};
 const std::uintptr_t* g_datumBaseStorage{};
@@ -468,22 +400,15 @@ bool read_datum_identity(std::uint32_t handle, DatumIdentity& output) noexcept {
 /** Installs the generation-checked placed-object lifetime capture. */
 bool install() noexcept {
     AcquireSRWLockExclusive(&g_lock);
-    if (g_handles[0].attached && g_handles[1].attached && g_handles[2].attached
-        && g_handles[3].attached && g_handles[4].attached && g_handles[5].attached
-        && std::all_of(
-            g_handles.begin() + 6, g_handles.end(), [](const auto& h) { return h.attached; })) {
+    if (std::all_of(g_handles.begin(), g_handles.end(), [](const auto& h) { return h.attached; })) {
         const bool accepting = g_accepting.load(std::memory_order_acquire);
         ReleaseSRWLockExclusive(&g_lock);
         return accepting;
     }
-    if (g_handles[0].attached || g_handles[1].attached || g_handles[2].attached
-        || g_handles[3].attached || g_handles[4].attached || g_handles[5].attached
-        || std::any_of(
-            g_handles.begin() + 6, g_handles.end(), [](const auto& h) { return h.attached; })) {
+    if (std::any_of(g_handles.begin(), g_handles.end(), [](const auto& h) { return h.attached; })) {
         ReleaseSRWLockExclusive(&g_lock);
         return false;
     }
-    g_moduleBase = main_module_base();
     Targets targets{};
     if (!resolve_targets(targets) || !bind_datum_layout(targets.datumLayout)) {
         ReleaseSRWLockExclusive(&g_lock);
@@ -493,29 +418,10 @@ bool install() noexcept {
         return false;
     }
     g_resolvePair = reinterpret_cast<ResolvePair>(targets.resolvePair);
-    g_glueStrideStorage = reinterpret_cast<const std::uint32_t*>(
-        patterns::resolve_relative(targets.glueMapping + 9, targets.glueMapping + 13));
-    g_glueBaseStorage = reinterpret_cast<const std::uintptr_t*>(
-        patterns::resolve_relative(targets.glueMapping + 18, targets.glueMapping + 22));
-    g_entityRecordBase = reinterpret_cast<std::uintptr_t>(
-        patterns::resolve_relative(targets.entityPool + 20, targets.entityPool + 24));
     g_validatePair = reinterpret_cast<ValidatePair>(targets.validatePair);
     const std::array specs{
         hooking::detour::Spec{targets.instantiate, reinterpret_cast<void*>(&instantiate)},
         hooking::detour::Spec{targets.destroy, reinterpret_cast<void*>(&destroy)},
-        hooking::detour::Spec{targets.allocate, reinterpret_cast<void*>(&allocate)},
-        hooking::detour::Spec{targets.logicalDestroy, reinterpret_cast<void*>(&logical_destroy)},
-        hooking::detour::Spec{targets.createEntity, reinterpret_cast<void*>(&create_entity)},
-        hooking::detour::Spec{targets.purgeEntities, reinterpret_cast<void*>(&purge_entities)},
-        hooking::detour::Spec{targets.entityPolicy, reinterpret_cast<void*>(&entity_policy)},
-        hooking::detour::Spec{targets.observer, reinterpret_cast<void*>(&trace_observer)},
-        hooking::detour::Spec{targets.rebind, reinterpret_cast<void*>(&trace_rebind)},
-        hooking::detour::Spec{targets.iterator, reinterpret_cast<void*>(&trace_iterator)},
-        hooking::detour::Spec{targets.source, reinterpret_cast<void*>(&trace_source)},
-        hooking::detour::Spec{targets.resolveSource, reinterpret_cast<void*>(&trace_resolve)},
-        hooking::detour::Spec{targets.predicate, reinterpret_cast<void*>(&trace_predicate)},
-        hooking::detour::Spec{targets.bind, reinterpret_cast<void*>(&trace_bind)},
-        hooking::detour::Spec{targets.teardown, reinterpret_cast<void*>(&trace_teardown)},
 
     };
     if (!hooking::detour::install(specs, g_handles)) {
@@ -533,47 +439,6 @@ bool install() noexcept {
                                 std::memory_order_release);
     g_destroyOriginal.store(reinterpret_cast<Destroy>(g_handles[1].original),
                             std::memory_order_release);
-    g_allocateOriginal.store(reinterpret_cast<Allocate>(g_handles[2].original),
-                             std::memory_order_release);
-    g_logicalDestroyOriginal.store(reinterpret_cast<LogicalDestroy>(g_handles[3].original),
-                                   std::memory_order_release);
-    g_createEntityOriginal.store(reinterpret_cast<CreateEntity>(g_handles[4].original),
-                                 std::memory_order_release);
-    g_purgeEntitiesOriginal.store(reinterpret_cast<PurgeEntities>(g_handles[5].original),
-                                  std::memory_order_release);
-    g_entityPolicyOriginal.store(reinterpret_cast<EntityPolicy>(g_handles[6].original),
-                                 std::memory_order_release);
-
-    g_observerOriginal.store(reinterpret_cast<Observer>(g_handles[7].original),
-                             std::memory_order_release);
-    g_rebindOriginal.store(reinterpret_cast<Rebind>(g_handles[8].original),
-                           std::memory_order_release);
-    g_iteratorOriginal.store(reinterpret_cast<IteratorValue>(g_handles[9].original),
-                             std::memory_order_release);
-    g_sourceOriginal.store(reinterpret_cast<SourceRef>(g_handles[10].original),
-                           std::memory_order_release);
-    g_resolveSourceOriginal.store(reinterpret_cast<ResolveSource>(g_handles[11].original),
-                                  std::memory_order_release);
-    g_predicateOriginal.store(reinterpret_cast<Predicate>(g_handles[12].original),
-                              std::memory_order_release);
-    g_bindOriginal.store(reinterpret_cast<BindActor>(g_handles[13].original),
-                         std::memory_order_release);
-    g_teardownOriginal.store(reinterpret_cast<Teardown>(g_handles[14].original),
-                             std::memory_order_release);
-    g_actorOwner = reinterpret_cast<ActorOwner>(targets.actorOwner);
-    g_actorStrideStorage = reinterpret_cast<const std::uint32_t*>(
-        patterns::resolve_relative(targets.actorOwner + 20, targets.actorOwner + 24));
-    g_actorBaseStorage = reinterpret_cast<const std::uintptr_t*>(
-        patterns::resolve_relative(targets.actorOwner + 29, targets.actorOwner + 33));
-    g_rebindAddress = reinterpret_cast<std::uintptr_t>(targets.rebind);
-    g_observerAddress = reinterpret_cast<std::uintptr_t>(targets.observer);
-    g_sliceManager = reinterpret_cast<SliceManager>(
-        patterns::resolve_relative(targets.observer + 17, targets.observer + 21));
-    g_currentBubble = reinterpret_cast<CurrentBubble>(
-        patterns::resolve_relative(targets.observer + 30, targets.observer + 34));
-    g_rebindPasses.store(0);
-    g_rebindRows.store(0);
-    g_observerReports.store(0);
     g_accepting.store(true, std::memory_order_release);
     ReleaseSRWLockExclusive(&g_lock);
     core::log::write(core::log::Channel::client,
@@ -585,31 +450,15 @@ bool install() noexcept {
 /** Removes both lifetime hooks only after native calls have left their trampolines. */
 bool uninstall() noexcept {
     AcquireSRWLockExclusive(&g_lock);
-    if (!g_handles[0].attached && !g_handles[1].attached && !g_handles[2].attached
-        && !g_handles[3].attached && !g_handles[4].attached && !g_handles[5].attached
-        && std::none_of(
-            g_handles.begin() + 6, g_handles.end(), [](const auto& h) { return h.attached; })) {
+    if (std::none_of(g_handles.begin(), g_handles.end(), [](const auto& h) { return h.attached; })) {
         clear_registry();
         ReleaseSRWLockExclusive(&g_lock);
         return true;
     }
     g_accepting.store(false, std::memory_order_release);
-    const std::array<hooking::detour::ProtectedCodeEntry, 15> protectedEntries{
+    const std::array<hooking::detour::ProtectedCodeEntry, 2> protectedEntries{
         hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&instantiate)},
         hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&destroy)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&allocate)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&logical_destroy)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&create_entity)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&purge_entities)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&entity_policy)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&trace_observer)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&trace_rebind)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&trace_iterator)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&trace_source)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&trace_resolve)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&trace_predicate)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&trace_bind)},
-        hooking::detour::ProtectedCodeEntry{reinterpret_cast<void*>(&trace_teardown)},
 
     };
     const hooking::detour::UninstallResult result =
@@ -620,29 +469,6 @@ bool uninstall() noexcept {
     }
     g_instantiateOriginal.store(nullptr, std::memory_order_release);
     g_destroyOriginal.store(nullptr, std::memory_order_release);
-    g_allocateOriginal.store(nullptr, std::memory_order_release);
-    g_logicalDestroyOriginal.store(nullptr, std::memory_order_release);
-    g_createEntityOriginal.store(nullptr, std::memory_order_release);
-    g_purgeEntitiesOriginal.store(nullptr, std::memory_order_release);
-    g_entityPolicyOriginal.store(nullptr, std::memory_order_release);
-    g_observerOriginal.store(nullptr, std::memory_order_release);
-    g_rebindOriginal.store(nullptr, std::memory_order_release);
-    g_iteratorOriginal.store(nullptr, std::memory_order_release);
-    g_sourceOriginal.store(nullptr, std::memory_order_release);
-    g_resolveSourceOriginal.store(nullptr, std::memory_order_release);
-    g_predicateOriginal.store(nullptr, std::memory_order_release);
-    g_bindOriginal.store(nullptr, std::memory_order_release);
-    g_teardownOriginal.store(nullptr, std::memory_order_release);
-    g_actorOwner = nullptr;
-    g_actorBaseStorage = nullptr;
-    g_actorStrideStorage = nullptr;
-    g_sliceManager = nullptr;
-    g_currentBubble = nullptr;
-    g_rebindAddress = g_observerAddress = 0;
-    g_entityRecordBase = 0;
-    g_policyTrace = {};
-    g_glueBaseStorage = nullptr;
-    g_glueStrideStorage = nullptr;
     g_resolvePair = nullptr;
     g_validatePair = nullptr;
     g_datumBaseStorage = nullptr;
@@ -656,10 +482,7 @@ bool uninstall() noexcept {
 bool is_installed() noexcept {
     AcquireSRWLockShared(&g_lock);
     const bool installed =
-        g_handles[0].attached && g_handles[1].attached && g_handles[2].attached
-        && g_handles[3].attached && g_handles[4].attached && g_handles[5].attached
-        && std::all_of(
-            g_handles.begin() + 6, g_handles.end(), [](const auto& h) { return h.attached; })
+        std::all_of(g_handles.begin(), g_handles.end(), [](const auto& h) { return h.attached; })
         && g_accepting.load(std::memory_order_acquire);
     ReleaseSRWLockShared(&g_lock);
     return installed;

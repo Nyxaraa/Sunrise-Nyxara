@@ -23,8 +23,6 @@ enum class Id : std::size_t {
     queuezFamily5Subscribe,
     getItemStatValue,
     lightValueToScalar,
-    retailLogEnqueue,
-    retailLogSetCategoryVerbosity,
     count,
 };
 

@@ -9,8 +9,6 @@
 #include "../../../client/content/activity/scriptable_catalog_worker.h"
 #include "../../../client/content/investment/worker.h"
 #include "../../../client/hooks/feature_flags/feature_flags.h"
-#include "../../../client/hooks/membership_probe/membership_probe.h"
-#include "../../../client/hooks/net_tick_probe/net_tick_probe.h"
 #include "../../../core/logging/log.h"
 #include "../../../core/ui/busy/busy.h"
 #include "../../../server/runtime/server_runtime.h"
@@ -202,15 +200,11 @@ void run_slice() noexcept {
         const auto now = GetTickCount64();
         // Reached only once the game is activated, which is when its feature registry exists.
         client::hooks::feature_flags::apply_once();
-        // Samples the healthy cadence. The assert observer samples it again once this tick stops.
-        client::hooks::net_tick_probe::sample();
         // Everything below must run on the game's thread; the server gets its own from here on.
         runtime::callbacks::start_server_thread_once();
         client::content::investment::worker::service(now);
         client::content::activity::sdk_generation::service();
         client::content::activity::scriptables::service();
-        // Read-only, and out of line: the container bind lands a tick after its message.
-        client::hooks::membership_probe::service(now);
     }
 }
 

@@ -234,7 +234,7 @@ void clear_instance(RuntimeInstance& instance, bool clearPending) noexcept {
     } else if (instance.occupied) {
         reset_pending_events_for_reattach(instance.view.binding);
     }
-    client::hooks::scripted_presentation::remove(
+    client::sdk::presentation::remove(
         {instance.view.binding.sessionId,instance.view.activityClientGeneration});
     lua_vm::close(instance.vm);
     instance.worldView = {};
@@ -356,7 +356,7 @@ void persist_mission_fault(RuntimeInstance& instance) noexcept {
 
 /** Faults both the VM and the exact server-owned mission record. */
 void fault_instance(RuntimeInstance& instance, std::string_view reason) noexcept {
-    client::hooks::scripted_presentation::remove(
+    client::sdk::presentation::remove(
         {instance.view.binding.sessionId,instance.view.activityClientGeneration});
     lua_vm::fault(instance.vm, reason);
     instance.programStatus = ProgramStatus::programError;

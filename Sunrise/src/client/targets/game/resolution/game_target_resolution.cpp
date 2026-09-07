@@ -14,8 +14,6 @@ std::string_view g_lastFailedSignature{};
 void clear_groups() noexcept {
     config_getter::clear();
     packages::clear();
-    assert_handler::clear();
-    retail_log::clear();
     content::clear();
     network::clear();
 }
@@ -87,16 +85,6 @@ bool resolve(std::span<const patterns::ImageRange> image) noexcept {
     network::publish(networkTargets);
     // Content readiness is the commit marker after the network table is visible.
     content::publish(contentTargets);
-    // Diagnostic only: a miss here leaves capture off and never fails activation.
-    retail_log::Targets retailLogTargets;
-    if (retail_log::derive(resolvedMatches.subspan(kRetailLogFirstMatch), retailLogTargets)) {
-        retail_log::publish(retailLogTargets);
-    }
-    // Also diagnostic: without it an assert halts the boot behind the game's own dialog.
-    assert_handler::Targets assertTargets;
-    if (assert_handler::derive(image, assertTargets)) {
-        assert_handler::publish(assertTargets);
-    }
     packages::Targets packageTargets;
     if (packages::derive(image, packageTargets)) {
         packages::publish(packageTargets);
