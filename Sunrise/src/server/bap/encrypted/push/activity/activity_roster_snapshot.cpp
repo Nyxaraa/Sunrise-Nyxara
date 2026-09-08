@@ -95,7 +95,7 @@ bool client_region_ready(const Session& session, const RefreshReport* refresh) n
     const bool movePending = lease.configured
                              && lease.bindingGeneration == session.activity.bindingGeneration
                              && lease.regionArrivalPending
-                             && (!lease.retirementRequested || lease.retirementAcknowledged)
+                             && (!lease.retirementRequested || lease.retirementPublished)
                              && static_cast<std::int64_t>(lease.plan.effectiveRegion) != held;
     return !movePending && held >= 0;
 }
@@ -710,6 +710,16 @@ build_roster_snapshot(Session& session,
     if (!project_mission_retirement(session, scratch, snapshot)) {
         return RosterOutcome::noOverrideTarget;
     }
+    if (!preserve_roster_order(session.activityRosterOrder, session.activity.bindingGeneration,
+                               snapshot.roster.bubbleSubBlocks, scratch.rosterOrder)) {
+        return refuse_override(session, "roster_order_capacity");
+    }
+    for (std::size_t index = 0; index < scratch.rosterOrder.count; ++index) {
+        const auto& block = scratch.rosterOrder.blocks[index];
+        scratch.rosterSubBlocks[index] = {block.bubble,
+            std::span(block.keys).first(block.count), block.presence};
+    }
+    snapshot.roster.bubbleSubBlocks = std::span(scratch.rosterSubBlocks).first(scratch.rosterOrder.count);
     session.activityRosterRefusal = {};
     return RosterOutcome::published;
 }

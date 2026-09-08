@@ -65,7 +65,7 @@ struct Snapshot final {
     bool publicationPending{};
     /** True while the selection's publication deliberately waits for the client's arrival. */
     bool regionArrivalPending{};
-    bool retirementPending{};
+    bool retirementPublicationPending{};
 };
 
 /** Resolves the generated plan and current lease without changing transport state. */

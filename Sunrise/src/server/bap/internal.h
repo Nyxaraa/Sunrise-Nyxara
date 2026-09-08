@@ -23,6 +23,7 @@
 #include "activity_authority_query_owner.h"
 #include "activity_authority_reset_owner.h"
 #include "activity_roster_mirror.h"
+#include "roster_order.h"
 #include "mission_roster_retirement.h"
 #include "encrypted/queuez/definition.h"
 #include "runtime.h"
@@ -74,6 +75,7 @@ struct Scratch {
                    middleware::bap::activity_message::sensor_auth_update::kBubbleKeyCapacity>,
         state::build_data::scenarios::kBubbleCapacity>
         rosterSubBlockKeys{};
+    RosterOrder rosterOrder{};
 };
 
 /** One registry key and its package object tag copied from an exact msg-5 roster snapshot. */
@@ -123,6 +125,7 @@ struct RosterPublication {
     bool priorRosterOwedForEpoch{};
     /** Exact decode identities carried by this staged complete roster snapshot. */
     RosterDecodeMap decodeMap{};
+    RosterOrder rosterOrder{};
     /** Exact typed body carried by this staged roster, if any. */
     activity::host::PendingScriptableOverride scriptableOverride{};
     /** ActivityClient generation that staged this grant and its roster counters. */
@@ -444,6 +447,7 @@ struct Session {
     RosterPublication activityRosterStaged{};
     /** Last complete msg-5 roster known to have reached this exact connection generation. */
     RosterDecodeMap activityRosterDecode{};
+    RosterOrder activityRosterOrder{};
     ActivityRosterMirror activityRosterMirror{};
     /** Delivered squad Auth bodies, all re-emitted so phase-2 reset cannot clear any slot. */
     SquadOverrideLease activitySquadOverride{};

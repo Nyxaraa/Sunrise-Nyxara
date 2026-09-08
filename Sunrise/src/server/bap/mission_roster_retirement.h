@@ -36,6 +36,18 @@ struct MissionRetiredGroup {
 }
 
 template <std::size_t Capacity>
+[[nodiscard]] bool retirement_state_at_ordinal(
+    const middleware::bap::activity_message::sense_update::RosterKeys<Capacity>& keys,
+    std::uint32_t key, std::size_t ordinal, std::uint8_t& state) noexcept {
+    if (!keys.hasKeys || !keys.hasStates || ordinal >= Capacity
+        || ordinal >= keys.keyCount || ordinal >= keys.stateCount || keys.keys[ordinal] != key) {
+        return false;
+    }
+    state = static_cast<std::uint8_t>(keys.states[ordinal]);
+    return true;
+}
+
+template <std::size_t Capacity>
 [[nodiscard]] bool retired_at_ordinal(
     const middleware::bap::activity_message::sense_update::RosterKeys<Capacity>& keys,
     const MissionRetiredGroup& target) noexcept {

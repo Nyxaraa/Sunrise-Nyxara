@@ -553,7 +553,7 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
             }
             appendRows[appendCount++] = static_cast<std::uint16_t>(source);
         }
-        if (!canonicalTopLevel && groupActive[source]) {
+        if (!canonicalTopLevel) {
             if (activationCount >= activationKeys.size()) {
                 return refuse_seed("activation_capacity");
             }
@@ -665,6 +665,15 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
         }
         snapshot.roster.groups[position].missionSeedOnly = true;
     }
+    // Inactive definitions appended above need the same zero presence as canonical groups.
+    for (std::size_t index = 0; index < managedCount; ++index) {
+        for (std::size_t group = snapshot.roster.topLevelGroupCount;
+             group < snapshot.roster.groupCount; ++group) {
+            if (snapshot.roster.groups[group].key == managedKeys[index]) {
+                snapshot.roster.groups[group].retired = !managedActive[index];
+            }
+        }
+    }
     for (std::size_t index = 0; index < activationCount; ++index) {
         if (!append_bubble_key(
                 activationBubbles[index], activationKeys[index], scratch, snapshot.roster)) {
@@ -714,7 +723,7 @@ bool project_mission_retirement(Session& session, Scratch& scratch, message::Sna
     };
     auto& lease = session.activityMissionSeed;
     if (!lease.retirementRequested || !lease.regionArrivalPending) return true;
-    if (!lease.retirementAcknowledged) {
+    if (!lease.retirementPublished) {
         const auto placement = state::activity::membership::reported_placement(
             session.activity.session.sessionId);
         const auto oldRegion = static_cast<std::int32_t>(lease.previousPlan.effectiveRegion);
@@ -802,10 +811,24 @@ bool project_mission_retirement(Session& session, Scratch& scratch, message::Sna
             }
             if (shared) continue;
             if (count == targets.size()) return refuse("retirement_capacity");
+            std::uint8_t state = group->hasStateSequence ? group->stateSequence : snapshot.stateSequence;
+            if (lease.retirementPublished) {
+                if (count >= lease.retiredGroupCount || lease.retiredGroups[count].key != key
+                    || lease.retiredGroups[count].ordinal != ordinal) return refuse("retirement_target_changed");
+                state = lease.retiredGroups[count].state;
+            } else {
+                const auto& received = mirror.roster.bubbles[blockIndex].groups;
+                if (ordinal < received.keyCount
+                    && !retirement_state_at_ordinal(received, key, ordinal, state)) {
+                    return refuse("retirement_states_unknown");
+                }
+            }
+            // Removal changes presence only. A new state byte can re-register the native group.
+            group->stateSequence = state;
+            group->hasStateSequence = true;
             group->retired = true;
             targets[count++] = {key, static_cast<std::uint16_t>(ordinal),
-                                static_cast<std::uint8_t>(bubble),
-                                group->hasStateSequence ? group->stateSequence : snapshot.stateSequence};
+                                static_cast<std::uint8_t>(bubble), state};
         }
     }
     if (lease.retirementPublished) {

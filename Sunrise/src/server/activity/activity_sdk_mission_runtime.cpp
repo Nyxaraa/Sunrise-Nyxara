@@ -59,7 +59,7 @@ Status query(const sdk::BoundView& view, Snapshot& output) noexcept {
     output.configured = lease.configured;
     output.publicationPending = lease.publicationPending;
     output.regionArrivalPending = lease.regionArrivalPending;
-    output.retirementPending = lease.retirementPending;
+    output.retirementPublicationPending = lease.retirementPublicationPending;
 
     server::bap::ActivityMissionSeedPlan generated{};
     const std::int32_t selectedRegion =

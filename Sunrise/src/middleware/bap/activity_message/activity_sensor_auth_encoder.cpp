@@ -78,9 +78,15 @@ constexpr std::uint32_t kMaximumRegion = 0x7FFFFFFF;
     }
     std::array<bool, kPublishedGroupCapacity> referenced{};
     for (const BubbleSubBlock& block : roster.bubbleSubBlocks) {
+        if (block.keys.size() > kBubbleKeyCapacity
+            || (!block.presence.empty()
+                && block.presence.size() != (kBubbleKeyCapacity + 31) / 32)) return false;
         std::size_t activeGroups = roster.topLevelGroupCount;
         std::size_t activeRecords = topLevelRecords;
-        for (const std::uint32_t key : block.keys) {
+        for (std::size_t ordinal = 0; ordinal < block.keys.size(); ++ordinal) {
+            const auto key = block.keys[ordinal];
+            const bool present = block.presence.empty()
+                || (block.presence[ordinal / 32] & (std::uint32_t{1} << (ordinal % 32))) != 0;
             std::size_t matched = roster.groupCount;
             for (std::size_t index = roster.topLevelGroupCount; index < roster.groupCount;
                  ++index) {
@@ -93,8 +99,11 @@ constexpr std::uint32_t kMaximumRegion = 0x7FFFFFFF;
                 }
                 matched = index;
             }
-            if (matched == roster.groupCount) return false;
-            if (!roster.groups[matched].retired
+            if (matched == roster.groupCount) {
+                if (present) return false;
+                continue;
+            }
+            if (present && !roster.groups[matched].retired
                 && (++activeGroups > kClientGroupCapacity
                     || !add_client_records(roster.groups[matched].slotTypes.size(), activeRecords)))
                 return false;

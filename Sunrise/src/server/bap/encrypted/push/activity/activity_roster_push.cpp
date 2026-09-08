@@ -535,6 +535,7 @@ bool append_roster_notification(
         session.activityRosterStaged.retirementBaseEpoch = retirementBaseEpoch;
         session.activityRosterStaged.retirementEpoch = retirementEpoch;
         session.activityRosterStaged.decodeMap = decodeMap;
+        session.activityRosterStaged.rosterOrder = scratch.rosterOrder;
         session.activityRosterStaged.bindingGeneration = session.activity.bindingGeneration;
         session.activityRosterStaged.priorLeases = initialLeases;
         session.activityRosterStaged.priorRosterOwedForEpoch = initialRosterOwedForEpoch;
@@ -654,6 +655,7 @@ void commit_staged_roster(Session& session) noexcept {
     // The BAP lock serializes publication and incoming activity messages, so replacing the whole
     // fixed map here exposes either the prior delivered roster or this complete delivered roster.
     session.activityRosterDecode = session.activityRosterStaged.decodeMap;
+    session.activityRosterOrder = session.activityRosterStaged.rosterOrder;
     if (session.activityRosterStaged.hasGrant) {
         if (session.activityRosterStaged.entityRetirement.pending) {
             server::gameplay::squad_entity_retirement::commit_retirement(

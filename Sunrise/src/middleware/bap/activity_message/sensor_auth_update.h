@@ -144,6 +144,7 @@ struct BubbleSubBlock final {
     std::uint32_t bubble{};
     /** Keys registered while that bubble is current. Each one also needs a group to seed it. */
     std::span<const std::uint32_t> keys{};
+    std::span<const std::uint32_t> presence{};
 };
 
 /** Which groups one destination publishes and which of them binds the player. */

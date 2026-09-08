@@ -52,8 +52,9 @@ void read_mission_seed_lease(const Session& session,
     output.configured = lease.configured;
     output.publicationPending = lease.configured && lease.revision != lease.publishedRevision;
     output.regionArrivalPending = lease.configured && lease.regionArrivalPending;
-    output.retirementPending = lease.configured && lease.retirementRequested
-                               && !lease.retirementAcknowledged;
+    // This orders removal publication before the host teleport. It is not a native cleanup receipt.
+    output.retirementPublicationPending = lease.configured && lease.retirementRequested
+                                          && !lease.retirementPublished;
 }
 
 } // namespace sunrise::server::bap

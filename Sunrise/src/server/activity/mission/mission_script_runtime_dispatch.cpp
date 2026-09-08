@@ -314,9 +314,9 @@ void dispatch_intent(RuntimeInstance& instance, std::uint64_t now) noexcept {
                             host::EffectOutcome::refused);
             return;
         }
-        if (selected.retirementPending) {
+        if (selected.retirementPublicationPending) {
             report_intent_status(
-                instance, kIntentStatusStateTransitionPending, "state_retirement_pending");
+                instance, kIntentStatusStateTransitionPending, "state_retirement_publication_pending");
             return;
         }
         if (selected.regionArrivalPending) {

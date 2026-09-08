@@ -128,7 +128,7 @@ struct ActivityMissionSeedLeaseView final {
     bool publicationPending{};
     /** True while the selection's publication deliberately waits for the client's arrival. */
     bool regionArrivalPending{};
-    bool retirementPending{};
+    bool retirementPublicationPending{};
 };
 
 /** Applies one connection-scoped BAP lifecycle event. */
