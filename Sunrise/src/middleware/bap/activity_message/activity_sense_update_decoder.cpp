@@ -749,17 +749,17 @@ bool decode_sense_update(std::span<const std::byte> input,
     }
     const std::size_t total = input.size() * encoding::kBitsPerByte;
     bits::Reader reader(input);
-    std::uint64_t literal = 0, root = 0;
+    std::uint64_t literal = 0;
     if (!reader.read(kEpochFieldWidth, update.epoch.first)
         || !reader.read(kEpochFieldWidth, update.epoch.second) || !reader.read(1, literal)
-        || literal != 0 || !reader.read(1, root)) {
+        || literal != 0) {
         finish(update, reader, total, DecodeStatus::malformed, consumed);
         return false;
     }
-    update.tailBits = static_cast<std::uint32_t>(reader.remaining_bits() + 1);
-    if (root != 0) {
-        finish(update, reader, total, DecodeStatus::schemaUnavailable, consumed);
-        return true;
+    update.tailBits = static_cast<std::uint32_t>(reader.remaining_bits());
+    if (!read_roster_delta(reader, update.roster)) {
+        finish(update, reader, total, DecodeStatus::malformed, consumed);
+        return false;
     }
     bool partial = false;
     for (;;) {

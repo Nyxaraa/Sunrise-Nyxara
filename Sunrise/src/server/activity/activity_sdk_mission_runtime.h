@@ -65,6 +65,7 @@ struct Snapshot final {
     bool publicationPending{};
     /** True while the selection's publication deliberately waits for the client's arrival. */
     bool regionArrivalPending{};
+    bool retirementPending{};
 };
 
 /** Resolves the generated plan and current lease without changing transport state. */
@@ -73,12 +74,14 @@ struct Snapshot final {
 /**
  * Selects one authored effective region for this exact ActivityClient mission-seed lease.
  * @param omissions Objects this mission leaves out of the seed; the lease carries them onward.
+ * @param retireCurrent Wait for native removal of the current state's groups before travel.
  */
 [[nodiscard]] Status
 select_state(const state::activity_sdk::BoundView& view,
              std::int32_t effectiveRegion,
              std::span<const state::activity_sdk::MissionSeedOmission> omissions,
-             Snapshot& output) noexcept;
+             Snapshot& output,
+             bool retireCurrent = false, bool waitForArrival = false) noexcept;
 
 /** Checks one exact occurrence and type-43 slot without changing transport state. */
 [[nodiscard]] SceneStatus authored_scene_availability(const state::activity_sdk::BoundView& view,

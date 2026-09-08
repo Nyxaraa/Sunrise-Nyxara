@@ -128,6 +128,7 @@ struct ActivityMissionSeedLeaseView final {
     bool publicationPending{};
     /** True while the selection's publication deliberately waits for the client's arrival. */
     bool regionArrivalPending{};
+    bool retirementPending{};
 };
 
 /** Applies one connection-scoped BAP lifecycle event. */
@@ -164,7 +165,9 @@ activity_mission_seed_lease(const state::activity::SessionBinding& binding,
 [[nodiscard]] ActivityMissionSeedLeaseStatus
 select_activity_mission_seed(const state::activity::SessionBinding& binding,
                              const ActivityMissionSeedPlan& plan,
-                             std::uint64_t expectedGeneration) noexcept;
+                             std::uint64_t expectedGeneration,
+                             bool retireCurrent = false,
+                             const ActivityMissionSeedPlan* sourcePlan = nullptr) noexcept;
 
 /** Read-only check of a canonical type-23 target on one live ActivityClient generation. */
 [[nodiscard]] bool

@@ -445,13 +445,15 @@ bool append_roster_notification(
         && stagedMissionSeed.bindingGeneration == session.activity.bindingGeneration
         && stagedMissionSeed.revision != stagedMissionSeed.publishedRevision
         && !stagedMissionSeed.regionArrivalPending;
+    const bool missionRetirementPending = stagedMissionSeed.retirementRequested
+                                           && !stagedMissionSeed.retirementPublished;
     bool encoded = message::encode_sensor_auth_update(snapshot, scratch.responseBody, messageSize);
     // An unsolicited body identical to the last delivered one is skipped. A solicited one never
     // is. The repeat check knows only this host's own history, and a slice-set teardown clears
     // the client's mirror without telling us, which is exactly when it asks again.
     const bool suppressible = encoded && !solicited && !snapshot.hasGrant && !hostStatePending
                               && !(hasScriptablePending && singleScriptableLink)
-                              && !missionSeedPending;
+                              && !missionSeedPending && !missionRetirementPending;
     // Which terms held is in the log line, because a repeat that one of them forced reaches the
     // client as a fresh apply.
     const std::uint8_t forced = static_cast<std::uint8_t>(
@@ -544,6 +546,7 @@ bool append_roster_notification(
         session.activityRosterStaged.hostLifetimeState = snapshot.lifetime;
         const MissionSeedLease& missionSeed = session.activityMissionSeed;
         session.activityRosterStaged.missionSeedRevision = missionSeed.revision;
+        session.activityRosterStaged.hasMissionRetirement = missionRetirementPending;
         session.activityRosterStaged.scriptableOverride = scriptablePending;
         session.activityRosterStaged.hasGrant = snapshot.hasGrant;
         session.activityRosterStaged.hasHostState = hostStatePending;
@@ -689,6 +692,14 @@ void commit_staged_roster(Session& session) noexcept {
             session.activity.bindingGeneration,
             session.activityRosterStaged.hostStateRevision,
             session.activityRosterStaged.hostLifetimeState);
+    }
+    if (session.activityRosterStaged.hasMissionRetirement) {
+        auto& lease = session.activityMissionSeed;
+        if (lease.bindingGeneration == session.activity.bindingGeneration
+            && lease.revision == session.activityRosterStaged.missionSeedRevision) {
+            lease.retirementReceiptFloor = session.activityRosterMirror.receivedRevision;
+            lease.retirementPublished = true;
+        }
     }
     if (session.activityRosterStaged.hasMissionSeedRevision) {
         MissionSeedLease& missionSeed = session.activityMissionSeed;

@@ -5,6 +5,7 @@
 #include <span>
 
 #include "../../middleware/bap/activity_message/sensor_auth_update.h"
+#include "../../state/activity/membership/activity_membership_query.h"
 #include "../../state/activity/runtime.h"
 #include "activity_sdk_behavior_scope.h"
 #include "activity_sdk_mission_internal.h"
@@ -58,6 +59,7 @@ Status query(const sdk::BoundView& view, Snapshot& output) noexcept {
     output.configured = lease.configured;
     output.publicationPending = lease.publicationPending;
     output.regionArrivalPending = lease.regionArrivalPending;
+    output.retirementPending = lease.retirementPending;
 
     server::bap::ActivityMissionSeedPlan generated{};
     const std::int32_t selectedRegion =
@@ -87,7 +89,8 @@ Status query(const sdk::BoundView& view, Snapshot& output) noexcept {
 Status select_state(const sdk::BoundView& view,
                     std::int32_t effectiveRegion,
                     std::span<const sdk::MissionSeedOmission> omissions,
-                    Snapshot& output) noexcept {
+                    Snapshot& output,
+                    bool retireCurrent, bool waitForArrival) noexcept {
     output = {};
     server::bap::ActivityLinkView link{};
     const Status binding = binding_status(view, link);
@@ -99,8 +102,30 @@ Status select_state(const sdk::BoundView& view,
     if (materialized != Status::ready) {
         return materialized;
     }
+    server::bap::ActivityMissionSeedPlan sourcePlan{};
+    const server::bap::ActivityMissionSeedPlan* source = nullptr;
+    if (retireCurrent || waitForArrival) {
+        server::bap::ActivityMissionSeedLeaseView lease{};
+        const Status leaseResult = read_lease(view, link, lease);
+        if (leaseResult != Status::ready) return leaseResult;
+        // Retries retain the departure captured by the first selection, including after arrival.
+        if (lease.configured && !same_plan(lease.plan, plan)) {
+            if (lease.regionArrivalPending) return Status::outputBusy;
+            const auto placement =
+                state::activity::membership::reported_placement(view.binding.sessionId);
+            const auto heldRegion = state::activity::membership::instantiated_region(placement);
+            if (heldRegion < 0 || placement.currentRegion != heldRegion) return Status::refused;
+            if (heldRegion != effectiveRegion) {
+                const Status sourceStatus = materialize_plan(
+                    view, heldRegion,
+                    std::span(lease.plan.omissions).first(lease.plan.omissionCount), sourcePlan);
+                if (sourceStatus != Status::ready) return sourceStatus;
+                source = &sourcePlan;
+            }
+        }
+    }
     const Status selected = lease_status(server::bap::select_activity_mission_seed(
-        view.binding, plan, link.activityClientGeneration));
+        view.binding, plan, link.activityClientGeneration, retireCurrent, source));
     if (selected != Status::ready) {
         return selected;
     }

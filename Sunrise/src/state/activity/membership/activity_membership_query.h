@@ -92,12 +92,16 @@ struct PendingMutation final {
  * slice-set transition to the named region, so this is the host's only mid-activity move.
  * @param sessionId Joined activity session to move.
  * @param sliceSetIndex Authored region to move to, or the absent sentinel to clear the arm.
- * @param sliceSetHash Slice-set name hash that region belongs to.
+ * @param sliceSetHash Authored spawn-set name hash in the target region.
  * @return True when the session exists and the arm changed.
  */
 [[nodiscard]] bool arm_host_teleport(std::uint64_t sessionId,
                                      std::int32_t sliceSetIndex,
                                      std::uint32_t sliceSetHash) noexcept;
+
+/** @return The last host teleport's spawn hash for this exact region, or zero. */
+[[nodiscard]] std::uint32_t host_teleport_spawn_hash(std::uint64_t sessionId,
+                                                    std::int32_t region) noexcept;
 
 /**
  * Arms one native hard wipe on an exact session generation. Arming the same request key again

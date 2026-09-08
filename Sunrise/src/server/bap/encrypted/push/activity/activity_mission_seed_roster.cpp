@@ -707,4 +707,120 @@ MissionSeedRosterResult append_initial_mission_seed(Session& session,
     return MissionSeedRosterResult::ready;
 }
 
+bool project_mission_retirement(Session& session, Scratch& scratch, message::Snapshot& snapshot) noexcept {
+    const auto refuse = [&](std::string_view reason) {
+        static_cast<void>(refuse_override(session, reason));
+        return false;
+    };
+    auto& lease = session.activityMissionSeed;
+    if (!lease.retirementRequested || !lease.regionArrivalPending) return true;
+    if (!lease.retirementAcknowledged) {
+        const auto placement = state::activity::membership::reported_placement(
+            session.activity.session.sessionId);
+        const auto oldRegion = static_cast<std::int32_t>(lease.previousPlan.effectiveRegion);
+        if (placement.currentRegion != oldRegion
+            || state::activity::membership::instantiated_region(placement) != oldRegion) return refuse("retirement_placement");
+    }
+    sdk::BoundView view{};
+    const auto catalog = sdk::snapshot();
+    const sdk::Selection selection{session.activity.session, 1, session.activity.bindingGeneration};
+    if (catalog == nullptr || sdk::resolve(catalog, selection, view) != sdk::Status::ready) {
+        return refuse("retirement_sdk");
+    }
+    std::array<MissionRetiredGroup, message::kClientGroupCapacity> targets{};
+    std::size_t count = 0;
+    const auto bubble = lease.previousPlan.bubbleOrdinal;
+    const auto& mirror = session.activityRosterMirror;
+    if (!lease.retirementPublished
+        && (mirror.bindingGeneration != session.activity.bindingGeneration
+            || !mirror.roster.hasBubbles || mirror.roster.bubbleCount > mirror.roster.bubbles.size())) return refuse("retirement_mirror");
+    // Native reconciliation compares presence at the old block ordinal as well as key ordinal.
+    const auto blocks = snapshot.roster.bubbleSubBlocks;
+    std::array<std::uint32_t, message::kBubbleSubBlockCapacity> observedBubbles{};
+    std::array<std::uint32_t, message::kBubbleSubBlockCapacity> candidateBubbles{};
+    std::array<std::uint32_t, message::kBubbleSubBlockCapacity> orderedBubbles{};
+    if (mirror.roster.bubbleCount > observedBubbles.size() || blocks.size() > candidateBubbles.size()) {
+        return refuse("retirement_block_capacity");
+    }
+    for (std::size_t index = 0; index < mirror.roster.bubbleCount; ++index) {
+        const auto& received = mirror.roster.bubbles[index];
+        if (!received.hasBubble || received.bubble < 0) return refuse("retirement_bubble_unknown");
+        observedBubbles[index] = static_cast<std::uint32_t>(received.bubble);
+    }
+    for (std::size_t index = 0; index < blocks.size(); ++index) candidateBubbles[index] = blocks[index].bubble;
+    std::size_t orderedBlockCount = 0;
+    if (!order_retiring_keys(std::span(observedBubbles).first(mirror.roster.bubbleCount),
+                            std::span(candidateBubbles).first(blocks.size()),
+                            orderedBubbles, orderedBlockCount)
+        || orderedBlockCount != blocks.size()) return refuse("retirement_bubble_order");
+    const auto savedKeys = scratch.rosterSubBlockKeys;
+    const auto savedBlocks = scratch.rosterSubBlocks;
+    for (std::size_t index = 0; index < orderedBlockCount; ++index) {
+        const auto found = std::find(candidateBubbles.begin(), candidateBubbles.begin() + blocks.size(),
+                                     orderedBubbles[index]);
+        if (found == candidateBubbles.begin() + blocks.size()) return refuse("retirement_bubble_missing");
+        const auto source = static_cast<std::size_t>(found - candidateBubbles.begin());
+        scratch.rosterSubBlockKeys[index] = savedKeys[source];
+        scratch.rosterSubBlocks[index].bubble = orderedBubbles[index];
+        scratch.rosterSubBlocks[index].keys =
+            std::span<const std::uint32_t>(scratch.rosterSubBlockKeys[index]).first(savedBlocks[source].keys.size());
+    }
+    for (std::size_t blockIndex = 0; blockIndex < snapshot.roster.bubbleSubBlocks.size(); ++blockIndex) {
+        const auto& block = snapshot.roster.bubbleSubBlocks[blockIndex];
+        if (block.bubble != bubble) continue;
+        std::span<const std::uint32_t> oldKeys{};
+        if (lease.retirementPublished) {
+            if (blockIndex != lease.retirementBlockOrdinal) return refuse("retirement_block_changed");
+            oldKeys = std::span(lease.retirementKeyOrder).first(lease.retirementKeyCount);
+        } else {
+            if (blockIndex >= mirror.roster.bubbleCount) return refuse("retirement_block_missing");
+            const auto& received = mirror.roster.bubbles[blockIndex];
+            if (!received.hasBubble || received.bubble != static_cast<std::int32_t>(bubble)
+                || !received.groups.hasKeys || received.groups.keyCount > received.groups.keys.size()) return refuse("retirement_keys_unknown");
+            oldKeys = std::span(received.groups.keys).first(received.groups.keyCount);
+        }
+        std::array<std::uint32_t, message::kBubbleKeyCapacity> ordered{};
+        std::size_t orderedCount = 0;
+        if (!order_retiring_keys(oldKeys, block.keys, ordered, orderedCount)) return refuse("retirement_key_order");
+        if (!lease.retirementPublished) {
+            lease.retirementKeyOrder = ordered;
+            lease.retirementKeyCount = static_cast<std::uint16_t>(orderedCount);
+            lease.retirementBlockOrdinal = static_cast<std::uint8_t>(blockIndex);
+        }
+        std::copy_n(ordered.begin(), orderedCount, scratch.rosterSubBlockKeys[blockIndex].begin());
+        scratch.rosterSubBlocks[blockIndex].keys =
+            std::span<const std::uint32_t>(scratch.rosterSubBlockKeys[blockIndex]).first(orderedCount);
+        for (std::size_t ordinal = 0; ordinal < block.keys.size(); ++ordinal) {
+            const auto key = block.keys[ordinal];
+            auto group = std::find_if(snapshot.roster.groups.begin(),
+                                      snapshot.roster.groups.begin() + snapshot.roster.groupCount,
+                                      [key](const auto& value) { return value.key == key; });
+            if (group == snapshot.roster.groups.begin() + snapshot.roster.groupCount) return refuse("retirement_group_missing");
+            bool shared = false;
+            if (!sdk::mission_seed_group_is_scenario_wide(view, group->objectTag, key, shared)) {
+                return refuse("retirement_group_scope");
+            }
+            if (shared) continue;
+            if (count == targets.size()) return refuse("retirement_capacity");
+            group->retired = true;
+            targets[count++] = {key, static_cast<std::uint16_t>(ordinal),
+                                static_cast<std::uint8_t>(bubble),
+                                group->hasStateSequence ? group->stateSequence : snapshot.stateSequence};
+        }
+    }
+    if (lease.retirementPublished) {
+        if (count != lease.retiredGroupCount) return refuse("retirement_count_changed");
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto& before = lease.retiredGroups[index];
+            const auto& after = targets[index];
+            if (before.key != after.key || before.ordinal != after.ordinal
+                || before.bubble != after.bubble || before.state != after.state) return refuse("retirement_target_changed");
+        }
+    } else {
+        lease.retiredGroups = targets;
+        lease.retiredGroupCount = static_cast<std::uint16_t>(count);
+    }
+    return true;
+}
+
 } // namespace sunrise::server::bap::encrypted::push::activity

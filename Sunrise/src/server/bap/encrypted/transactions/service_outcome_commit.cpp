@@ -211,6 +211,10 @@ bool commit(ServiceOutcome& outcome, Publication& publication, const char*& reas
             reason = "authority_query";
             return plan->authorityQuery.pending;
         }
+        if (plan->mutationDomain == activity_message::MutationDomain::senseRoster) {
+            reason = "sense_roster";
+            return plan->senseRoster.pending;
+        }
         if (plan->mutationDomain == activity_message::MutationDomain::authorityReset) {
             reason = "authority_reset";
             return plan->authorityReset.pending;

@@ -7,6 +7,7 @@
 #include <span>
 
 #include "activity_patch_epoch_parser.h"
+#include "sense_roster.h"
 
 namespace sunrise::middleware::bap::activity_message::sense_update {
 
@@ -147,6 +148,7 @@ struct DecodedPacket final {
 struct SenseUpdate {
     /** Epoch the client believes is current. It must match the one the roster update carried. */
     patch_epoch::PatchEpoch epoch{};
+    RosterDelta roster{};
     /** Bits left after the literal zero. The prefix diagnostic reports this. */
     std::uint32_t tailBits{};
     /** Declared width of the first emitted group, when its root and header were readable. */

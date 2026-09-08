@@ -201,6 +201,20 @@ resolve_message_name(lua_State* state, std::string_view name, ActivityMessageDef
     if (!parse_seed_omissions(state, 3, intent)) {
         return 0;
     }
+    if (lua_istable(state, 3)) {
+        lua_getfield(state, 3, "retire_current");
+        if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+            return luaL_argerror(state, 3, "retire_current must be boolean");
+        }
+        intent.retireCurrentState = lua_toboolean(state, -1);
+        lua_pop(state, 1);
+        lua_getfield(state, 3, "wait_for_arrival");
+        if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) {
+            return luaL_argerror(state, 3, "wait_for_arrival must be boolean");
+        }
+        intent.waitForStateArrival = lua_toboolean(state, -1);
+        lua_pop(state, 1);
+    }
     return queue_intent(state, frame, intent);
 }
 

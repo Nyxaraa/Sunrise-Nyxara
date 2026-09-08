@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <cstdio>
+#include <limits>
 
 #include "../../../core/logging/log.h"
 #include "../../../middleware/encoding/byte_order.h"
@@ -118,6 +119,30 @@ void submit_committed_entity_slots_requested(const activity_message::ActivityPla
                          core::log::Level::warn,
                          "ev=activity stage=entity_slots_requested result=refused");
     }
+}
+
+/** Records the native roster echo only after its authenticated service frame commits. */
+void submit_committed_sense_roster(Session& session,
+                                   const activity_message::ActivityPlan& plan) noexcept {
+    const auto& incoming = plan.senseRoster;
+    if (!incoming.pending || plan.mutationDomain != activity_message::MutationDomain::senseRoster
+        || incoming.sourceGeneration == 0
+        || incoming.sourceGeneration != session.activity.bindingGeneration
+        || plan.sessionId != session.activity.session.sessionId
+        || !state::activity::binding_matches(session.activity.session))
+        return;
+    auto& mirror = session.activityRosterMirror;
+    if (mirror.bindingGeneration != incoming.sourceGeneration) mirror = {};
+    if (mirror.receivedRevision == (std::numeric_limits<std::uint64_t>::max)()) return;
+    middleware::bap::activity_message::sense_update::apply_roster_delta(mirror.roster,
+                                                                        incoming.delta);
+    mirror.bindingGeneration = incoming.sourceGeneration;
+    mirror.epoch = incoming.epoch;
+    mirror.clientMessageSequence = incoming.clientMessageSequence;
+    ++mirror.receivedRevision;
+    const auto placement = state::activity::membership::reported_placement(plan.sessionId);
+    mirror.instantiatedRegion = state::activity::membership::instantiated_region(placement);
+    mirror.currentRegion = placement.currentRegion;
 }
 
 /** Applies one query answer only after its authenticated service frame commits. */
@@ -441,6 +466,7 @@ bool consume(Session& session,
             if (activityPlan != nullptr) {
                 submit_committed_client_state(*activityPlan, publication);
                 submit_committed_entity_slots_requested(*activityPlan);
+                submit_committed_sense_roster(session, *activityPlan);
                 submit_committed_authority_reset(session, *activityPlan);
                 submit_committed_authority_answer(session, *activityPlan);
                 submit_committed_authority_abdication(session, *activityPlan);

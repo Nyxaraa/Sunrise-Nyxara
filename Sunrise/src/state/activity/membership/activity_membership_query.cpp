@@ -6,6 +6,7 @@
 
 #include "../../runtime/storage/internal.h"
 #include "../transactions/internal.h"
+#include "transactions/internal.h"
 
 namespace sunrise::state::activity::membership {
 
@@ -41,37 +42,44 @@ bool arm_host_teleport(std::uint64_t sessionId,
     if (target != kInvalidSessionSlot) {
         MembershipState& membership = state.sessions[target].membership;
         if (sliceSetIndex == kAbsentSliceSetIndex) {
-            changed = membership.hasHostTeleport;
+            changed = membership.hasHostTeleport
+                      || membership.hostTeleport.sliceSetIndex != kAbsentSliceSetIndex;
             membership.hasHostTeleport = false;
             membership.hostTeleport = {};
         } else if (!membership.hasHostTeleport
                    || membership.hostTeleport.sliceSetIndex != sliceSetIndex
                    || membership.hostTeleport.sliceSetHash != sliceSetHash) {
-            // Step 0 latches the token, it does not compare it, so the increment is bookkeeping
-            // for the client's own arm. The state is what gates the step, and zero is idle.
             const std::uint8_t token =
-                static_cast<std::uint8_t>(membership.hostTeleport.token + 1U);
+                transactions::next_teleport_token(membership.teleport.token);
             membership.hostTeleport.sliceSetIndex = sliceSetIndex;
             membership.hostTeleport.sliceSetHash = sliceSetHash;
             membership.hostTeleport.token = token;
             membership.hostTeleport.state = kHostTeleportArmedState;
             membership.hasHostTeleport = true;
-            // The client refuses a region record whose per-member token does not equal its own
-            // transition count. The initial slice-set load is count 1 and each host teleport adds
-            // one, so the published token must advance or the target region never precaches.
-            const std::uint8_t current = membership.hasTransitionToken ? membership.transitionToken
-                                                                       : kInitialTransitionToken;
-            auto advanced = static_cast<std::uint8_t>(current + 1U);
-            if (advanced == 0) {
-                advanced = kInitialTransitionToken;
-            }
-            membership.transitionToken = advanced;
-            membership.hasTransitionToken = true;
             changed = true;
         }
     }
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
     return changed;
+}
+
+/** Keeps lifetime spawn overrides aligned with the last authored teleport destination. */
+std::uint32_t host_teleport_spawn_hash(std::uint64_t sessionId, std::int32_t region) noexcept {
+    if (sessionId == kAbsentSessionId || region < 0) {
+        return 0;
+    }
+    std::uint32_t hash = 0;
+    AcquireSRWLockShared(&runtime::storage::g_stateLock);
+    const ActivityState& state = runtime::storage::g_state.activity;
+    const std::size_t target = activity::transactions::find_session(state, sessionId);
+    if (target != kInvalidSessionSlot) {
+        const TeleportState& teleport = state.sessions[target].membership.hostTeleport;
+        if (teleport.sliceSetIndex == region) {
+            hash = teleport.sliceSetHash;
+        }
+    }
+    ReleaseSRWLockShared(&runtime::storage::g_stateLock);
+    return hash;
 }
 
 /** All-one bits is not a spawn set hash. */

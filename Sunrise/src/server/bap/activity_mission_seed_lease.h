@@ -4,6 +4,8 @@
 
 namespace sunrise::server::bap {
 
+void update_mission_seed_retirement(Session& session) noexcept;
+
 /** Validates and clears stale state on one already-selected ActivityClient session. */
 [[nodiscard]] ActivityMissionSeedLeaseStatus mission_seed_session_status(
     Session& session, std::uint32_t scenarioRow, std::uint64_t expectedGeneration) noexcept;

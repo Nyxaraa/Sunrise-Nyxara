@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "../../../middleware/content/packages/tables/scenario_reader.h"
+#include "../../../middleware/content/packages/tables/spawn_reader.h"
 #include "../../../state/activity/membership/activity_membership_query.h"
 #include "../../../state/build_data/runtime.h"
 #include "../../../state/build_data/spawn_sets/spawn_set_catalog.h"
@@ -191,51 +192,62 @@ void install_actor_command_policy(const void* context, ActorCommandPolicy policy
 }
 
 /**
- * Moves the client to the region a freshly selected mission state belongs to.
- * The client picks its object registry from the loaded slice-set entry, so a state in another
- * region has no findable objects until it transitions. Message 12 is the only mid-activity move.
- * @param instance Runtime instance whose state selection just published.
- * @param plan Published plan naming the target region and its bubble.
+ * Requests native travel to a selected state's region using its authored default spawn set.
+ * @return True when already there or the destination supports the pending request.
  */
-void arm_state_region_teleport(RuntimeInstance& instance,
+bool arm_state_region_teleport(RuntimeInstance& instance,
                                const server::bap::ActivityMissionSeedPlan& plan) noexcept {
     namespace membership = ::sunrise::state::activity::membership;
+    namespace data = ::sunrise::state::build_data;
+    namespace tables = middleware::content::packages::tables;
     const auto& destination = instance.view.binding.destination;
-    if (destination.packageNameLength == 0
+    if (instance.view.catalog == nullptr || destination.packageNameLength == 0
         || destination.packageNameLength > destination.packageName.size()
         || plan.effectiveRegion > static_cast<std::uint32_t>(membership::kMaximumSliceSetIndex)) {
-        return;
+        return false;
     }
-    const std::int32_t reported = membership::player_region(instance.view.binding.sessionId);
-    // The client answers a slice-set transition by de-instantiating its slice set and building the
-    // target, so a move inside one bubble leaves both copies alive and doubles its content. The arm
-    // must stay anyway: it is what orders the spawn, and without it the client never spawns in.
-    if (reported == static_cast<std::int32_t>(plan.effectiveRegion)) {
-        // Already there. Clear any earlier arm so the mirror owns the block again.
-        static_cast<void>(membership::arm_host_teleport(
-            instance.view.binding.sessionId, membership::kAbsentSliceSetIndex, 0));
-        return;
+    const auto placement = membership::reported_placement(instance.view.binding.sessionId);
+    if (membership::instantiated_region(placement) == static_cast<std::int32_t>(plan.effectiveRegion)) {
+        return true;
     }
-    // Each alternate scenario entry is its own packed region, so a sibling state still travels.
     const std::string_view name(reinterpret_cast<const char*>(destination.packageName.data()),
                                 destination.packageNameLength);
-    ::sunrise::state::build_data::scenarios::Definition layout{};
-    if (!::sunrise::state::build_data::find_scenario_layout(name, layout)
-        || plan.bubbleOrdinal >= layout.bubbleHashes.size()) {
-        return;
+    data::scenarios::Definition layout{};
+    if (!data::find_scenario_layout(name, layout) || plan.bubbleOrdinal >= layout.bubbleCount
+        || layout.spawnStemLength == 0 || layout.spawnStemLength > layout.spawnStem.size()) {
+        return false;
     }
-    const std::uint32_t hash = layout.bubbleHashes[plan.bubbleOrdinal];
-    if (hash == 0) {
-        // Without the slice-set name hash the client cannot resolve the target, and a zero would
-        // arm a move it can never finish.
-        return;
+    data::spawn_sets::NameHash spawn{};
+    const auto states = instance.view.catalog->states();
+    if (plan.stateRow >= states.size()
+        || !data::spawn_sets::find_hash({layout.spawnStem.data(), layout.spawnStemLength},
+                                       tables::kDefaultSpawnNameHash,
+                                       spawn)
+        || spawn.pointCount == 0 || spawn.activityPackageCount > spawn.activityPackages.size()
+        || layout.packageCount > layout.packages.size()) {
+        return false;
+    }
+    bool packageLoaded = spawn.inMapPackage != 0;
+    const auto loadedPackages = std::span(layout.packages).first(layout.packageCount);
+    for (const auto package : std::span(spawn.activityPackages).first(spawn.activityPackageCount)) {
+        packageLoaded = packageLoaded
+                        || std::find(loadedPackages.begin(), loadedPackages.end(), package)
+                               != loadedPackages.end();
+    }
+    if (!packageLoaded) {
+        return false;
+    }
+    const auto mapBubble = states[plan.stateRow].mapBubbleIndex;
+    if (mapBubble >= spawn.bubbleMask.size() * 8
+        || (!spawn.unbound && (spawn.bubbleMask[mapBubble / 8] & (1U << (mapBubble % 8))) == 0)) {
+        return false;
     }
     const bool armed = membership::arm_host_teleport(
-        instance.view.binding.sessionId, static_cast<std::int32_t>(plan.effectiveRegion), hash);
-    log_line(core::log::Level::info,
-             &instance,
-             "state_region",
-             armed ? "teleport_armed" : "teleport_unchanged");
+        instance.view.binding.sessionId, static_cast<std::int32_t>(plan.effectiveRegion), spawn.value);
+    if (armed) {
+        log_line(core::log::Level::info, &instance, "state_region", "teleport_armed");
+    }
+    return true;
 }
 
 /**
@@ -304,7 +316,8 @@ void dispatch_intent(RuntimeInstance& instance, std::uint64_t now) noexcept {
             scenes::select_state(instance.view,
                                  intent.effectiveRegion,
                                  std::span(intent.seedOmissions).first(intent.seedOmissionCount),
-                                 selected);
+                                 selected,
+                                 intent.retireCurrentState, intent.waitForStateArrival);
         if (status == scenes::Status::outputBusy) {
             report_intent_status(
                 instance, kIntentStatusSceneOutputBusy, scenes::status_name(status));
@@ -319,20 +332,36 @@ void dispatch_intent(RuntimeInstance& instance, std::uint64_t now) noexcept {
                             host::EffectOutcome::refused);
             return;
         }
-        // The selected effective region is an authored-state key, not a region the client reports.
-        // Publishing this lease revision is the completion edge, except when publication waits for
-        // arrival: there the teleport is armed first, because arrival closes that window.
-        if (!selected.regionArrivalPending
-            && (selected.publicationPending || selected.revision == 0
-                || selected.publishedRevision != selected.revision)) {
+        if (selected.retirementPending) {
+            report_intent_status(
+                instance, kIntentStatusStateTransitionPending, "state_retirement_pending");
+            return;
+        }
+        if (selected.regionArrivalPending) {
+            if (!arm_state_region_teleport(instance, selected.plan)) {
+                refuse_delivery(instance, "state_refused", "destination_spawn_unavailable",
+                                host::EffectOutcome::refused);
+                return;
+            }
+            if (!intent.retireCurrentState && !intent.waitForStateArrival) {
+                static_cast<void>(complete_local_effect(instance, "state_selected"));
+                return;
+            }
+            report_intent_status(
+                instance, kIntentStatusStateTransitionPending, "state_arrival_pending");
+            return;
+        }
+        if (selected.publicationPending || selected.revision == 0
+            || selected.publishedRevision != selected.revision) {
             report_intent_status(
                 instance, kIntentStatusStateTransitionPending, "state_transition_pending");
             return;
         }
-        // A selected state names its own slice-set region. Until the client transitions there its
-        // object registry comes from the loaded slice-set entry, so the new state's objects stay
-        // unfindable. Arming the host teleport is the only mid-activity move.
-        arm_state_region_teleport(instance, selected.plan);
+        if (!intent.retireCurrentState && !arm_state_region_teleport(instance, selected.plan)) {
+            refuse_delivery(instance, "state_refused", "destination_spawn_unavailable",
+                            host::EffectOutcome::refused);
+            return;
+        }
         static_cast<void>(complete_local_effect(instance, "state_selected"));
         return;
     }

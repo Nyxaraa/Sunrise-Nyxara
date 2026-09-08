@@ -5,6 +5,7 @@
 #include "../../../../middleware/bap/activity_message/activity_host_control.h"
 #include "../../../../middleware/bap/activity_message/activity_patch_epoch_parser.h"
 #include "../../../../middleware/bap/activity_message/entity_authority.h"
+#include "../../../../middleware/bap/activity_message/sense_roster.h"
 #include "../../../../state/activity/membership/activity_membership_query.h"
 #include "../../../../state/activity/runtime.h"
 #include "../../../gameplay/group/group_host_sessions.h"
@@ -47,6 +48,7 @@ enum class MutationDomain : std::uint8_t {
     authorityReset,
     authorityAbdication,
     authorityPurge,
+    senseRoster,
 };
 
 /** Connection binding change staged by an activity join. */
@@ -113,6 +115,14 @@ struct AuthorityPurgeIngress final {
     bool pending{};
 };
 
+struct SenseRosterIngress final {
+    middleware::bap::activity_message::sense_update::RosterDelta delta{};
+    middleware::bap::activity_message::patch_epoch::PatchEpoch epoch{};
+    std::uint64_t sourceGeneration{};
+    std::uint64_t clientMessageSequence{};
+    bool pending{};
+};
+
 /** Scalar and mask data kept after the sensitive svc8 payload view expires. */
 struct ActivityPlan final {
     std::uint32_t correlation{};
@@ -128,6 +138,7 @@ struct ActivityPlan final {
     AuthorityResetIngress authorityReset{};
     AuthorityAbdicationIngress authorityAbdication{};
     AuthorityPurgeIngress authorityPurge{};
+    SenseRosterIngress senseRoster{};
     middleware::bap::activity_message::patch_epoch::PatchEpoch patchEpoch{};
     /** Exact target generation whose destination the staged msg1 must encode. */
     state::activity::SessionBinding targetBinding{};

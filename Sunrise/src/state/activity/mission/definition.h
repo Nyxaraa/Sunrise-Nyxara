@@ -113,6 +113,8 @@ struct TypedIntent final {
     std::uint64_t checkpointReleaseRequest{};
     /** Authored effective region selected by the generated mission-state table. */
     std::int32_t effectiveRegion{-1};
+    bool retireCurrentState{};
+    bool waitForStateArrival{};
     std::int32_t entryIndex{};
     std::int32_t actorCommandValue{};
     float deviceValue{};

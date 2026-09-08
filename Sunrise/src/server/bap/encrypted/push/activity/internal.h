@@ -284,7 +284,7 @@ enum class CanonicalGroupStatus : std::uint8_t {
 };
 
 /** Logs which exit refused, since the returned outcome itself carries no reason. */
-[[nodiscard]] RosterOutcome refuse_override(std::string_view reason) noexcept;
+[[nodiscard]] RosterOutcome refuse_override(Session& session, std::string_view reason) noexcept;
 
 /** @return Authored SOID of the character the join named, or of the selected character. */
 [[nodiscard]] std::uint64_t roster_player_key(std::uint64_t joinCharacter) noexcept;

@@ -156,7 +156,8 @@ constexpr std::array<FramingRoute, 19> kFramingRoutes{{
 bool frame_only(const ActivityClientBinding& binding,
                 const RosterDecodeMap& rosterDecode,
                 IngressAdapter adapter,
-                const service::Request& request) noexcept {
+                const service::Request& request,
+                ActivityPlan* sensePlan) noexcept {
     const auto row = std::find_if(
         kFramingRoutes.begin(),
         kFramingRoutes.end(),
@@ -192,6 +193,18 @@ bool frame_only(const ActivityClientBinding& binding,
                                                        &binding.session,
                                                        binding.bindingGeneration,
                                                        diagnostic);
+    if (isSense && sensePlan != nullptr
+        && (parsedSense.decoded.status == sense_update::DecodeStatus::complete
+            || parsedSense.decoded.status == sense_update::DecodeStatus::partial)) {
+        sensePlan->sessionId = request.sessionId;
+        sensePlan->senseRoster.delta = parsedSense.roster;
+        sensePlan->senseRoster.epoch = parsedSense.epoch;
+        sensePlan->senseRoster.sourceGeneration = binding.bindingGeneration;
+        sensePlan->senseRoster.clientMessageSequence = clientMessageSequence;
+        sensePlan->senseRoster.pending = true;
+        sensePlan->mutationDomain = MutationDomain::senseRoster;
+        sensePlan->delivery = Delivery::none;
+    }
     if (isSense && parsedSense.decoded.status != sense_update::DecodeStatus::malformed) {
         server::activity::host::SenseInput input{};
         input.binding = binding.session;

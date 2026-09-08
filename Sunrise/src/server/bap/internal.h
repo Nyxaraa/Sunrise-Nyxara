@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 #include "../../client/network/consumer.h"
 #include "../../core/threading/srw_lock.h"
@@ -21,6 +22,8 @@
 #include "../activity/host_runtime.h"
 #include "activity_authority_query_owner.h"
 #include "activity_authority_reset_owner.h"
+#include "activity_roster_mirror.h"
+#include "mission_roster_retirement.h"
 #include "encrypted/queuez/definition.h"
 #include "runtime.h"
 
@@ -147,6 +150,7 @@ struct RosterPublication {
     bool hasHostState{};
     /** Set when this body carries a not-yet-published SDK selected-state roster lease revision. */
     bool hasMissionSeedRevision{};
+    bool hasMissionRetirement{};
     /** Set when this body carries the pending typed body above. */
     bool hasScriptableOverride{};
     /** Set when the delivered body merges into this binding's retained squad Auth set. */
@@ -227,6 +231,18 @@ struct MissionSeedLease {
     ActivityMissionSeedPlan previousPlan{};
     /** True from a region-changing selection until the client's post-arrival solicited answer. */
     bool regionArrivalPending{};
+    std::array<MissionRetiredGroup,
+               middleware::bap::activity_message::sensor_auth_update::kClientGroupCapacity>
+        retiredGroups{};
+    std::uint64_t retirementReceiptFloor{};
+    std::uint16_t retiredGroupCount{};
+    std::array<std::uint32_t, middleware::bap::activity_message::sensor_auth_update::kBubbleKeyCapacity>
+        retirementKeyOrder{};
+    std::uint16_t retirementKeyCount{};
+    std::uint8_t retirementBlockOrdinal{};
+    bool retirementRequested{};
+    bool retirementPublished{};
+    bool retirementAcknowledged{};
     /** Set when a mission script selected the plan. An adopted default plan is not a selection. */
     bool scriptSelected{};
 };
@@ -423,10 +439,12 @@ struct Session {
      * for every reason hides the second failure behind the first.
      */
     std::uint8_t activityRosterReason{};
+    std::string_view activityRosterRefusal{};
     /** What one staged roster body owes, and what to put back if it never reaches the caller. */
     RosterPublication activityRosterStaged{};
     /** Last complete msg-5 roster known to have reached this exact connection generation. */
     RosterDecodeMap activityRosterDecode{};
+    ActivityRosterMirror activityRosterMirror{};
     /** Delivered squad Auth bodies, all re-emitted so phase-2 reset cannot clear any slot. */
     SquadOverrideLease activitySquadOverride{};
     /** Generated selected-state roster lease. Disabled until an operator enables its SDK row. */

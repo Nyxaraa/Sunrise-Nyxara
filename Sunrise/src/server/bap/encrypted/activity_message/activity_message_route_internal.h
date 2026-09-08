@@ -80,7 +80,8 @@ diagnostic_status(const receipts::Framed& framed, bool incident) noexcept;
 [[nodiscard]] bool frame_only(const ActivityClientBinding& binding,
                               const RosterDecodeMap& rosterDecode,
                               IngressAdapter adapter,
-                              const service::Request& request) noexcept;
+                              const service::Request& request,
+                              ActivityPlan* sensePlan = nullptr) noexcept;
 
 /**
  * Retains one exact msg-31 or msg-32 answer until its authenticated frame commits.

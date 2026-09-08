@@ -95,6 +95,7 @@ bool client_region_ready(const Session& session, const RefreshReport* refresh) n
     const bool movePending = lease.configured
                              && lease.bindingGeneration == session.activity.bindingGeneration
                              && lease.regionArrivalPending
+                             && (!lease.retirementRequested || lease.retirementAcknowledged)
                              && static_cast<std::int64_t>(lease.plan.effectiveRegion) != held;
     return !movePending && held >= 0;
 }
@@ -356,7 +357,7 @@ build_roster_snapshot(Session& session,
     if (exactRegion != nullptr
         && (session.activity.role != ActivityClientRole::privateCurrent || !region.reported
             || region.arrival != committedRegion.arrival)) {
-        return refuse_override("exact_region");
+        return refuse_override(session, "exact_region");
     }
     if (region.index < 0) {
         return RosterOutcome::noLayout;
@@ -364,7 +365,7 @@ build_roster_snapshot(Session& session,
     std::vector<server::activity::host::PendingScriptableOverride> authEstate{};
     if (!server::activity::host::scriptable_auth_estate(
             session.activity.session, session.activity.bindingGeneration, authEstate)) {
-        return refuse_override("auth_estate");
+        return refuse_override(session, "auth_estate");
     }
     const std::size_t canonicalGroupCount = snapshot.roster.groupCount;
     if (append_initial_mission_seed(session,
@@ -375,7 +376,7 @@ build_roster_snapshot(Session& session,
                                     canonicalGroupCount,
                                     refresh)
         == MissionSeedRosterResult::refused) {
-        return refuse_override("mission_seed");
+        return refuse_override(session, "mission_seed");
     }
     // Retained and pending groups below may only match a group the seed published.
     const std::size_t seedGroupCount = snapshot.roster.groupCount;
@@ -387,7 +388,7 @@ build_roster_snapshot(Session& session,
     const bool retainedSquad = session.activitySquadOverride.active;
     const SquadOverrideLease& lease = session.activitySquadOverride;
     if (retainedSquad && !valid_retained_squad_lease(lease, session.activity.bindingGeneration)) {
-        return refuse_override("retained_lease");
+        return refuse_override(session, "retained_lease");
     }
     server::activity::host::ScriptableTarget pendingTarget{};
     if (authOverride != nullptr) {
@@ -414,19 +415,19 @@ build_roster_snapshot(Session& session,
                 && (stateLocalRosterGroup == nullptr
                     || !same_generated_group(*stateLocalRosterGroup,
                                              retainedGroup.stateLocalRosterGroup))) {
-                return refuse_override("retained_group_mismatch");
+                return refuse_override(session, "retained_group_mismatch");
             }
         } else if (squadOverride
                    && (lease.groupCount >= lease.groups.size()
                        || lease.authCount >= lease.authBodies.size())) {
-            return refuse_override("lease_capacity");
+            return refuse_override(session, "lease_capacity");
         }
     }
     if (pendingStateLocal
         && (stateLocalRosterGroup == nullptr
             || rosterGroupIndex != server::activity::host::kGeneratedRosterGroupIndex
             || sdkObjectIndex == server::activity::host::kNoSdkObjectIndex)) {
-        return refuse_override("pending_state_local_target");
+        return refuse_override(session, "pending_state_local_target");
     }
     std::array<std::size_t, message::kPublishedGroupCapacity> retainedGroupPositions{};
     retainedGroupPositions.fill(snapshot.roster.groups.size());
@@ -436,7 +437,7 @@ build_roster_snapshot(Session& session,
             continue;
         }
         if (!msg1_selects_region(layout, retainedGroup.region)) {
-            return refuse_override("retained_region");
+            return refuse_override(session, "retained_region");
         }
         const std::uint32_t bubble = static_cast<std::uint32_t>(retainedGroup.region)
                                      / middleware::content::packages::tables::kSliceSetIndexFactor;
@@ -447,13 +448,13 @@ build_roster_snapshot(Session& session,
             || (existing == ExistingGroup::exact && position >= seedGroupCount)
             || (existing == ExistingGroup::exact
                 && !activate_existing_group(position, bubble, scratch, snapshot.roster))) {
-            return refuse_override("retained_existing_group");
+            return refuse_override(session, "retained_existing_group");
         }
         if (existing == ExistingGroup::missing) {
             position = snapshot.roster.groupCount;
             if (!append_state_local_group(
                     retainedGroup.stateLocalRosterGroup, bubble, scratch, snapshot.roster)) {
-                return refuse_override("retained_append");
+                return refuse_override(session, "retained_append");
             }
         }
         retainedGroupPositions[index] = position;
@@ -466,7 +467,7 @@ build_roster_snapshot(Session& session,
     for (std::size_t index = 0; retainedSquad && index < lease.authCount; ++index) {
         message::AuthOverride retainedAuth{};
         if (!retained_squad_auth(lease, index, retainedAuth)) {
-            return refuse_override("retained_auth");
+            return refuse_override(session, "retained_auth");
         }
         const RetainedSquadAuth& retained = lease.authBodies[index];
         const RetainedSquadGroup& retainedGroup = lease.groups[retained.groupIndex];
@@ -486,7 +487,7 @@ build_roster_snapshot(Session& session,
                                    effectiveGroup,
                                    effectiveSlot,
                                    effectiveStateLocal)) {
-            return refuse_override("retained_auth_install");
+            return refuse_override(session, "retained_auth_install");
         }
     }
     // Message 5 resets every registered Auth slot before applying its bodies, so the complete
@@ -511,7 +512,7 @@ build_roster_snapshot(Session& session,
                 continue;
             }
             if (status == CanonicalGroupStatus::unknown) {
-                return refuse_override("canonical_group_unknown");
+                return refuse_override(session, "canonical_group_unknown");
             }
         }
         if (target.stateLocalRoster) {
@@ -519,7 +520,7 @@ build_roster_snapshot(Session& session,
                 || target.stateLocalRegion < 0
                 || target.rosterGroupIndex != server::activity::host::kGeneratedRosterGroupIndex
                 || target.sdkObjectIndex == server::activity::host::kNoSdkObjectIndex) {
-                return refuse_override("retained_state_local_target");
+                return refuse_override(session, "retained_state_local_target");
             }
             const std::uint32_t bubble =
                 static_cast<std::uint32_t>(target.stateLocalRegion)
@@ -533,7 +534,7 @@ build_roster_snapshot(Session& session,
                 || (existing == ExistingGroup::missing
                     && !append_state_local_group(
                         retained.stateLocalRosterGroup, bubble, scratch, snapshot.roster))) {
-                return refuse_override("retained_group_install");
+                return refuse_override(session, "retained_group_install");
             }
         }
         message::AuthOverride value{};
@@ -546,7 +547,7 @@ build_roster_snapshot(Session& session,
                                       target.rosterGroupIndex,
                                       target.rosterSlotOffset,
                                       target.stateLocalRoster)) {
-            return refuse_override("retained_auth_apply");
+            return refuse_override(session, "retained_auth_apply");
         }
     }
     // The pending override's group goes after the retained estate, where the next push will place
@@ -564,13 +565,13 @@ build_roster_snapshot(Session& session,
             || (existing == ExistingGroup::exact
                 && !activate_existing_group(
                     pendingGroupPosition, bubble, scratch, snapshot.roster))) {
-            return refuse_override("pending_existing_group");
+            return refuse_override(session, "pending_existing_group");
         }
         if (existing == ExistingGroup::missing) {
             pendingGroupPosition = snapshot.roster.groupCount;
             if (!append_state_local_group(
                     *stateLocalRosterGroup, bubble, scratch, snapshot.roster)) {
-                return refuse_override("pending_append");
+                return refuse_override(session, "pending_append");
             }
         }
     }
@@ -584,7 +585,7 @@ build_roster_snapshot(Session& session,
                                   rosterGroupIndex,
                                   rosterSlotOffset,
                                   stateLocalRosterTarget)) {
-        return refuse_override("pending_auth_apply");
+        return refuse_override(session, "pending_auth_apply");
     }
     // A burst commits behind the head and leaves on this body with it.
     for (const TailAuthOverride& queued : tailOverrides) {
@@ -596,7 +597,7 @@ build_roster_snapshot(Session& session,
                                    queued.rosterGroupIndex,
                                    queued.rosterSlotOffset,
                                    queued.stateLocalRosterTarget)) {
-            return refuse_override("tail_auth_apply");
+            return refuse_override(session, "tail_auth_apply");
         }
     }
     // Read from the merged estate, so a pending disable wins over a retained enable.
@@ -636,6 +637,12 @@ build_roster_snapshot(Session& session,
         region.index >= 0 ? static_cast<std::uint32_t>(region.index) : region.arrival;
     snapshot.spawnSetHash =
         state::activity::destination::attachable_spawn_set_hash(selection, fallback.spawnSetHash);
+    // A completed teleport retains its spawn set so the arrival override cannot replace it.
+    const std::uint32_t teleportSpawn = state::activity::membership::host_teleport_spawn_hash(
+        session.activity.source.sessionId, region.index);
+    if (teleportSpawn != 0) {
+        snapshot.spawnSetHash = teleportSpawn;
+    }
     // An armed wipe respawns at its checkpoint spawn set, not at the arrival override.
     const std::uint32_t checkpoint = state::activity::membership::checkpoint_spawn_hash(
         session.activity.source.sessionId, region.index);
@@ -668,7 +675,7 @@ build_roster_snapshot(Session& session,
         retained.stateSequence = snapshot.roster.groups[position].stateSequence;
     }
     if (pendingStateLocal && pendingGroupPosition >= snapshot.roster.groupCount) {
-        return refuse_override("pending_group_position");
+        return refuse_override(session, "pending_group_position");
     }
     std::size_t senseCount = 0;
     for (const message::AuthOverride& auth : snapshot.authOverrides) {
@@ -690,7 +697,7 @@ build_roster_snapshot(Session& session,
         sense = {};
         if (!middleware::bap::activity_message::squad_sense::encode(
                 recovered, sense.body, sense.byteCount, sense.bitCount)) {
-            return refuse_override("squad_sense");
+            return refuse_override(session, "squad_sense");
         }
         sense.key = auth.key;
         sense.objectTag = auth.objectTag;
@@ -700,6 +707,10 @@ build_roster_snapshot(Session& session,
         ++senseCount;
     }
     snapshot.senseOverrides = std::span(scratch.rosterSenseOverrides).first(senseCount);
+    if (!project_mission_retirement(session, scratch, snapshot)) {
+        return RosterOutcome::noOverrideTarget;
+    }
+    session.activityRosterRefusal = {};
     return RosterOutcome::published;
 }
 

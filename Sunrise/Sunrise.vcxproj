@@ -1181,6 +1181,7 @@
     <ClCompile Include="src\middleware\bap\activity_message\activity_start_activity_parser.cpp" />
     <ClCompile Include="src\middleware\bap\activity_message\activity_sense_update_parser.cpp" />
     <ClCompile Include="src\middleware\bap\activity_message\activity_sense_update_decoder.cpp" />
+    <ClCompile Include="src\middleware\bap\activity_message\sense_roster.cpp" />
     <ClCompile Include="src\server\bap\encrypted\activity_message\receipts\activity_message_receipts.cpp" />
     <ClCompile Include="src\server\bap\encrypted\activity_message\receipts\activity_incident_grants.cpp" />
     <ClCompile Include="src\state\activity\receipts\activity_receipts.cpp" />
@@ -2033,6 +2034,9 @@
     <ClInclude Include="src\middleware\bap\activity_message\telemetry.h" />
     <ClInclude Include="src\middleware\bap\activity_message\start_activity.h" />
     <ClInclude Include="src\middleware\bap\activity_message\sense_update.h" />
+    <ClInclude Include="src\middleware\bap\activity_message\sense_roster.h" />
+    <ClInclude Include="src\server\bap\activity_roster_mirror.h" />
+    <ClInclude Include="src\server\bap\mission_roster_retirement.h" />
     <ClInclude Include="src\server\bap\encrypted\activity_message\receipts\activity_message_receipts.h" />
     <ClInclude Include="src\server\bap\encrypted\activity_message\receipts\activity_incident_grants.h" />
     <ClInclude Include="src\state\activity\receipts\definition.h" />

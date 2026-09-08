@@ -15,6 +15,10 @@ enum class MissionSeedRosterResult : std::uint8_t {
     refused,
 };
 
+[[nodiscard]] bool project_mission_retirement(Session& session,
+                                              Scratch& scratch,
+                                              message::Snapshot& snapshot) noexcept;
+
 /**
  * Checks the exact authored region owed by an unpublished selected-state revision.
  * The selected plan is the publication source while a client moves between states.

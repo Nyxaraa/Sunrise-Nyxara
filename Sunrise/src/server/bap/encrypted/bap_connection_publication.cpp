@@ -72,6 +72,7 @@ void reset_join_state(Session& session) noexcept {
     session.activityRosterReason = 0;
     session.activityRosterStaged = {};
     session.activityRosterDecode = {};
+    session.activityRosterMirror = {};
     SecureZeroMemory(&session.activitySquadOverride, sizeof session.activitySquadOverride);
     session.activityMissionSeed = {};
     if (session.activity.role == ActivityClientRole::privateCurrent) {

@@ -395,6 +395,11 @@ bool process(const ActivityClientBinding& binding,
     }
     bool prepared = false;
     switch (adapter) {
+    case IngressAdapter::senseUpdateHostSense: {
+        const bool framed = frame_only(binding, rosterDecode, adapter, request, &plan);
+        hasTransaction = plan.senseRoster.pending;
+        return framed;
+    }
     case IngressAdapter::patchEpochStateEpoch:
         prepared = patch_epoch::prepare(binding.session.sessionId, request, plan);
         break;

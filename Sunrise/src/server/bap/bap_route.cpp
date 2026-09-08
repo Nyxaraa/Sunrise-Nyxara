@@ -105,10 +105,9 @@ mission_seed_link_locked(const state::activity::SessionBinding& binding,
     return mission_seed_session_status(*output, scenarioRow, expectedGeneration);
 }
 
-/** @return True when two leases name the same complete generated plan. */
-[[nodiscard]] bool same_mission_seed_plan(const ActivityMissionSeedPlan& left,
-                                          const ActivityMissionSeedPlan& right) noexcept {
-    if (left.omissionCount != right.omissionCount) {
+[[nodiscard]] bool same_mission_seed_omissions(const ActivityMissionSeedPlan& left,
+                                              const ActivityMissionSeedPlan& right) noexcept {
+    if (left.omissionCount != right.omissionCount || left.omissionCount > left.omissions.size()) {
         return false;
     }
     for (std::uint32_t index = 0; index < left.omissionCount; ++index) {
@@ -117,7 +116,14 @@ mission_seed_link_locked(const state::activity::SessionBinding& binding,
             return false;
         }
     }
-    return left.activityRow == right.activityRow && left.scenarioRow == right.scenarioRow
+    return true;
+}
+
+/** @return True when two leases name the same complete generated plan. */
+[[nodiscard]] bool same_mission_seed_plan(const ActivityMissionSeedPlan& left,
+                                          const ActivityMissionSeedPlan& right) noexcept {
+    return same_mission_seed_omissions(left, right)
+           && left.activityRow == right.activityRow && left.scenarioRow == right.scenarioRow
            && left.stateRow == right.stateRow && left.bubbleRow == right.bubbleRow
            && left.bubbleOrdinal == right.bubbleOrdinal && left.stateOrdinal == right.stateOrdinal
            && left.entryIndex == right.entryIndex && left.sliceSetIndex == right.sliceSetIndex
@@ -134,6 +140,7 @@ mission_seed_link_locked(const state::activity::SessionBinding& binding,
     const std::uint64_t authoredRegion =
         static_cast<std::uint64_t>(plan.sliceSetIndex) + plan.stateOrdinal;
     return plan.activityRow != (std::numeric_limits<std::uint32_t>::max)()
+           && plan.omissionCount <= plan.omissions.size()
            && plan.scenarioRow == scenarioRow
            && plan.stateRow != (std::numeric_limits<std::uint32_t>::max)()
            && plan.bubbleRow != (std::numeric_limits<std::uint32_t>::max)()
@@ -492,7 +499,9 @@ activity_mission_seed_lease(const state::activity::SessionBinding& binding,
 ActivityMissionSeedLeaseStatus
 select_activity_mission_seed(const state::activity::SessionBinding& binding,
                              const ActivityMissionSeedPlan& plan,
-                             std::uint64_t expectedGeneration) noexcept {
+                             std::uint64_t expectedGeneration,
+                             bool retireCurrent,
+                             const ActivityMissionSeedPlan* sourcePlan) noexcept {
     const std::lock_guard lock(g_lock);
     Session* session = nullptr;
     std::size_t matchingLinks = 0;
@@ -511,12 +520,37 @@ select_activity_mission_seed(const state::activity::SessionBinding& binding,
         const bool targetHeld = encrypted::push::activity::mission_seed_arrival_window_closed(
             heldRegion, plan.effectiveRegion);
         if (lease.configured && same_mission_seed_plan(lease.plan, plan)) {
+            if (retireCurrent && !lease.regionArrivalPending && !targetHeld) {
+                return ActivityMissionSeedLeaseStatus::refused;
+            }
             if (targetHeld) {
                 lease.regionArrivalPending = false;
             }
             // The script may select the plan the roster adopted by default. That is a selection.
             lease.scriptSelected = true;
+            update_mission_seed_retirement(*session);
             return ActivityMissionSeedLeaseStatus::ready;
+        }
+        if ((retireCurrent || sourcePlan != nullptr) && lease.regionArrivalPending) {
+            return ActivityMissionSeedLeaseStatus::outputBusy;
+        }
+        if (sourcePlan != nullptr
+            && (!lease.configured
+                || !valid_mission_seed_plan(*sourcePlan, plan.scenarioRow)
+                || sourcePlan->activityRow != plan.activityRow
+                || !same_mission_seed_omissions(*sourcePlan, lease.plan)
+                || heldRegion != static_cast<std::int32_t>(sourcePlan->effectiveRegion)
+                || placement.currentRegion != heldRegion)) {
+            return ActivityMissionSeedLeaseStatus::refused;
+        }
+        const ActivityMissionSeedPlan& departure = sourcePlan != nullptr ? *sourcePlan : lease.plan;
+        const bool needsArrival = lease.configured
+            && encrypted::push::activity::mission_seed_selection_needs_arrival(
+                departure.effectiveRegion, plan.effectiveRegion, heldRegion);
+        if (retireCurrent && needsArrival
+            && (heldRegion != static_cast<std::int32_t>(departure.effectiveRegion)
+                || placement.currentRegion != heldRegion)) {
+            return ActivityMissionSeedLeaseStatus::refused;
         }
         if (lease.configured && lease.revision == (std::numeric_limits<std::uint64_t>::max)()) {
             status = ActivityMissionSeedLeaseStatus::refused;
@@ -526,30 +560,40 @@ select_activity_mission_seed(const state::activity::SessionBinding& binding,
             // Every region this lease has selected stays registered on the peer, so record the
             // new one and keep the earlier ones. Publication carries the union; dropping a group
             // does not unregister it, it only stops seeding records the peer still holds.
-            if (!lease.configured) {
-                lease.registeredRegionCount = 0;
+            auto registeredRegions = lease.registeredRegions;
+            std::size_t registeredCount = lease.configured ? lease.registeredRegionCount : 0;
+            if (registeredCount > registeredRegions.size()) {
+                return ActivityMissionSeedLeaseStatus::refused;
             }
-            bool regionKnown = false;
-            for (std::size_t index = 0; index < lease.registeredRegionCount; ++index) {
-                regionKnown = regionKnown || lease.registeredRegions[index] == plan.effectiveRegion;
-            }
-            if (!regionKnown) {
-                if (lease.registeredRegionCount >= lease.registeredRegions.size()) {
+            const std::array regions{sourcePlan != nullptr ? sourcePlan->effectiveRegion
+                                                          : plan.effectiveRegion,
+                                      plan.effectiveRegion};
+            for (const auto region : regions) {
+                const auto end = registeredRegions.begin() + registeredCount;
+                if (std::find(registeredRegions.begin(), end, region) != end) continue;
+                if (registeredCount == registeredRegions.size()) {
                     return ActivityMissionSeedLeaseStatus::refused;
                 }
-                lease.registeredRegions[lease.registeredRegionCount++] = plan.effectiveRegion;
+                registeredRegions[registeredCount++] = region;
             }
+            lease.registeredRegions = registeredRegions;
+            lease.registeredRegionCount = static_cast<std::uint8_t>(registeredCount);
             // A selection that replaces the world waits for the client's arrival there. One that
             // does not must close any window an earlier selection left open, because an open
             // window blocks publication and nothing else clears it.
-            if (lease.configured
-                && encrypted::push::activity::mission_seed_selection_needs_arrival(
-                    lease.plan.effectiveRegion, plan.effectiveRegion, heldRegion)) {
-                lease.previousPlan = lease.plan;
+            if (needsArrival) {
+                lease.previousPlan = departure;
                 lease.regionArrivalPending = true;
             } else {
                 lease.regionArrivalPending = false;
             }
+            lease.retirementRequested = retireCurrent && lease.regionArrivalPending;
+            lease.retirementPublished = false;
+            lease.retirementAcknowledged = false;
+            lease.retiredGroupCount = 0;
+            lease.retirementKeyCount = 0;
+            lease.retirementBlockOrdinal = 0;
+            lease.retirementReceiptFloor = 0;
             lease.plan = plan;
             lease.bindingGeneration = session->activity.bindingGeneration;
             lease.revision = revision;

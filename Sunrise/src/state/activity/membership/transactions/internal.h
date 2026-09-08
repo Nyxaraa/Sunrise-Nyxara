@@ -42,6 +42,19 @@ inline bool equal(const TeleportState& first, const TeleportState& second) noexc
            && first.sliceSetHash == second.sliceSetHash;
 }
 
+/** Advances the last client command token; zero is reserved for an unarmed command. */
+inline std::uint8_t next_teleport_token(std::uint8_t previous) noexcept {
+    const auto next = static_cast<std::uint8_t>(previous + 1U);
+    return next == 0 ? 1 : next;
+}
+
+/** Matches a teleport command independently of its handshake state. */
+inline bool same_teleport_command(const TeleportState& first,
+                                  const TeleportState& second) noexcept {
+    return first.token == second.token && first.sliceSetIndex == second.sliceSetIndex
+           && first.sliceSetHash == second.sliceSetHash;
+}
+
 /** @return True when both reported legs hold the same fields. */
 inline bool equal(const RegionState& first, const RegionState& second) noexcept {
     return first.index == second.index && first.hash == second.hash
@@ -79,12 +92,8 @@ inline bool equal(const Snapshot& first, const Snapshot& second) noexcept {
 inline MembershipState merge(const MembershipState& state,
                              const AuthoritativeUpdate& update) noexcept {
     MembershipState merged = state;
-    // While the host is teleporting the client, the host owns the transition token. A stale
-    // client report would revert the arm's advance, and the client would then reject the target
-    // region record. The client owns the token again once the teleport is spent.
-    const bool hostDrivesToken =
-        state.hasHostTeleport && state.hostTeleport.state != kHostTeleportSpawnState;
-    if (update.hasTransitionToken && !hostDrivesToken) {
+    // The native world-transition token is independent of the host's teleport command token.
+    if (update.hasTransitionToken) {
         merged.transitionToken = update.transitionToken;
         merged.hasTransitionToken = true;
     }
@@ -105,20 +114,20 @@ inline MembershipState merge(const MembershipState& state,
         merged.region = update.region;
         merged.pendingReported = true;
     }
-    // The client has reported the region the arm named, so the move is done and the same machine
-    // owes the spawn. Its step 3 runs the spawn only while the host state reads 3, so the arm is
-    // raised rather than dropped. Step 0 refuses to re-latch on 3, so this cannot re-arm.
-    if (merged.hasHostTeleport && merged.region.index >= 0
-        && merged.region.index == merged.hostTeleport.sliceSetIndex) {
+    // A pending leg only means loading started. Release the spawn after the exact command has
+    // reached local state 3 and the destination is actually current.
+    if (merged.hasHostTeleport && merged.hostTeleport.state == kHostTeleportArmedState
+        && merged.teleport.state == kHostTeleportSpawnState
+        && same_teleport_command(merged.teleport, merged.hostTeleport)
+        && merged.currentRegion.index == merged.hostTeleport.sliceSetIndex) {
         merged.hostTeleport.state = kHostTeleportSpawnState;
     }
-    // The machine wraps its state byte to 0 at the spawn and keeps the latched token, so state 0
-    // with this token is the client saying the teleport finished. Retire it here, not at the
-    // commit, so the answering body carries the client's own block and its screen releases.
-    if (merged.hasHostTeleport && merged.hostTeleport.state == kHostTeleportSpawnState
-        && merged.teleport.state == 0 && merged.teleport.token == merged.hostTeleport.token) {
+    // Only a fresh completion of the released command retires it; an earlier idle mirror cannot.
+    if (state.hasHostTeleport && state.hostTeleport.state == kHostTeleportSpawnState
+        && update.hasTeleport && update.teleport.state == 0
+        && same_teleport_command(update.teleport, state.hostTeleport)) {
         merged.hasHostTeleport = false;
-        merged.hostTeleport = {};
+        // Keep its authored spawn selection for subsequent lifetime bodies in this region.
     }
     return merged;
 }

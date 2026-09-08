@@ -159,16 +159,29 @@ same_retained_scope(const RetainedSquadGroup& group,
 }
 } // namespace
 /** Logs which exit refused, since the returned outcome itself carries no reason. */
-[[nodiscard]] RosterOutcome refuse_override(std::string_view reason) noexcept {
-    std::array<char, 96> line{};
+[[nodiscard]] RosterOutcome refuse_override(Session& session, std::string_view reason) noexcept {
+    if (session.activityRosterRefusal == reason) return RosterOutcome::noOverrideTarget;
+    session.activityRosterRefusal = reason;
+    std::array<char, 512> line{};
     const int written = std::snprintf(line.data(),
                                       line.size(),
-                                      "ev=activity stage=roster_refusal reason=%.*s",
+                                      "ev=activity stage=roster_refusal reason=%.*s source=%u target=%u "
+                                      "mirror_revision=%llu mirror_binding=%llu binding=%llu "
+                                      "mirror_bubbles=%u mirror_known=%u retired=%u published=%u",
                                       static_cast<int>(reason.size()),
-                                      reason.data());
+                                      reason.data(),
+                                      session.activityMissionSeed.previousPlan.effectiveRegion,
+                                      session.activityMissionSeed.plan.effectiveRegion,
+                                      static_cast<unsigned long long>(session.activityRosterMirror.receivedRevision),
+                                      static_cast<unsigned long long>(session.activityRosterMirror.bindingGeneration),
+                                      static_cast<unsigned long long>(session.activity.bindingGeneration),
+                                      session.activityRosterMirror.roster.bubbleCount,
+                                      session.activityRosterMirror.roster.hasBubbles ? 1U : 0U,
+                                      session.activityMissionSeed.retiredGroupCount,
+                                      session.activityMissionSeed.retirementPublished ? 1U : 0U);
     if (written > 0) {
         core::log::write(core::log::Channel::server,
-                         core::log::Level::debug,
+                         core::log::Level::warn,
                          {line.data(), static_cast<std::size_t>(written)});
     }
     return RosterOutcome::noOverrideTarget;
