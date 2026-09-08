@@ -1,4 +1,3 @@
-#include "../../../state/activity/presentation/movies.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -292,23 +291,6 @@ void dispatch_intent(RuntimeInstance& instance, std::uint64_t now) noexcept {
     }
     begin_intent_attempt(instance, now);
     switch (intent.kind) {
-    case lua_vm::IntentKind::playPrerenderedMovie: {
-        if (instance.publicTarget
-            || !::sunrise::state::activity::presentation::request_movie(
-                {instance.view.binding.sessionId, instance.view.activityClientGeneration},
-                intent.requestKey,
-                intent.firstRow,
-                !intent.active,
-                intent.continueMovieSequence,
-                instance.activeRegion)) {
-            refuse_delivery(instance,
-                            "movie_refused",
-                            "native movie request unavailable",
-                            host::EffectOutcome::refused);
-        } else
-            static_cast<void>(complete_local_effect(instance, "movie_queued"));
-        return;
-    }
 
     case lua_vm::IntentKind::selectMissionState: {
         scenes::Snapshot selected{};

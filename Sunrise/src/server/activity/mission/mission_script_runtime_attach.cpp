@@ -1,4 +1,3 @@
-#include "../../../state/activity/presentation/runtime.h"
 /**
  * Resolving, opening and starting one mission program for a Host slot.
  * Every function here runs under the mission runtime lock its caller already holds.
@@ -104,18 +103,6 @@ reload_authorization(const state::activity::SessionBinding& binding) noexcept {
            && sdk_bridge::world_generation_identity(instance.worldView, worldGeneration);
 }
 
-bool bind_presentation(RuntimeInstance& instance) noexcept {
-    namespace presentation = ::sunrise::state::activity::presentation;
-    presentation::Config config{};
-    if (instance.publicTarget || !lua_vm::presentation_config(instance.vm, config)) return true;
-    if (!config.movieCount && !config.suppressLoadingCinematics && !config.maskLoadingScreen)
-        return true;
-    const auto activities = instance.view.catalog->activities();
-    return instance.view.activityRow < activities.size() && presentation::publish(
-        {instance.view.binding.sessionId, instance.view.activityClientGeneration}, config,
-        activities[instance.view.activityRow].activityIndex);
-}
-
 /**
  * Re-points one open program at the current ActivityClient generation.
  * @return True when the instance holds an exact view of the same program.
@@ -144,8 +131,6 @@ bool bind_presentation(RuntimeInstance& instance) noexcept {
     if (generated::resolve(view, worldView) != generated::BindStatus::ready) {
         return false;
     }
-    ::sunrise::state::activity::presentation::remove(
-        {instance.view.binding.sessionId,instance.view.activityClientGeneration});
     instance.view = std::move(view);
     instance.worldView = std::move(worldView);
     instance.publicTarget = link.publicTarget;
@@ -155,7 +140,7 @@ bool bind_presentation(RuntimeInstance& instance) noexcept {
     // The bridge copies the world generation, so hand the program the rebuilt pair.
     return lua_vm::rebind(instance.vm,
                           instance.identity,
-                          sdk_bridge::definition_api(instance.view, instance.worldView)) && bind_presentation(instance);
+                          sdk_bridge::definition_api(instance.view, instance.worldView));
 }
 
 /** Folds the activity name into a lowercase file stem; other bytes become single underscores. */
@@ -561,11 +546,7 @@ enum class InitialStateGate : std::uint8_t {
                  diagnostics.lastError.data());
         return AttachResult::programError;
     }
-    if (!bind_presentation(instance)) {
-        instance.programStatus=ProgramStatus::programError;
-        log_line(core::log::Level::error,&instance,"presentation","registration_refused");
-        return AttachResult::programError;
-    }
+
     instance.programStatus = ProgramStatus::loaded;
     instance.initialStateDeclared =
         lua_vm::initial_state_region(instance.vm, instance.initialStateRegion);
@@ -660,9 +641,6 @@ void attach_instance(const host::InstanceSnapshot& hostInstance,
     instance->playerKey = link.playerKey;
     instance->occupied = true;
     const AttachResult opened = open_program(*instance, now);
-    if (opened != AttachResult::ready)
-        ::sunrise::state::activity::presentation::remove(
-            {instance->view.binding.sessionId,instance->view.activityClientGeneration});
     report_attach_result(
         hostInstance.binding, opened, attach_result_name(opened), instance->view.activityRow);
 }

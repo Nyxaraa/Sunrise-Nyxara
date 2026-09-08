@@ -99,19 +99,6 @@
     <None Include="vendor\lua\UPSTREAM_README" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\state\activity\presentation\runtime.cpp" />
-    <ClInclude Include="src\client\native\presentation\config.h" />
-    <ClInclude Include="src\client\native\presentation\readiness_rules.h" />
-    <ClCompile Include="src\client\native\presentation\resources.cpp" />
-    <ClInclude Include="src\client\native\presentation\resources.h" />
-    <ClCompile Include="src\client\native\presentation\runtime.cpp" />
-    <ClCompile Include="src\client\native\presentation\ui_mask.cpp" />
-    <ClInclude Include="src\client\native\presentation\runtime.h" />
-    <ClInclude Include="src\client\native\presentation\ui_mask.h" />
-    <ClInclude Include="src\client\native\presentation\surface_rules.h" />
-    <ClInclude Include="src\state\activity\presentation\config_rules.h" />
-    <ClInclude Include="src\state\activity\presentation\movies.h" />
-    <ClCompile Include="src\server\activity\mission\mission_script_presentation.cpp" />
     <ClCompile Include="src\state\gameplay\external\entity_object_types.cpp" />
     <ClCompile Include="src\dllmain.cpp" />
     <ClCompile Include="src\core\logging\log.cpp" />
@@ -1239,9 +1226,6 @@
     <ClCompile Remove="vendor\lua\lzio.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\state\activity\presentation\config.h" />
-    <ClInclude Include="src\state\activity\presentation\runtime.h" />
-    <ClInclude Include="src\server\activity\mission\mission_script_presentation.h" />
     <ClInclude Include="resources\resource.h" />
     <ClInclude Include="src\core\logging\log.h" />
     <ClInclude Include="src\core\logging\snapshot\snapshot.h" />

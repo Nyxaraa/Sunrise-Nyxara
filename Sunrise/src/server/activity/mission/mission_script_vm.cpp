@@ -5,7 +5,6 @@
 #include <new>
 
 #include "mission_script_vm_internal.h"
-#include "mission_script_presentation.h"
 
 namespace sunrise::server::activity::mission::lua_vm {
 namespace detail {
@@ -163,12 +162,6 @@ static_assert([] { for (const auto* name : kEventHandlerNames) if (name == nullp
     if (genericEventHandler) {
         return luaL_error(state, "on_event is unsupported; use one on_event_<type> callback");
     }
-    lua_getfield(state, 1, "presentation");
-    const bool declaredPresentation = !lua_isnil(state, -1);
-    lua_pop(state, 1);
-    if (impl->presentationConfigured && declaredPresentation)
-        return luaL_error(state, "use presentation setup calls or a presentation table, not both");
-    detail::capture_presentation(state, 1, impl->identity.publicTarget, impl->presentation);
     if (!capture_initial_state(state, 1, *impl)) {
         return luaL_error(state,
                           "initial_state must be a generated state with an integer region_index");
@@ -794,13 +787,6 @@ const char* status_name(CallStatus status) noexcept {
         return "out_of_memory";
     }
     return "unknown";
-}
-
-bool presentation_config(const Vm& vm, state::activity::presentation::Config& output) noexcept {
-    const auto& impl = VmAccess::get(vm);
-    if (!impl.active || impl.faulted) return false;
-    output = impl.presentation;
-    return true;
 }
 
 } // namespace sunrise::server::activity::mission::lua_vm
